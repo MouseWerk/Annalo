@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import {
-  CalendarDays, Check, ChevronLeft, ChevronRight, Clipboard, Download, MoreHorizontal, Pencil, Play, Plus, RotateCcw, Send, Square, Timer, Trash2, X,
+  AlertTriangle, CalendarDays, Check, ChevronLeft, ChevronRight, Clipboard, Download, MoreHorizontal, Pencil, Play, Plus, RotateCcw, Send, Square, Timer, Trash2, X,
 } from "lucide-react";
 import { api } from "../lib/api";
 import { useApp } from "../store/app";
@@ -11,6 +11,7 @@ import { Badge, Button, Dialog, EmptyState, Field, IconButton, Input, Segmented,
 import { addDays, clock, h2, hoursFromMinutes, isoDay, isoWeek, parseDurationInput, time, weekStart } from "../lib/format";
 import { useTimerSeconds, stopTimer } from "../components/Sidebar";
 import { LeistungsartSelect, NetzplanSelect, VorgangSelect, useWbs } from "./wbs";
+import { catsGrid, weekGaps } from "../lib/cats";
 import type { ExportFormat, ExportResult, ProjectTree, StatusFlag, TimeEntryRow } from "../lib/types";
 
 const STATUS: Record<StatusFlag, { label: string; tone: Tone }> = {
@@ -42,6 +43,9 @@ export function TimesheetView() {
   const total = done.reduce((a, r) => a + (r.duration_minutes ?? 0), 0);
   const byStatus = (st: StatusFlag) => done.filter((r) => r.status_flag === st).reduce((a, r) => a + (r.duration_minutes ?? 0), 0);
   const todayKey = isoDay(new Date());
+  const settings = useApp((st) => st.settings?.settings);
+  const target = settings?.daily_target_hours ?? 8;
+  const workdays = settings?.workdays ?? [1, 2, 3, 4, 5];
   const end = addDays(week, 6);
   const range = `${week.toLocaleDateString("de-DE", { day: "numeric", month: "short" })} – ${end.toLocaleDateString("de-DE", { day: "numeric", month: "short", year: "numeric" })}`;
 
@@ -86,13 +90,13 @@ export function TimesheetView() {
         <TimerCard wbs={wbs} las={las} />
 
         <div className="stat-row">
-          <Stat label="Woche gesamt" value={`${h2(total / 60)} h`} />
+          <Stat label="Woche gesamt" value={`${h2(total / 60)} h`} sub={`Soll ${h2(target * workdays.length)} h`} />
           <Stat label="Entwurf" value={`${h2(byStatus("draft") / 60)} h`} />
           <Stat label="Freigegeben" value={`${h2(byStatus("released") / 60)} h`} tone="accent" />
           <Stat label="Exportiert" value={`${h2(byStatus("exported") / 60)} h`} tone="success" />
         </div>
 
-        <WeekGrid rows={done} week={week} todayKey={todayKey} />
+        <WeekGrid rows={done} week={week} todayKey={todayKey} target={target} workdays={workdays} />
 
         <section className="card">
           <div className="card-head">
@@ -138,10 +142,13 @@ export function TimesheetView() {
   );
 }
 
-function Stat({ label, value, tone }: { label: string; value: string; tone?: Tone }) {
+function Stat({ label, value, tone, sub }: { label: string; value: string; tone?: Tone; sub?: string }) {
   return (
     <div className={`stat ${tone ? `stat-${tone}` : ""}`}>
-      <div className="stat-label">{label}</div>
+      <div className="stat-label">
+        {label}
+        {sub && <span className="stat-sub"> · {sub}</span>}
+      </div>
       <div className="stat-value num">{value}</div>
     </div>
   );
@@ -263,7 +270,7 @@ function TimerCard({ wbs, las }: { wbs: ProjectTree[]; las: [string, string][] }
 
 // -------------------------------------------------------------- week grid
 
-function WeekGrid({ rows, week, todayKey }: { rows: TimeEntryRow[]; week: Date; todayKey: string }) {
+function WeekGrid({ rows, week, todayKey, target, workdays }: { rows: TimeEntryRow[]; week: Date; todayKey: string; target: number; workdays: number[] }) {
   const days = Array.from({ length: 7 }, (_, i) => addDays(week, i));
   const keys = days.map(isoDay);
   const lines = useMemo(() => {
@@ -278,14 +285,60 @@ function WeekGrid({ rows, week, todayKey }: { rows: TimeEntryRow[]; week: Date; 
     return [...map.values()].sort((a, b) => a.label.localeCompare(b.label));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, week]);
-  if (!lines.length) return null;
+  const gaps = weekGaps(rows, week, new Date(), target, workdays);
+  const gapKeys = new Set(gaps.map((g) => isoDay(g.day)));
+  const s = useApp.getState;
+  const copyCats = async () => {
+    const { text, ids } = catsGrid(rows, week);
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (e) {
+      return s().error("Kopieren fehlgeschlagen", e);
+    }
+    const open = rows.filter((r) => ids.includes(r.id) && r.status_flag !== "exported").map((r) => r.id);
+    s().toast({
+      tone: "success",
+      title: "Für CATS kopiert",
+      detail: "Netzplan, Vorgang, Leistungsart und Stunden je Tag – in CATS mit Ctrl V einfügen.",
+      action: open.length
+        ? {
+            label: "Als exportiert markieren",
+            run: async () => {
+              try {
+                await api.setStatus(open, "exported");
+                s().bumpEntries();
+              } catch (e) {
+                s().error("Status nicht geändert", e);
+              }
+            },
+          }
+        : undefined,
+    });
+  };
+  if (!lines.length && !gaps.length) return null;
   const dayTotals = keys.map((_, i) => lines.reduce((a, l) => a + l.perDay[i], 0));
   const cell = (m: number) => (m ? h2(m / 60) : "");
   return (
     <section className="card">
       <div className="card-head">
         <h2>Wochenübersicht</h2>
+        {lines.length > 0 && (
+          <Button size="sm" variant="ghost" icon={Clipboard} onClick={copyCats}>
+            In CATS kopieren
+          </Button>
+        )}
       </div>
+      {gaps.length > 0 && (
+        <div className="week-gaps" role="status">
+          <AlertTriangle size={14} />
+          <span>Unter Soll:</span>
+          {gaps.map((g) => (
+            <span key={isoDay(g.day)} className="gap-chip" title={`${h2(g.bookedMinutes / 60)} von ${h2(target)} h gebucht`}>
+              {DAYS[(g.day.getDay() + 6) % 7]} {g.day.getDate()}. −{h2(g.missingMinutes / 60)} h
+            </span>
+          ))}
+        </div>
+      )}
       <div className="table-wrap">
         <table className="table week-grid">
           <thead>
@@ -318,7 +371,7 @@ function WeekGrid({ rows, week, todayKey }: { rows: TimeEntryRow[]; week: Date; 
             <tr>
               <td colSpan={2}>Summe</td>
               {dayTotals.map((m, i) => (
-                <td key={i} className={`num ${keys[i] === todayKey ? "today" : ""} ${i >= 5 ? "weekend" : ""}`}>
+                <td key={i} className={`num ${keys[i] === todayKey ? "today" : ""} ${i >= 5 ? "weekend" : ""} ${gapKeys.has(keys[i]) ? "gap" : ""}`}>
                   {cell(m)}
                 </td>
               ))}

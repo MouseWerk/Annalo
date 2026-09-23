@@ -138,6 +138,23 @@ test("editing an entry updates duration", async () => {
   assert.equal(e.duration_minutes, 180);
 });
 
+test("week grid copies a CATS grid and marks it exported", async () => {
+  await app.click(".ribbon [aria-label=\"Zeiterfassung\"]");
+  await app.waitFor(".week-grid");
+  await app.browser.execute(() => {
+    // The test WebView may deny clipboard access; capture what would be copied.
+    window.__copied = null;
+    navigator.clipboard.writeText = async (t) => void (window.__copied = t);
+  });
+  await app.click("button=In CATS kopieren");
+  await app.waitText(".toast-title", /Für CATS kopiert/);
+  const copied = await app.browser.execute(() => window.__copied);
+  assert.match(copied, /^NP-88\d\d\t\d{4}\t[A-Z]+\t/m);
+  assert.match(copied, /\d,\d\d/);
+  await app.click("button=Als exportiert markieren");
+  await app.browser.waitUntil(async () => (await entries()).some((e) => e.status_flag === "exported"));
+});
+
 test("no console errors", async () => {
   assert.deepEqual(await app.consoleErrors(), []);
 });

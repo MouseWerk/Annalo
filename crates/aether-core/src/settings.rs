@@ -36,6 +36,10 @@ pub struct Settings {
     pub theme: String,
     /// Open today's daily note on start.
     pub open_daily_on_start: bool,
+    /// Target working hours per workday; days below it are flagged in the timesheet.
+    pub daily_target_hours: f64,
+    /// Workdays as ISO weekday numbers (1 = Monday … 7 = Sunday).
+    pub workdays: Vec<u32>,
 }
 
 impl Default for Settings {
@@ -52,6 +56,8 @@ impl Default for Settings {
             jira_issue_map: HashMap::new(),
             theme: "system".into(),
             open_daily_on_start: false,
+            daily_target_hours: 8.0,
+            workdays: vec![1, 2, 3, 4, 5],
         }
     }
 }

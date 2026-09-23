@@ -154,6 +154,8 @@ export interface Settings {
   jira_issue_map: Record<string, string>;
   theme: "system" | "light" | "dark";
   open_daily_on_start: boolean;
+  daily_target_hours: number;
+  workdays: number[];
 }
 export interface SettingsView {
   settings: Settings;

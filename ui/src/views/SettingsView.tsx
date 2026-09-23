@@ -283,7 +283,7 @@ function ModelInput({ value, models, onChange, label, allowEmpty }: { value: str
 // ------------------------------------------------------------------ time
 
 /** Number field that keeps what is typed and only validates and clamps on blur/Enter. */
-function NumberInput({ value, min, max, onCommit, ...rest }: { value: number; min: number; max: number; onCommit: (v: number) => void } & Omit<React.InputHTMLAttributes<HTMLInputElement>, "value" | "min" | "max" | "onChange">) {
+function NumberInput({ value, min, max, step = 1, onCommit, ...rest }: { value: number; min: number; max: number; step?: number; onCommit: (v: number) => void } & Omit<React.InputHTMLAttributes<HTMLInputElement>, "value" | "min" | "max" | "step" | "onChange">) {
   const [raw, setRaw] = useState(String(value));
   const [editing, setEditing] = useState(false);
   useEffect(() => {
@@ -291,7 +291,7 @@ function NumberInput({ value, min, max, onCommit, ...rest }: { value: number; mi
   }, [value, editing]);
   const parsed = raw.trim() === "" ? NaN : Number(raw.replace(",", "."));
   const commit = () => {
-    const v = Number.isFinite(parsed) ? Math.round(Math.min(max, Math.max(min, parsed))) : value;
+    const v = Number.isFinite(parsed) ? Math.round(Math.min(max, Math.max(min, parsed)) / step) * step : value;
     setRaw(String(v));
     if (v !== value) onCommit(v);
   };
@@ -301,6 +301,7 @@ function NumberInput({ value, min, max, onCommit, ...rest }: { value: number; mi
       type="number"
       min={min}
       max={max}
+      step={step}
       value={raw}
       aria-invalid={!Number.isFinite(parsed) || parsed < min || parsed > max}
       onFocus={() => setEditing(true)}
@@ -337,6 +338,32 @@ function TimeSection({ draft, update }: { draft: Settings; update: (p: Partial<S
           <div className="unit-input">
             <NumberInput min={1} max={120} value={draft.idle_threshold_minutes} onCommit={(v) => update({ idle_threshold_minutes: v })} aria-label="Minuten" />
             <span className="faint">Minuten</span>
+          </div>
+        </Row>
+      </Group>
+      <Group title="Arbeitszeit" description="Tage unter dem Soll werden in der Wochenübersicht markiert.">
+        <Row label="Soll pro Arbeitstag">
+          <div className="unit-input">
+            <NumberInput min={0.5} max={16} step={0.25} value={draft.daily_target_hours} onCommit={(v) => update({ daily_target_hours: v })} aria-label="Stunden" />
+            <span className="faint">Stunden</span>
+          </div>
+        </Row>
+        <Row label="Arbeitstage">
+          <div className="day-toggle" role="group" aria-label="Arbeitstage">
+            {["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"].map((d, i) => {
+              const on = draft.workdays.includes(i + 1);
+              return (
+                <button
+                  key={d}
+                  type="button"
+                  aria-pressed={on}
+                  className={on ? "on" : ""}
+                  onClick={() => update({ workdays: on ? draft.workdays.filter((x) => x !== i + 1) : [...draft.workdays, i + 1].sort() })}
+                >
+                  {d}
+                </button>
+              );
+            })}
           </div>
         </Row>
       </Group>
