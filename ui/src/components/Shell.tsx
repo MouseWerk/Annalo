@@ -58,6 +58,7 @@ export function StatusBar() {
   const onPage = useApp((st) => st.tabs.find((t) => t.id === st.activeTabId)?.kind === "page");
   const stats = useApp((st) => st.editorStats);
   const doc = useApp((st) => st.activeDoc);
+  const focusMode = useApp((st) => st.focusMode);
   return (
     <footer className="statusbar">
       {timer ? (
@@ -73,6 +74,11 @@ export function StatusBar() {
         </button>
       )}
       <span className="sb-spacer" />
+      {focusMode && (
+        <button type="button" className="sb-item" onClick={() => s().set({ focusMode: false })} title="Fokusmodus beenden">
+          Fokusmodus <kbd>Esc</kbd>
+        </button>
+      )}
       {onPage && doc && (
         <button type="button" className="sb-item" onClick={() => s().set({ panelOpen: true, panelTab: "links" })} title="Rückverweise anzeigen">
           <Link2 size={12} />

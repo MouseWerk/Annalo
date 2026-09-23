@@ -289,17 +289,15 @@ function PageHeader({
 }
 
 function Properties({ doc }: { doc: PageDoc }) {
-  const fm = splitFrontmatter(doc.content).frontmatter;
+  const { frontmatter: fm, body } = splitFrontmatter(doc.content);
   const [open, setOpen] = useState(false);
+  // Inline #tags are already clickable in the text; only show the others (frontmatter tags).
+  const lower = body.toLowerCase();
+  const extraTags = doc.tags.filter((t) => !lower.includes(`#${t.toLowerCase()}`));
   return (
     <div className="props">
       <span className="prop faint">Bearbeitet {relative(doc.updated_at)}</span>
-      {doc.backlinks.length > 0 && (
-        <span className="prop faint">
-          <Link2 size={12} /> {doc.backlinks.length} {doc.backlinks.length === 1 ? "Rückverweis" : "Rückverweise"}
-        </span>
-      )}
-      {doc.tags.map((t) => (
+      {extraTags.map((t) => (
         <button key={t} type="button" className="tag-chip" onClick={() => useApp.getState().openTab({ kind: "tag", tag: t }, { newTab: true })}>
           <Hash size={11} />
           {t}

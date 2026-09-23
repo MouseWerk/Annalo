@@ -16,7 +16,7 @@
   .page-title { font-size: 22px; }
 }
 .page-title-row { display: flex; align-items: flex-start; gap: 10px; }
-.page-title-row .page-icon-btn { margin-top: 1px; }
+.page-title-row .page-icon-btn { margin-top: 1px; margin-left: 0; }
 .page-icon-btn { width: 40px; height: 40px; display: grid; place-items: center; border: 0; border-radius: var(--r-md); background: transparent; color: var(--text-3); flex: none; margin-left: -6px; }
 .page-icon-btn:hover { background: var(--bg-hover); color: var(--text); }
 .page-title {
@@ -37,7 +37,9 @@
   font-family: inherit;
   overflow-wrap: anywhere;
 }
-.page-subtitle { color: var(--text-3); margin: 2px 0 0 44px; }
+.page-subtitle { color: var(--text-3); margin: 2px 0 0; }
+.page-title-row { margin-left: -50px; }
+@container pane (max-width: 720px) { .page-title-row { margin-left: 0; } .page-subtitle { margin-left: 50px; } }
 .icon-picker {
   position: absolute;
   z-index: 30;
@@ -66,7 +68,7 @@
   height: 22px;
   padding: 0 8px 0 6px;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--r-xs);
   background: var(--accent-soft);
   color: var(--accent-text);
   font-size: var(--fs-xs);
@@ -92,7 +94,8 @@
 .prose pre { margin: 0.9em 0; padding: 14px 16px; border-radius: var(--r-md); background: var(--bg-app); border: 1px solid var(--border); overflow-x: auto; }
 :root[data-theme="light"] .prose pre { background: #f7f7f9; }
 .prose pre code { padding: 0; background: none; font-size: 0.84em; line-height: 1.65; }
-.prose blockquote { margin: 0.9em 0; padding: 2px 0 2px 16px; border-left: 3px solid var(--accent); color: var(--text-2); }
+.prose pre, .prose pre code { white-space: pre; }
+.prose blockquote { margin: 0.9em 0; padding: 2px 0 2px 16px; border-left: 3px solid var(--border-strong); color: var(--text-2); }
 .prose ul, .prose ol { padding-left: 1.5em; margin: 0.4em 0; }
 .prose li + li { margin-top: 0.15em; }
 .prose li > p { margin: 0; }
@@ -251,6 +254,7 @@
 .prose-chat > * + * { margin-top: 0.6em; }
 .prose-chat h1, .prose-chat h2, .prose-chat h3 { font-size: 1.05em; margin-top: 1em; }
 .prose-chat pre { padding: 10px 12px; }
+.prose-chat pre code { font-size: 12px; }
 .prose-chat ul, .prose-chat ol { padding-left: 1.3em; }
 .prose-chat.streaming > :last-child::after { content: ""; display: inline-block; width: 7px; height: 1em; margin-left: 2px; vertical-align: -2px; background: var(--accent); animation: caret 1s steps(2) infinite; }
 @keyframes caret { 50% { opacity: 0; } }

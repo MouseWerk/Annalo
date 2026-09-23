@@ -17,6 +17,7 @@
 .btn:disabled { opacity: 0.45; pointer-events: none; }
 .btn-sm { height: 26px; padding: 0 9px; font-size: var(--fs-sm); }
 .btn-primary { background: var(--accent-strong); color: #fff; box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.12), var(--shadow-sm); }
+.btn-primary:disabled { opacity: 1; background: var(--bg-active); color: var(--text-3); box-shadow: none; }
 .btn-primary:hover { background: color-mix(in srgb, var(--accent-strong) 88%, white); }
 .btn-secondary { background: var(--bg-raised); border-color: var(--border-strong); color: var(--text); box-shadow: var(--shadow-sm); }
 .btn-secondary:hover { background: var(--bg-overlay); border-color: color-mix(in srgb, var(--border-strong) 60%, var(--text-3)); }
@@ -40,7 +41,7 @@
 .icon-btn:hover { background: var(--bg-hover); color: var(--text); }
 .icon-btn.active { background: var(--bg-active); color: var(--text); }
 .icon-btn:disabled { opacity: 0.35; pointer-events: none; }
-.icon-btn.star-on, .icon-btn.star-on.active { color: var(--warning); background: transparent; }
+.icon-btn.star-on, .icon-btn.star-on.active { color: var(--star); background: transparent; }
 .icon-btn.star-on:hover { background: var(--bg-hover); }
 .icon-btn.star-on svg { fill: currentColor; }
 
@@ -174,7 +175,7 @@
 .progress { position: relative; height: 6px; border-radius: 999px; background: var(--bg-active); overflow: hidden; min-width: 60px; }
 .progress-fill { position: absolute; inset: 0 auto 0 0; border-radius: 999px; background: var(--accent); transition: width var(--dur) var(--ease-out); }
 .progress-fill.tone-success { background: var(--success); }
-.progress-fill.tone-warning { background: var(--warning); }
+.progress-fill.tone-warning { background: var(--warning-fill); }
 .progress-fill.tone-danger { background: var(--danger); }
 .progress-marker { position: absolute; top: -2px; bottom: -2px; width: 2px; margin-left: -1px; background: var(--text); opacity: 0.5; border-radius: 1px; }
 
@@ -260,7 +261,7 @@
 
 /* ----------------------------------------------------------------- toasts */
 
-.toasts { position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%); z-index: 80; display: grid; gap: 8px; width: 380px; }
+.toasts { position: fixed; right: 16px; bottom: 40px; z-index: 80; display: grid; gap: 8px; width: min(360px, calc(100vw - 32px)); }
 .toast {
   display: flex;
   align-items: flex-start;
@@ -303,7 +304,25 @@
 .grow { flex: 1; }
 .row-gap { display: flex; align-items: center; gap: 8px; }
 .selectable { user-select: text; }
-.check { width: 15px; height: 15px; accent-color: var(--accent-strong); margin: 0; flex: none; }
+.check {
+  appearance: none;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  flex: none;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--bg-input);
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+}
+.check:hover { border-color: var(--text-3); }
+.check:checked { background: var(--accent-strong); border-color: transparent; }
+.check:checked::after { content: ""; width: 8px; height: 4px; margin-top: -2px; border: solid #fff; border-width: 0 0 2px 2px; transform: rotate(-45deg); }
+.check:indeterminate { background: var(--accent-strong); border-color: transparent; }
+.check:indeterminate::after { content: ""; width: 7px; height: 2px; background: #fff; border-radius: 1px; }
+.check:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .warn-note { color: var(--warning); margin: 8px 0 0; }
 .error-note { color: var(--danger); background: var(--danger-soft); padding: 8px 10px; border-radius: var(--r-sm); margin: 4px 0 0; overflow-wrap: anywhere; }
 

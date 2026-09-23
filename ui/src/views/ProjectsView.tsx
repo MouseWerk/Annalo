@@ -184,6 +184,16 @@ function NetzplanBlock({ netzplan, open }: { netzplan: NetzplanTree; open: (d: D
       {netzplan.vorgaenge.length > 0 && (
         <div className="table-wrap">
           <table className="table vorgaenge">
+            <colgroup>
+              <col />
+              <col style={{ width: 124 }} />
+              <col style={{ width: 72 }} />
+              <col style={{ width: 80 }} />
+              <col style={{ width: 72 }} />
+              <col style={{ width: 104 }} />
+              <col style={{ width: 100 }} />
+              <col style={{ width: 64 }} />
+            </colgroup>
             <thead>
               <tr>
                 <th>Vorgang</th>

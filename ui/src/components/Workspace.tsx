@@ -81,7 +81,7 @@ function TabContent({ tab, active }: { tab: Tab; active: boolean }) {
     case "home":
       return (
         <>
-          <ViewHeader tab={tab} title="Neuer Tab" />
+          <ViewHeader tab={tab} title="" />
           <Home />
         </>
       );

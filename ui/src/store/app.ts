@@ -376,8 +376,9 @@ export const useApp = create<State>((set, get) => ({
   set: (patch) => set(patch),
   toast: (t) => {
     const id = ++toastSeq;
-    set({ toasts: [...get().toasts, { ...t, id }].slice(-4) });
-    setTimeout(() => get().dismissToast(id), t.tone === "danger" ? 8000 : 4500);
+    set({ toasts: [...get().toasts, { ...t, id }].slice(-3) });
+    const ms = t.tone === "danger" ? 8000 : t.action ? 7000 : t.tone === "success" ? 3200 : 4500;
+    setTimeout(() => get().dismissToast(id), ms);
   },
   dismissToast: (id) => set({ toasts: get().toasts.filter((t) => t.id !== id) }),
   error: (title, e) => get().toast({ tone: "danger", title, detail: errorText(e) }),

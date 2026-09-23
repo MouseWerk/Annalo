@@ -1,11 +1,10 @@
 // Obsidian-style ribbon: a slim column of global actions left of the sidebar.
 
-import { Briefcase, CalendarCheck2, Command, FilePlus2, PanelLeft, Settings, Sparkles, Timer, Moon, Sun } from "lucide-react";
+import { Briefcase, CalendarCheck2, Command, FilePlus2, PanelLeft, Settings, Sparkles, Timer } from "lucide-react";
 import { api } from "../lib/api";
 import { useApp, savePref } from "../store/app";
 import { IconButton } from "./ui";
 import { createSubpage } from "../views/PageView";
-import { toggleTheme } from "../lib/actions";
 
 export async function openToday() {
   const s = useApp.getState();
@@ -27,10 +26,8 @@ export function openAssistant() {
 
 export function Ribbon() {
   const sidebarOpen = useApp((s) => s.sidebarOpen);
-  useApp((s) => s.settings?.settings.theme); // re-render when the theme changes
   const tab = useApp((s) => s.tabs.find((t) => t.id === s.activeTabId));
   const s = useApp.getState;
-  const dark = typeof document !== "undefined" && document.documentElement.dataset.theme === "dark";
   const side = "right" as const;
   return (
     <nav className="ribbon" aria-label="Aktionen">
@@ -50,11 +47,11 @@ export function Ribbon() {
       <IconButton icon={FilePlus2} label="Neue Seite (Ctrl N)" tooltipSide={side} size={32} iconSize={17} onClick={() => createSubpage(null)} />
       <IconButton icon={CalendarCheck2} label="Heutige Tagesnotiz (Ctrl Shift D)" tooltipSide={side} size={32} iconSize={17} onClick={openToday} />
       <IconButton icon={Command} label="Befehlspalette (Ctrl K)" tooltipSide={side} size={32} iconSize={17} onClick={() => s().set({ paletteOpen: true, paletteMode: "all", paletteQuery: "" })} />
+      <span className="ribbon-sep" />
       <IconButton icon={Timer} label="Zeiterfassung" active={tab?.kind === "timesheet"} tooltipSide={side} size={32} iconSize={17} onClick={() => s().openTab({ kind: "timesheet" })} />
       <IconButton icon={Briefcase} label="Projekte" active={tab?.kind === "projects"} tooltipSide={side} size={32} iconSize={17} onClick={() => s().openTab({ kind: "projects" })} />
       <IconButton icon={Sparkles} label="Assistent (Ctrl J)" tooltipSide={side} size={32} iconSize={17} onClick={openAssistant} />
       <span className="grow" />
-      <IconButton icon={dark ? Sun : Moon} label={dark ? "Helles Design" : "Dunkles Design"} tooltipSide={side} size={32} iconSize={17} onClick={() => toggleTheme()} />
       <IconButton icon={Settings} label="Einstellungen (Ctrl ,)" active={tab?.kind === "settings"} tooltipSide={side} size={32} iconSize={17} onClick={() => s().openTab({ kind: "settings" })} />
     </nav>
   );
