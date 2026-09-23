@@ -48,9 +48,9 @@ pub fn store_embedding(db: &Database, block_id: i64, embedding: &[f32]) -> Resul
 /// Blocks with text but no embedding yet: `(id, text)`.
 pub fn pending_blocks(db: &Database, limit: usize) -> Result<Vec<(i64, String)>> {
     let mut st = db.conn().prepare_cached(
-        "SELECT id, content_markdown FROM notes_blocks
-         WHERE vector_embedding IS NULL AND trim(content_markdown) <> ''
-         ORDER BY id LIMIT ?1",
+        "SELECT b.id, b.content_markdown FROM notes_blocks b JOIN pages p ON p.id = b.page_id
+         WHERE b.vector_embedding IS NULL AND trim(b.content_markdown) <> '' AND p.deleted_at IS NULL
+         ORDER BY b.id LIMIT ?1",
     )?;
     let rows = st.query_map([limit as i64], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
     Ok(rows)
@@ -69,8 +69,11 @@ pub struct ContextChunk {
 
 /// Exact cosine top-k over all embedded blocks: `(block_id, similarity)`.
 pub fn vector_top_k(db: &Database, query: &[f32], k: usize) -> Result<Vec<(i64, f32)>> {
-    let mut st =
-        db.conn().prepare_cached("SELECT id, vector_embedding FROM notes_blocks WHERE vector_embedding IS NOT NULL")?;
+    // Trashed pages are not searched.
+    let mut st = db.conn().prepare_cached(
+        "SELECT b.id, b.vector_embedding FROM notes_blocks b JOIN pages p ON p.id = b.page_id
+         WHERE b.vector_embedding IS NOT NULL AND p.deleted_at IS NULL",
+    )?;
     let mut scored: Vec<(i64, f32)> = st
         .query_map([], |r| {
             let blob: Vec<u8> = r.get(1)?;
@@ -140,7 +143,7 @@ pub fn retrieve(
         let chunk = match key {
             Key::Block(id) => conn
                 .query_row(
-                    "SELECT p.title, b.content_markdown, p.id FROM notes_blocks b JOIN pages p ON p.id = b.page_id WHERE b.id = ?1",
+                    "SELECT p.title, b.content_markdown, p.id FROM notes_blocks b JOIN pages p ON p.id = b.page_id WHERE b.id = ?1 AND p.deleted_at IS NULL",
                     [id],
                     |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?)),
                 )

@@ -71,7 +71,7 @@ pub fn search(db: &Database, input: &str, limit: usize) -> Result<Vec<SearchHit>
 
     let mut st = conn.prepare_cached(
         "SELECT p.id, p.title, p.icon, bm25(pages_fts) FROM pages_fts JOIN pages p ON p.id = pages_fts.rowid
-         WHERE pages_fts MATCH ?1 ORDER BY bm25(pages_fts) LIMIT ?2",
+         WHERE pages_fts MATCH ?1 AND p.deleted_at IS NULL ORDER BY bm25(pages_fts) LIMIT ?2",
     )?;
     for h in st.query_map(params![q, limit_i], |r| {
         Ok(SearchHit::Page {
@@ -90,7 +90,7 @@ pub fn search(db: &Database, input: &str, limit: usize) -> Result<Vec<SearchHit>
          FROM notes_blocks_fts
          JOIN notes_blocks b ON b.id = notes_blocks_fts.rowid
          JOIN pages p ON p.id = b.page_id
-         WHERE notes_blocks_fts MATCH ?1
+         WHERE notes_blocks_fts MATCH ?1 AND p.deleted_at IS NULL
          ORDER BY bm25(notes_blocks_fts) LIMIT ?2",
     )?;
     let mut seen = std::collections::HashSet::new();

@@ -14,7 +14,12 @@ export const api = {
   createPage: (title: string, parentId: number | null = null, icon: string | null = "file-text", content?: string) =>
     call<T.Page>("page_create", { parentId, title, icon, content: content ?? null }),
   renamePage: (id: number, title: string, updateLinks = true) => call<number>("page_rename", { id, title, updateLinks }),
-  deletePage: (id: number) => call<void>("page_delete", { id }),
+  /** Moves the page and its subpages to the trash. */
+  deletePage: (id: number) => call<number>("page_delete", { id }),
+  restorePage: (id: number) => call<T.Page>("page_restore", { id }),
+  purgePage: (id: number) => call<number>("page_purge", { id }),
+  trash: () => call<T.TrashEntry[]>("trash_list"),
+  emptyTrash: () => call<number>("trash_empty"),
   movePage: (id: number, parentId: number | null, position: number) => call<void>("page_move", { id, parentId, position }),
   setFavorite: (id: number, favorite: boolean) => call<void>("page_set_favorite", { id, favorite }),
   setIcon: (id: number, icon: string | null) => call<void>("page_set_icon", { id, icon }),
@@ -71,6 +76,8 @@ export const api = {
   setApiKey: (key: string | null) => call<T.SettingsView>("api_key_set", { key }),
   testConnection: (baseUrl: string | null, apiKey: string | null) => call<T.ConnectionTest>("ai_test_connection", { baseUrl, apiKey }),
   removeDemo: () => call<number>("demo_remove"),
+  backupNow: () => call<T.BackupInfo>("backup_now"),
+  backups: () => call<T.BackupInfo[]>("backup_list"),
   appInfo: () => call<{ version: string; data_dir: string; platform: string }>("app_info"),
 
   // AI

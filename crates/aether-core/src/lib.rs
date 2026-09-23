@@ -5,6 +5,8 @@
 //!
 //! * [`db`] – embedded SQLite store (FTS5 full-text search, embeddings as BLOBs)
 //! * [`notes`] – Markdown documents, backlinks, tags, daily notes
+//! * [`trash`] – page trash (restore, purge, 30-day expiry)
+//! * [`backup`] – database snapshots (`VACUUM INTO`) with rotation
 //! * [`vault`] – Obsidian vault import / Markdown export
 //! * [`settings`] – application settings
 //! * [`zeit`] – the `/zeit` slash-command parser
@@ -16,6 +18,7 @@
 
 pub mod activity;
 pub mod ai;
+pub mod backup;
 pub mod db;
 pub mod demo;
 pub mod error;
@@ -26,6 +29,7 @@ pub mod notes;
 pub mod search;
 pub mod settings;
 pub mod tracking;
+pub mod trash;
 pub mod vault;
 pub mod zeit;
 

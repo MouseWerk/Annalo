@@ -730,3 +730,19 @@ button.side-section-title:hover { color: var(--text-2); }
 }
 .tree-row:focus-visible { outline-offset: -2px; }
 .tree-row:focus-visible .tree-row-actions { display: flex; }
+
+/* ------------------------------------------------------------------ trash */
+
+.trash-list { display: grid; gap: 2px; }
+.trash-item { display: flex; align-items: center; gap: 10px; min-height: 46px; padding: 4px 6px 4px 10px; border-radius: var(--r-sm); }
+.trash-item:hover { background: var(--bg-hover); }
+.trash-item > svg { color: var(--text-3); flex: none; }
+.trash-item-text { flex: 1; min-width: 0; display: grid; }
+.trash-item-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trash-item-meta { font-size: var(--fs-xs); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------------------------------------------------------------- backups */
+
+.backup-list { display: grid; padding: 4px 0; }
+.backup-row { display: flex; align-items: center; gap: 10px; min-height: 30px; }
+.backup-row .grow { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

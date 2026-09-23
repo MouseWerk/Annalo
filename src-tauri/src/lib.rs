@@ -15,6 +15,7 @@ use aether_core::ai::metrics::SessionMeter;
 use aether_core::ai::rag::{self, ContextChunk};
 use aether_core::ai::router::{ModelRouter, RouteDecision, RouteInput, RouterConfig, Tier};
 use aether_core::ai::tools::{self, Risk, SystemCall};
+use aether_core::backup::{self, BackupInfo};
 use aether_core::db::EntryFilter;
 use aether_core::export::{self, ExportFormat, ExportOptions, ExportResult};
 use aether_core::model::*;
@@ -23,6 +24,7 @@ use aether_core::notes::PageDoc;
 use aether_core::search::{self, SearchHit};
 use aether_core::settings::Settings;
 use aether_core::tracking::{self, BudgetStatus, LogOutcome};
+use aether_core::trash::TrashEntry;
 use aether_core::vault::{self, ImportReport};
 use aether_core::{Database, Error, demo};
 use chrono::{DateTime, Local, NaiveDate, Utc};
@@ -80,6 +82,13 @@ impl AppState {
     fn router(&self) -> Arc<ModelRouter> {
         self.ai.read().unwrap_or_else(|e| e.into_inner()).router.clone()
     }
+    /// The configured backup folder, or `backups` in the data folder.
+    fn backup_dir(&self) -> PathBuf {
+        match self.settings().backup_dir.filter(|d| !d.trim().is_empty()) {
+            Some(d) => PathBuf::from(d.trim()),
+            None => self.data_dir.join("backups"),
+        }
+    }
 }
 
 // ------------------------------------------------------------------- pages
@@ -136,9 +145,30 @@ fn page_rename(state: State<AppState>, id: i64, title: String, update_links: boo
     db.rename_page_linked(id, &title, update_links)
 }
 
+/// Moves a page and its subpages to the trash. Returns the number of pages moved.
 #[tauri::command]
-fn page_delete(state: State<AppState>, id: i64) -> Result<()> {
-    state.db().delete_page(id)
+fn page_delete(state: State<AppState>, id: i64) -> Result<usize> {
+    state.db().trash_page(id)
+}
+
+#[tauri::command]
+fn page_restore(state: State<AppState>, id: i64) -> Result<Page> {
+    state.db().restore_page(id)
+}
+
+#[tauri::command]
+fn page_purge(state: State<AppState>, id: i64) -> Result<usize> {
+    state.db().purge_page(id)
+}
+
+#[tauri::command]
+fn trash_list(state: State<AppState>) -> Result<Vec<TrashEntry>> {
+    state.db().list_trash()
+}
+
+#[tauri::command]
+fn trash_empty(state: State<AppState>) -> Result<usize> {
+    state.db().empty_trash()
 }
 
 #[tauri::command]
@@ -548,6 +578,42 @@ fn export_entries(
     Ok(res)
 }
 
+// ----------------------------------------------------------------- backups
+
+fn run_backup(state: &AppState) -> Result<BackupInfo> {
+    let dir = state.backup_dir();
+    let keep = state.settings().backup_keep;
+    backup::backup_to(&state.db(), &dir, keep)
+}
+
+#[tauri::command]
+fn backup_now(state: State<AppState>) -> Result<BackupInfo> {
+    run_backup(&state)
+}
+
+#[tauri::command]
+fn backup_list(state: State<AppState>) -> Result<Vec<BackupInfo>> {
+    backup::list_backups(&state.backup_dir())
+}
+
+/// Backs up once a day: on start when the newest backup is older than 24 h, then checks hourly.
+fn spawn_backup_scheduler(app: AppHandle) {
+    const DAY: chrono::TimeDelta = chrono::TimeDelta::hours(24);
+    std::thread::spawn(move || {
+        loop {
+            let state = app.state::<AppState>();
+            let due = match backup::list_backups(&state.backup_dir()) {
+                Ok(list) => list.first().is_none_or(|b| Local::now() - b.created_at >= DAY),
+                Err(_) => true,
+            };
+            if due && let Err(e) = run_backup(&state) {
+                eprintln!("backup failed: {e}");
+            }
+            std::thread::sleep(Duration::from_secs(3600));
+        }
+    });
+}
+
 // ---------------------------------------------------------------- settings
 
 #[derive(Serialize)]
@@ -556,6 +622,8 @@ struct SettingsView {
     api_key_set: bool,
     api_key_storage: &'static str,
     data_dir: String,
+    /// Effective backup folder (the configured one or the default).
+    backup_dir: String,
     version: &'static str,
 }
 
@@ -566,6 +634,7 @@ fn settings_get(state: State<AppState>) -> SettingsView {
         api_key_set: state.secrets.get().is_some(),
         api_key_storage: state.secrets.backend(),
         data_dir: state.data_dir.display().to_string(),
+        backup_dir: state.backup_dir().display().to_string(),
         version: env!("CARGO_PKG_VERSION"),
     }
 }
@@ -579,6 +648,8 @@ fn settings_save(state: State<AppState>, settings: Settings) -> Result<SettingsV
     }
     let mut settings = settings;
     settings.litellm_base_url = url.trim_end_matches('/').to_owned();
+    settings.backup_keep = settings.backup_keep.clamp(1, 365);
+    settings.backup_dir = settings.backup_dir.map(|d| d.trim().to_owned()).filter(|d| !d.is_empty());
     state.db().save_settings(&settings)?;
     lock(&state.idle).set_threshold(Duration::from_secs(settings.idle_threshold_minutes * 60));
     *state.ai.write().unwrap_or_else(|e| e.into_inner()) = AiRuntime::new(settings, state.secrets.get());
@@ -1019,6 +1090,9 @@ pub fn run() {
             if opts.demo.unwrap_or(true) {
                 demo::seed(&db, Utc::now())?;
             }
+            if let Err(e) = db.purge_expired_trash(Utc::now()) {
+                eprintln!("trash cleanup failed: {e}");
+            }
             let settings = db.load_settings()?;
             let secrets = SecretStore::new(&dir);
             let idle_threshold = Duration::from_secs(settings.idle_threshold_minutes * 60);
@@ -1043,6 +1117,7 @@ pub fn run() {
                 eprintln!("Alt+Space not available: {e}");
             }
             spawn_activity_sampler(app.handle().clone());
+            spawn_backup_scheduler(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1052,6 +1127,10 @@ pub fn run() {
             page_create,
             page_rename,
             page_delete,
+            page_restore,
+            page_purge,
+            trash_list,
+            trash_empty,
             page_move,
             page_set_favorite,
             page_set_icon,
@@ -1089,6 +1168,8 @@ pub fn run() {
             budget,
             schedule,
             export_entries,
+            backup_now,
+            backup_list,
             settings_get,
             settings_save,
             api_key_set,

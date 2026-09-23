@@ -9,6 +9,8 @@ export interface Page {
   updated_at: string;
   favorite: boolean;
   daily_date: string | null;
+  /** Set while the page is in the trash. */
+  deleted_at?: string | null;
 }
 export interface PageNode extends Page {
   children: PageNode[];
@@ -154,13 +156,29 @@ export interface Settings {
   jira_issue_map: Record<string, string>;
   theme: "system" | "light" | "dark";
   open_daily_on_start: boolean;
+  backup_dir: string | null;
+  backup_keep: number;
 }
 export interface SettingsView {
   settings: Settings;
   api_key_set: boolean;
   api_key_storage: string;
   data_dir: string;
+  /** Effective backup folder. */
+  backup_dir: string;
   version: string;
+}
+export interface TrashEntry extends Page {
+  deleted_at: string;
+  /** Subpages deleted together with this page. */
+  descendants: number;
+  parent_title: string | null;
+}
+export interface BackupInfo {
+  path: string;
+  file_name: string;
+  created_at: string;
+  size_bytes: number;
 }
 export interface ConnectionTest {
   ok: boolean;

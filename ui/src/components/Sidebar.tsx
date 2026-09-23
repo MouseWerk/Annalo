@@ -69,6 +69,7 @@ export function Sidebar() {
               iconSize={15}
               onClick={() => saveCollapsed(allCollapsed ? new Set() : new Set(withChildren))}
             />
+            <IconButton icon={Trash2} label="Papierkorb" size={26} iconSize={15} active={active?.kind === "trash"} onClick={() => useApp.getState().openTab({ kind: "trash" })} />
           </div>
           <div className="sidebar-scroll">
             {tree.length === 0 ? (
