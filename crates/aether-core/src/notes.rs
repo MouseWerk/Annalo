@@ -217,7 +217,7 @@ impl Database {
         })
     }
 
-    /// Rebuilds chunk rows, links and tags of one page. Embeddings of chunks
+    /// Rebuilds chunk rows, links, tags and tasks of one page. Embeddings of chunks
     /// whose text did not change are kept, so editing a long note only
     /// re-embeds the edited section.
     pub(crate) fn reindex_page(&self, id: i64, content: &str) -> Result<()> {
@@ -254,7 +254,7 @@ impl Database {
         for tag in tags(content) {
             conn.execute("INSERT OR IGNORE INTO page_tags (page_id, tag) VALUES (?1, ?2)", params![id, tag])?;
         }
-        Ok(())
+        self.reindex_tasks(id, content)
     }
 
     /// Rebuilds the derived indexes of every page (used after migrating).

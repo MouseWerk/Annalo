@@ -577,6 +577,41 @@ button.side-section-title:hover { color: var(--text-2); }
 .week-nav { display: flex; align-items: center; gap: 2px; margin-right: 6px; }
 .tag-heading { display: flex; align-items: center; gap: 4px; }
 .tag-heading svg { color: var(--text-3); }
+
+/* Tasks view: checkbox matches the editor's task list. */
+.task-group { display: grid; gap: 4px; }
+.task-group-title { margin: 0; padding: 0 10px; font-size: var(--fs-sm); font-weight: 600; color: var(--text-2); }
+.task-group-overdue .task-group-title { color: var(--danger); }
+.task-list { list-style: none; margin: 0; padding: 0; display: grid; }
+.task-row { display: flex; align-items: flex-start; gap: 10px; padding: 7px 10px; border-radius: var(--r-sm); }
+.task-row:hover { background: var(--bg-hover); }
+.task-check {
+  appearance: none;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 3px 0 0;
+  border-radius: 4px;
+  border: 1.5px solid var(--text-3);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: background var(--dur-fast), border-color var(--dur-fast);
+}
+.task-check:hover { border-color: var(--accent); }
+.task-check:checked { background: var(--accent-strong); border-color: var(--accent-strong); }
+.task-check:checked::after { content: ""; width: 9px; height: 5px; border: 2px solid #fff; border-top: 0; border-right: 0; transform: translateY(-1px) rotate(-45deg); }
+.task-check:disabled { opacity: 0.6; cursor: default; }
+.task-main { flex: 1; min-width: 0; display: flex; align-items: baseline; justify-content: space-between; gap: 6px 12px; flex-wrap: wrap; }
+.task-text { min-width: 0; overflow-wrap: anywhere; }
+.task-row.done .task-text { color: var(--text-3); text-decoration: line-through; text-decoration-color: var(--text-3); }
+.task-prio { vertical-align: -2px; margin-right: 3px; }
+.task-prio.high { color: var(--danger); }
+.task-prio.medium { color: var(--warning); }
+.task-meta { display: flex; align-items: center; gap: 8px; flex: none; max-width: 100%; }
+.task-page { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 220px; padding: 0 4px; border: 0; border-radius: 4px; background: none; color: var(--text-3); font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-page:hover { color: var(--text); background: var(--bg-hover); }
+.task-page svg { flex: none; }
 .card { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-raised); }
 .card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 48px; padding: 8px 16px; border-bottom: 1px solid var(--border); }
 .card-head h2 { font-size: var(--fs-md); font-weight: 600; margin: 0; }

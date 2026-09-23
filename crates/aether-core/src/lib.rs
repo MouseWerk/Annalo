@@ -7,6 +7,7 @@
 //! * [`notes`] – Markdown documents, backlinks, tags, daily notes
 //! * [`vault`] – Obsidian vault import / Markdown export
 //! * [`settings`] – application settings
+//! * [`tasks`] – task items across all notes (due dates, priorities)
 //! * [`zeit`] – the `/zeit` slash-command parser
 //! * [`tracking`] – timers, manual logging, budget/ETC alerts
 //! * [`netzplan`] – critical path method (CPM) over Vorgänge
@@ -25,6 +26,7 @@ pub mod netzplan;
 pub mod notes;
 pub mod search;
 pub mod settings;
+pub mod tasks;
 pub mod tracking;
 pub mod vault;
 pub mod zeit;

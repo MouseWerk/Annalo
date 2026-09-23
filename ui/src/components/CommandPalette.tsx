@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowLeft, ArrowRight, Columns2, Plus, Briefcase, CalendarCheck2, Download, FilePlus2, FolderInput, Hash, Moon, PanelLeft, PanelRight, RefreshCw, Search, Settings, Sparkles, Square, Timer, Play, Focus,
+  ArrowLeft, ArrowRight, Columns2, Plus, Briefcase, CalendarCheck2, Download, FilePlus2, FolderInput, Hash, ListChecks, Moon, PanelLeft, PanelRight, RefreshCw, Search, Settings, Sparkles, Square, Timer, Play, Focus,
 } from "lucide-react";
 import { api } from "../lib/api";
 import { useApp, savePref } from "../store/app";
@@ -166,6 +166,7 @@ export function CommandPalette() {
         ? { id: "timer", title: "Timer stoppen", icon: ic(Square), hint: "Ctrl Shift T", run: () => stopTimer() }
         : { id: "timer", title: "Timer starten", icon: ic(Play), hint: "Ctrl Shift T", run: () => s().openTab({ kind: "timesheet" }) },
       { id: "timesheet", title: "Zeiterfassung öffnen", icon: ic(Timer), run: () => s().openTab({ kind: "timesheet" }) },
+      { id: "tasks", title: "Aufgaben", subtitle: "Offene Aufgaben aus allen Notizen", icon: ic(ListChecks), hint: "Ctrl Shift A", run: () => s().openTab({ kind: "tasks" }) },
       { id: "projects", title: "Projekte öffnen", icon: ic(Briefcase), run: () => s().openTab({ kind: "projects" }) },
       { id: "assistant", title: "Assistent fragen", icon: ic(Sparkles), hint: "Ctrl J", run: () => openAssistant() },
       { id: "settings", title: "Einstellungen", icon: ic(Settings), hint: "Ctrl ,", run: () => s().openTab({ kind: "settings" }) },

@@ -31,6 +31,7 @@ events and OS integration. The UI never talks to the network or the filesystem d
 | `pages` | Page tree; `content` holds the page as one Markdown document (v2). `daily_date` marks daily notes, `favorite` pins pages |
 | `notes_blocks` | Derived chunk index (split at headings, ~1200 chars) rebuilt on every save; `vector_embedding` is a little-endian `f32` BLOB. Unchanged chunks keep their embedding |
 | `page_links`, `page_tags` | Outgoing `[[links]]` (lower-cased targets, so links to not-yet-existing pages resolve later) and `#tags`, for backlinks and the tag view |
+| `tasks` | Task items (`- [ ] …` outside code blocks) per page: ordinal, line, text, done, due date (`📅 YYYY-MM-DD` / `due:YYYY-MM-DD`), priority (`!!` hoch, `!` mittel), tags. Rebuilt with links and tags on every save; checking a task off rewrites exactly that checkbox and saves the page |
 | `pages_fts` | FTS5 over page titles (title hits rank first in search) |
 | `settings` | Application settings as JSON. The LiteLLM API key is **not** stored here; the shell keeps it in the Windows Credential Manager |
 | `notes_blocks_fts`, `time_entries_fts` | FTS5 external-content indexes (unicode61, diacritics removed), kept in sync by triggers |

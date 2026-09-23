@@ -234,6 +234,28 @@ export interface ImportReport {
   skipped: number;
   root_page_id: number;
 }
+export type TaskStatus = "open" | "done" | "all";
+export interface Task {
+  page_id: number;
+  page_title: string;
+  page_icon: string | null;
+  /** Index among the page's task items; identifies the task for task_set_done. */
+  ordinal: number;
+  line: number;
+  text: string;
+  done: boolean;
+  /** YYYY-MM-DD */
+  due: string | null;
+  /** 0 keine, 1 mittel (!), 2 hoch (!!) */
+  priority: number;
+  tags: string[];
+}
+export interface TaskFilter {
+  status?: TaskStatus;
+  due_before?: string | null;
+  tag?: string | null;
+  page_id?: number | null;
+}
 export interface ActivityTick {
   idle_seconds: number | null;
   window: { title: string; process: string } | null;
