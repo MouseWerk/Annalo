@@ -12,6 +12,8 @@ import { ProjectsView } from "./views/ProjectsView";
 import { SettingsView } from "./views/SettingsView";
 import { TagView } from "./views/TagView";
 import type { ActivityTick } from "./lib/types";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { tabTitle } from "./components/Shell";
 
 export function App() {
   const sidebarOpen = useApp((s) => s.sidebarOpen);
@@ -106,6 +108,14 @@ export function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  // Window title follows the active tab.
+  const pages = useApp((s) => s.pages);
+  useEffect(() => {
+    const title = active ? `${tabTitle(active, pages)} – AETHER OS` : "AETHER OS";
+    document.title = title;
+    getCurrentWindow().setTitle(title).catch(() => {});
+  }, [active, pages]);
 
   const cls = ["app", sidebarOpen && !focus ? "" : "no-sidebar", panelOpen && !focus ? "" : "no-panel", focus ? "focus" : ""].join(" ");
   return (

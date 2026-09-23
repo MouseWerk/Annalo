@@ -128,6 +128,52 @@ pub fn seed(db: &Database, now: DateTime<Utc>) -> Result<bool> {
     Ok(true)
 }
 
+/// Titles of the pages created by [`seed`].
+const DEMO_PAGES: &[&str] = &[
+    "Willkommen",
+    "Projekte",
+    "PRJ-2026-X Rollout",
+    "Architektur",
+    "Jour fixe 22.09.",
+    "Wissensbasis",
+    "SAP CATS Leitfaden",
+];
+
+/// Removes the sample project (with its time entries) and the sample pages.
+/// Daily notes and everything the user created are kept. Returns the number of removed subtrees.
+pub fn remove(db: &Database) -> Result<usize> {
+    db.atomic(|| {
+        if let Ok(p) = db.project_by_code("PRJ-2026-X") {
+            db.conn().execute(
+                "DELETE FROM time_entries WHERE netzplan_id IN (SELECT id FROM netzplaene WHERE project_id = ?1)",
+                [p.id],
+            )?;
+            db.delete_project(p.id)?;
+        }
+        // Delete sample subtrees top-down, but keep any page that has user content below it.
+        fn is_demo(n: &crate::model::PageNode) -> bool {
+            n.page.daily_date.is_none() && DEMO_PAGES.contains(&n.page.title.as_str())
+        }
+        fn only_demo(n: &crate::model::PageNode) -> bool {
+            is_demo(n) && n.children.iter().all(only_demo)
+        }
+        fn sweep(db: &Database, nodes: &[crate::model::PageNode], removed: &mut usize) -> Result<()> {
+            for n in nodes {
+                if only_demo(n) {
+                    db.delete_page(n.page.id)?;
+                    *removed += 1;
+                } else {
+                    sweep(db, &n.children, removed)?;
+                }
+            }
+            Ok(())
+        }
+        let mut removed = 0;
+        sweep(db, &db.page_tree()?, &mut removed)?;
+        Ok(removed)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -143,5 +189,14 @@ mod tests {
         assert_eq!(db.list_time_entries(&Default::default()).unwrap().len(), 10);
         let arch = db.page_by_title("Architektur").unwrap().unwrap();
         assert_eq!(db.page_doc(arch.id).unwrap().backlinks.len(), 2);
+
+        let mine = db.create_page(Some(arch.id), "Meine Notiz", None).unwrap();
+        let n = remove(&db).unwrap();
+        assert_eq!(n, 3, "Willkommen, Jour fixe and the Wissensbasis subtree");
+        assert!(db.list_projects().unwrap().is_empty());
+        assert!(db.list_time_entries(&Default::default()).unwrap().is_empty());
+        assert!(db.page(mine.id).is_ok(), "user pages survive");
+        assert!(db.page_by_title("Architektur").unwrap().is_some(), "parent of a user page is kept");
+        assert!(db.page_by_title("SAP CATS Leitfaden").unwrap().is_none());
     }
 }

@@ -70,6 +70,7 @@ export const api = {
   saveSettings: (settings: T.Settings) => call<T.SettingsView>("settings_save", { settings }),
   setApiKey: (key: string | null) => call<T.SettingsView>("api_key_set", { key }),
   testConnection: (baseUrl: string | null, apiKey: string | null) => call<T.ConnectionTest>("ai_test_connection", { baseUrl, apiKey }),
+  removeDemo: () => call<number>("demo_remove"),
   appInfo: () => call<{ version: string; data_dir: string; platform: string }>("app_info"),
 
   // AI

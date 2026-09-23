@@ -125,6 +125,7 @@ test("command palette searches titles and content", async () => {
 test("new page via Ctrl+N, then delete with confirmation", async () => {
   await app.keys(["Control", "n"]);
   await app.browser.waitUntil(async () => (await (await app.$(".page-title")).getValue()) === "Unbenannt");
+  await app.browser.waitUntil(() => app.browser.execute(() => document.activeElement?.classList.contains("page-title") && document.activeElement.selectionEnd > 0));
   await app.type("Wegwerfseite");
   await app.keys(["Enter"]);
   await app.type("Inhalt");

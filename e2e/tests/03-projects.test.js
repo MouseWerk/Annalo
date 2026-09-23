@@ -78,6 +78,24 @@ test("timer can be started from a Vorgang row", async () => {
   await app.invoke("timer_discard");
 });
 
+test("sample data can be removed from settings", async () => {
+  await app.keys(["Control", ","]);
+  await app.click(".settings-nav-item:nth-child(4)");
+  const rows = await app.$$(".set-row");
+  for (const r of rows)
+    if (/Beispieldaten entfernen/.test(await app.textOf(r))) {
+      await (await r.$(".btn-danger")).click();
+      break;
+    }
+  await app.waitFor(".dialog");
+  await app.shot("confirm-demo-removal");
+  await app.click(".dialog .btn-danger");
+  await app.waitText(".toast-title", /Beispieldaten entfernt/);
+  const tree = await app.invoke("wbs_tree");
+  assert.deepEqual(tree.map((p) => p.project_code), ["PRJ-2027-A"], "own project stays");
+  assert.equal(await app.invoke("page_resolve", { title: "SAP CATS Leitfaden", create: false }), null);
+});
+
 test("no console errors", async () => {
   assert.deepEqual(await app.consoleErrors(), []);
 });

@@ -7,7 +7,7 @@ import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import type { Node as PMNode } from "@tiptap/pm/model";
 import {
-  CheckSquare, Code2, FilePlus2, Heading1, Heading2, Heading3, Link2, List, ListOrdered, Minus, Quote, Table2, Text, Timer, CalendarDays, Highlighter,
+  AlertTriangle, Info, CheckSquare, Code2, FilePlus2, Heading1, Heading2, Heading3, Link2, List, ListOrdered, Minus, Quote, Table2, Text, Timer, CalendarDays, Highlighter,
 } from "lucide-react";
 import { popupRenderer, type PopupItem } from "./suggestion-popup";
 import { PageIcon } from "../components/icons";
@@ -144,7 +144,9 @@ function slashItems(): SlashItem[] {
     { id: "todo", title: "Aufgabenliste", icon: ic(CheckSquare), hint: "[ ]", section: "Listen", keywords: "todo task checkbox aufgabe", run: (e, r) => e.chain().focus().deleteRange(r).toggleTaskList().run() },
     { id: "ul", title: "Aufzählung", icon: ic(List), hint: "-", section: "Listen", keywords: "bullet liste", run: (e, r) => e.chain().focus().deleteRange(r).toggleBulletList().run() },
     { id: "ol", title: "Nummerierte Liste", icon: ic(ListOrdered), hint: "1.", section: "Listen", keywords: "ordered nummer", run: (e, r) => e.chain().focus().deleteRange(r).toggleOrderedList().run() },
-    { id: "quote", title: "Zitat", icon: ic(Quote), hint: ">", section: "Blöcke", keywords: "quote callout hinweis", run: (e, r) => e.chain().focus().deleteRange(r).toggleBlockquote().run() },
+    { id: "quote", title: "Zitat", icon: ic(Quote), hint: ">", section: "Blöcke", keywords: "quote zitat", run: (e, r) => e.chain().focus().deleteRange(r).toggleBlockquote().run() },
+    { id: "callout", title: "Hinweisbox", subtitle: "Obsidian-Callout", icon: ic(Info), section: "Blöcke", keywords: "callout hinweis info note", run: (e, r) => e.chain().focus().deleteRange(r).toggleBlockquote().insertContent("[!note] ").run() },
+    { id: "warn", title: "Warnbox", icon: ic(AlertTriangle), section: "Blöcke", keywords: "callout warnung warning", run: (e, r) => e.chain().focus().deleteRange(r).toggleBlockquote().insertContent("[!warning] ").run() },
     { id: "code", title: "Codeblock", icon: ic(Code2), hint: "```", section: "Blöcke", keywords: "code snippet", run: (e, r) => e.chain().focus().deleteRange(r).toggleCodeBlock().run() },
     { id: "table", title: "Tabelle", icon: ic(Table2), section: "Blöcke", keywords: "table tabelle", run: (e, r) => e.chain().focus().deleteRange(r).insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run() },
     { id: "hr", title: "Trennlinie", icon: ic(Minus), hint: "---", section: "Blöcke", keywords: "divider linie hr", run: (e, r) => e.chain().focus().deleteRange(r).setHorizontalRule().run() },
@@ -357,3 +359,60 @@ export function splitFrontmatter(md: string): { frontmatter: string; body: strin
   if (!m) return { frontmatter: "", body: md };
   return { frontmatter: m[0].endsWith("\n") ? m[0] : m[0] + "\n", body: md.slice(m[0].length).replace(/^\r?\n/, "") };
 }
+
+// ------------------------------------------------------------- callouts
+
+const CALLOUT_RE = /^\[!(\w+)\][+-]?\s*/;
+
+/** Styles Obsidian callouts (`> [!note] Title`) without changing the Markdown. */
+export const Callouts = Extension.create({
+  name: "callouts",
+  addProseMirrorPlugins() {
+    const build = (doc: PMNode) => {
+      const decos: Decoration[] = [];
+      doc.descendants((node, pos) => {
+        if (node.type.name !== "blockquote") return true;
+        const first = node.firstChild;
+        const m = first?.isTextblock ? CALLOUT_RE.exec(first.textContent) : null;
+        if (m) {
+          const type = m[1].toLowerCase();
+          decos.push(Decoration.node(pos, pos + node.nodeSize, { class: `callout callout-${type}`, "data-callout": type }));
+          const start = pos + 2; // blockquote open + paragraph open
+          decos.push(Decoration.inline(start, start + m[0].trimEnd().length, { class: "callout-marker", "data-label": type }));
+          // Title = rest of the first line (up to a line break).
+          let end = start;
+          let stop = false;
+          first!.forEach((child, offset) => {
+            if (stop) return;
+            if (child.type.name === "hardBreak") {
+              stop = true;
+              return;
+            }
+            const text = child.isText ? child.text! : "";
+            const nl = text.indexOf("\n");
+            end = start + offset + (nl >= 0 ? nl : child.nodeSize);
+            if (nl >= 0) stop = true;
+          });
+          const titleFrom = start + m[0].length;
+          if (end > titleFrom) decos.push(Decoration.inline(titleFrom, end, { class: "callout-title" }));
+        }
+        return false;
+      });
+      return DecorationSet.create(doc, decos);
+    };
+    return [
+      new Plugin({
+        key: new PluginKey("callouts"),
+        state: {
+          init: (_, { doc }) => build(doc),
+          apply: (tr, old) => (tr.docChanged ? build(tr.doc) : old),
+        },
+        props: {
+          decorations(state) {
+            return this.getState(state);
+          },
+        },
+      }),
+    ];
+  },
+});

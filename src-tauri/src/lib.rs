@@ -881,6 +881,14 @@ fn spawn_activity_sampler(app: AppHandle) {
     });
 }
 
+/// Removes the sample project and pages created on first start.
+#[tauri::command]
+fn demo_remove(app: AppHandle, state: State<AppState>) -> Result<usize> {
+    let n = demo::remove(&state.db())?;
+    let _ = app.emit("data://entries", ());
+    Ok(n)
+}
+
 #[derive(Serialize)]
 struct AppInfo {
     version: &'static str,
@@ -1019,6 +1027,7 @@ pub fn run() {
             ai_run_system_tool,
             ai_index_pending,
             app_info,
+            demo_remove,
         ])
         .run(tauri::generate_context!())
         .expect("error while running AETHER OS");

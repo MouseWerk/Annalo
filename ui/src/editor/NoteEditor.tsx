@@ -3,27 +3,19 @@
 import { useEffect, useRef, useState } from "react";
 import { EditorContent, useEditor, useEditorState, type Editor } from "@tiptap/react";
 import { BubbleMenu } from "@tiptap/react/menus";
-import StarterKit from "@tiptap/starter-kit";
-import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
-import { common, createLowlight } from "lowlight";
-import { TaskItem, TaskList } from "@tiptap/extension-list";
-import { TableKit } from "@tiptap/extension-table";
-import Highlight from "@tiptap/extension-highlight";
-import { Placeholder } from "@tiptap/extensions";
-import { Markdown } from "@tiptap/markdown";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Bold, Code, Highlighter, Italic, Link2, Strikethrough, SquareArrowOutUpRight } from "lucide-react";
 import { api } from "../lib/api";
 import { useApp } from "../store/app";
 import { hoursFromMinutes } from "../lib/format";
-import { SlashCommand, TagHighlight, TimeEntryChip, WikiLink, WikiLinkSuggest, ZeitCommand, pageSuggestItem, splitFrontmatter, type LinkSuggestItem } from "./extensions";
+import { pageSuggestItem, splitFrontmatter, type LinkSuggestItem } from "./extensions";
+import { buildExtensions, toMarkdown } from "./schema";
 import { IconButton } from "../components/ui";
-import { FindInPage, findKey } from "./find";
+import { findKey } from "./find";
 import { ChevronDown, ChevronUp, Search, X } from "lucide-react";
 import type { PageDoc } from "../lib/types";
 
 const SAVE_DELAY = 450;
-const lowlight = createLowlight(common);
 
 export interface NoteEditorHandle {
   editor: Editor | null;
@@ -56,7 +48,7 @@ export function NoteEditor({
     if (!dirty.current) return;
     dirty.current = false;
     setStatus("saving");
-    const md = frontmatter.current + editor.getMarkdown();
+    const md = frontmatter.current + toMarkdown(editor);
     const p = api
       .savePage(doc.id, md)
       .then((saved) => {
@@ -74,71 +66,47 @@ export function NoteEditor({
 
   const editor = useEditor(
     {
-      extensions: [
-        StarterKit.configure({
-          heading: { levels: [1, 2, 3, 4] },
-          codeBlock: false,
-          link: { openOnClick: false, autolink: true, linkOnPaste: true, HTMLAttributes: { rel: "noopener noreferrer", target: null } },
-        }),
-        CodeBlockLowlight.configure({ lowlight, defaultLanguage: null }),
-        TaskList,
-        TaskItem.configure({ nested: true }),
-        Highlight,
-        TableKit.configure({ table: { resizable: false } }),
-        Placeholder.configure({
-          placeholder: ({ node }) => (node.type.name === "heading" ? "Überschrift" : "Schreibe etwas, / für Befehle, [[ für Links"),
-          showOnlyCurrent: true,
-        }),
-        Markdown,
-        WikiLink.configure({
-          onOpen: (t, newTab) => cb.current.onOpenLink(t, newTab),
-          isKnown: (t) => {
-            const lower = t.toLowerCase();
-            for (const p of useApp.getState().pages.values()) if (p.title.toLowerCase() === lower) return true;
-            return false;
-          },
-        }),
-        WikiLinkSuggest.configure({
-          search: async (q) => {
-            const pages = [...useApp.getState().pages.values()];
-            const lower = q.toLowerCase().trim();
-            const matches = pages
-              .filter((p) => p.id !== doc.id && (!lower || p.title.toLowerCase().includes(lower)))
-              .sort((a, b) => {
-                const as = a.title.toLowerCase().startsWith(lower) ? 0 : 1;
-                const bs = b.title.toLowerCase().startsWith(lower) ? 0 : 1;
-                return as - bs || b.updated_at.localeCompare(a.updated_at);
-              })
-              .slice(0, 8)
-              .map((p) => pageSuggestItem(p, p.parent_id ? useApp.getState().pages.get(p.parent_id)?.title : undefined));
-            const items: LinkSuggestItem[] = matches;
-            if (lower && !pages.some((p) => p.title.toLowerCase() === lower)) {
-              items.push({ id: "create", title: `„${q.trim()}“ neu verlinken`, subtitle: "Seite wird beim Öffnen angelegt", target: q.trim(), create: true });
-            }
-            return items;
-          },
-        }),
-        SlashCommand,
-        TimeEntryChip,
-        ZeitCommand.configure({
-          book: async (line) => {
-            try {
-              const out = await api.logTime(line);
-              const s = useApp.getState();
-              s.bumpEntries();
-              s.alerts(out.alerts);
-              const target = line.trim().split(/\s+/)[1] ?? "";
-              s.toast({ tone: "success", title: `${hoursFromMinutes(out.entry.duration_minutes)} h gebucht`, detail: `${target}${out.entry.description ? " · " + out.entry.description : ""}` });
-              return { entryId: out.entry.id, hours: hoursFromMinutes(out.entry.duration_minutes), target, text: out.entry.description };
-            } catch (e) {
-              useApp.getState().error("Buchung fehlgeschlagen", e);
-              return null;
-            }
-          },
-        }),
-        TagHighlight.configure({ onOpen: (t) => cb.current.onOpenTag(t) }),
-        FindInPage,
-      ],
+      extensions: buildExtensions({
+        onOpenLink: (t, newTab) => cb.current.onOpenLink(t, newTab),
+        onOpenTag: (t) => cb.current.onOpenTag(t),
+        isKnown: (t) => {
+          const lower = t.toLowerCase();
+          for (const p of useApp.getState().pages.values()) if (p.title.toLowerCase() === lower) return true;
+          return false;
+        },
+        searchPages: async (q) => {
+          const pages = [...useApp.getState().pages.values()];
+          const lower = q.toLowerCase().trim();
+          const matches = pages
+            .filter((p) => p.id !== doc.id && (!lower || p.title.toLowerCase().includes(lower)))
+            .sort((a, b) => {
+              const as = a.title.toLowerCase().startsWith(lower) ? 0 : 1;
+              const bs = b.title.toLowerCase().startsWith(lower) ? 0 : 1;
+              return as - bs || b.updated_at.localeCompare(a.updated_at);
+            })
+            .slice(0, 8)
+            .map((p) => pageSuggestItem(p, p.parent_id ? useApp.getState().pages.get(p.parent_id)?.title : undefined));
+          const items: LinkSuggestItem[] = matches;
+          if (lower && !pages.some((p) => p.title.toLowerCase() === lower)) {
+            items.push({ id: "create", title: `„${q.trim()}“ neu verlinken`, subtitle: "Seite wird beim Öffnen angelegt", target: q.trim(), create: true });
+          }
+          return items;
+        },
+        book: async (line) => {
+          try {
+            const out = await api.logTime(line);
+            const s = useApp.getState();
+            s.bumpEntries();
+            s.alerts(out.alerts);
+            const target = line.trim().split(/\s+/)[1] ?? "";
+            s.toast({ tone: "success", title: `${hoursFromMinutes(out.entry.duration_minutes)} h gebucht`, detail: `${target}${out.entry.description ? " · " + out.entry.description : ""}` });
+            return { entryId: out.entry.id, hours: hoursFromMinutes(out.entry.duration_minutes), target, text: out.entry.description };
+          } catch (e) {
+            useApp.getState().error("Buchung fehlgeschlagen", e);
+            return null;
+          }
+        },
+      }),
       content: splitFrontmatter(doc.content).body,
       contentType: "markdown",
       editorProps: {

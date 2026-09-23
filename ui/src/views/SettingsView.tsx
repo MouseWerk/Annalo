@@ -447,6 +447,29 @@ function NotesSection({ draft, update }: { draft: Settings; update: (p: Partial<
           </Button>
         </Row>
       </Group>
+      <Group title="Beispieldaten">
+        <Row label="Beispieldaten entfernen" description="Löscht das Beispielprojekt PRJ-2026-X mit seinen Zeiten und die Beispielseiten. Deine eigenen Seiten und Tagesnotizen bleiben erhalten.">
+          <Button
+            variant="danger"
+            icon={Trash2}
+            onClick={async () => {
+              const s = useApp.getState();
+              if (!(await s.confirm({ title: "Beispieldaten entfernen?", message: "Das Beispielprojekt, seine Zeitbuchungen und die Beispielseiten werden gelöscht.", confirmLabel: "Entfernen", danger: true }))) return;
+              try {
+                const n = await api.removeDemo();
+                await s.refreshTree();
+                s.bumpWbs();
+                s.bumpEntries();
+                s.toast({ tone: "success", title: "Beispieldaten entfernt", detail: n ? "Beispielprojekt und -seiten gelöscht" : "Beispielprojekt gelöscht" });
+              } catch (e) {
+                s.error("Entfernen fehlgeschlagen", e);
+              }
+            }}
+          >
+            Entfernen
+          </Button>
+        </Row>
+      </Group>
     </>
   );
 }

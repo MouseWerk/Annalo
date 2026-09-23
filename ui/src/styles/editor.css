@@ -282,3 +282,15 @@
 .find-count { font-size: var(--fs-xs); color: var(--text-3); min-width: 34px; text-align: right; }
 .find-hit { background: var(--mark); border-radius: 2px; }
 .find-hit.current { background: rgb(251 146 60 / 0.55); }
+
+/* Obsidian callouts */
+.prose blockquote.callout { --c: var(--info); border-left: 0; padding: 10px 14px; border-radius: var(--r-md); background: color-mix(in srgb, var(--c) 10%, transparent); color: var(--text); box-shadow: inset 3px 0 0 var(--c); }
+.prose blockquote.callout-tip, .prose blockquote.callout-success, .prose blockquote.callout-check, .prose blockquote.callout-done { --c: var(--success); }
+.prose blockquote.callout-warning, .prose blockquote.callout-caution, .prose blockquote.callout-attention, .prose blockquote.callout-todo { --c: var(--warning); }
+.prose blockquote.callout-danger, .prose blockquote.callout-error, .prose blockquote.callout-bug, .prose blockquote.callout-failure { --c: var(--danger); }
+.prose blockquote.callout-question, .prose blockquote.callout-faq, .prose blockquote.callout-example, .prose blockquote.callout-abstract { --c: #a78bfa; }
+.prose blockquote.callout-quote { --c: var(--text-3); }
+.callout-marker { font-size: 0; }
+.callout-marker::before { content: attr(data-label); font-size: var(--fs-xs); font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--c); margin-right: 8px; }
+.ProseMirror-focused .callout-marker:hover { font-size: var(--fs-sm); }
+.prose .callout-title { font-weight: 600; }

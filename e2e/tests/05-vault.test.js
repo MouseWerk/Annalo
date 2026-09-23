@@ -33,7 +33,11 @@ test("imports an Obsidian vault from a path", async () => {
   const input = await app.$('input[aria-label="Vault-Pfad"]');
   await input.setValue(vault);
   const rows = await app.$$(".set-row");
-  for (const r of rows) if (/Pfad direkt angeben/.test(await app.textOf(r))) await (await r.$(".btn-secondary")).click();
+  for (const r of rows)
+    if (/Pfad direkt angeben/.test(await app.textOf(r))) {
+      await (await r.$(".btn-secondary")).click();
+      break;
+    }
   await app.waitText(".toast-title", /Vault importiert/);
   await app.waitText(".sidebar .tree-row", /Acme Kickoff/);
 });
@@ -44,6 +48,7 @@ test("imported page keeps frontmatter, links and highlights", async () => {
   const html = await (await app.$(".ProseMirror")).getHTML();
   assert.match(html, /<mark>Wichtig<\/mark>/);
   assert.match(html, /data-target="Kunden"/);
+  assert.match(html, /callout callout-note/, "Obsidian callouts are rendered");
   await app.waitFor(".prop-btn");
   await app.waitText(".backlink-title", /Kunden/);
   await app.shot("imported-page");
@@ -61,6 +66,7 @@ test("editing an imported page keeps its frontmatter", async () => {
   assert.match(doc.content, /^---\nstatus: aktiv\n---\n/);
   assert.match(doc.content, /\[\[Kunden\]\]/);
   assert.match(doc.content, /==Wichtig==/);
+  assert.match(doc.content, /> \[!note\] Hinweis/);
   assert.match(doc.content, /Ergänzt in AETHER/);
 });
 

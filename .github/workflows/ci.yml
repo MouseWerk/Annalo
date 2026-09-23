@@ -24,7 +24,7 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test -p aether-core -p aether-cli
-      - run: npm ci --prefix ui && npm run --prefix ui typecheck
+      - run: npm ci --prefix ui && npm run --prefix ui typecheck && npm test --prefix ui
       - run: cargo install tauri-driver --locked
       - name: End-to-end tests against the desktop app
         run: npm ci --prefix e2e && e2e/run.sh
