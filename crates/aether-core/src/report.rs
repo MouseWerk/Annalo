@@ -162,6 +162,7 @@ mod tests {
             duration_minutes: minutes,
             description: desc.into(),
             source: EntrySource::Manual,
+            page_id: None,
         })
         .unwrap();
     }
