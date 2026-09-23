@@ -133,6 +133,26 @@ pub fn seed(db: &Database, now: DateTime<Utc>) -> Result<bool> {
          3. Datei in der CATS-Upload-Transaktion einlesen\n\n\
          Leistungsarten: `DEV`, `CONSULTING`, `PM`, `TEST`.\n",
     )?;
+    let templates = db.templates_root()?;
+    let meeting = db.create_page(Some(templates.id), "Besprechung", Some("users"))?;
+    db.save_page_content(
+        meeting.id,
+        "{{wochentag}}, {{datum}} · {{zeit}} Uhr #meeting\n\n\
+         ## Teilnehmer\n\n- \n\n\
+         ## Agenda\n\n1. \n\n\
+         ## Beschlüsse\n\n- \n\n\
+         ## Aufgaben\n\n- [ ] \n\n\
+         > [!tip] Zeit buchen\n> Tippe `/zeit NP-8801/1020 1h Besprechung` und drücke Enter.\n",
+    )?;
+    let customer = db.create_page(Some(templates.id), "Kundentermin", Some("briefcase"))?;
+    db.save_page_content(
+        customer.id,
+        "Termin: {{titel}}\nKunde: \nOrt: \nDatum: {{datum}}, {{zeit}} Uhr (KW {{kw}}) #kunde\n\n\
+         ## Ziel des Termins\n\n\n\
+         ## Gesprächsnotizen\n\n- \n\n\
+         ## Vereinbarungen\n\n- \n\n\
+         ## Nächste Schritte\n\n- [ ] Protokoll an den Kunden senden\n- [ ] \n",
+    )?;
     db.set_favorite(proj.id, true)?;
     db.set_favorite(arch.id, true)?;
     db.daily_note(now.date_naive())?;
@@ -148,6 +168,9 @@ const DEMO_PAGES: &[&str] = &[
     "Jour fixe 22.09.",
     "Wissensbasis",
     "SAP CATS Leitfaden",
+    crate::templates::TEMPLATES_TITLE,
+    "Besprechung",
+    "Kundentermin",
 ];
 
 /// Removes the sample project (with its time entries) and the sample pages.
@@ -203,10 +226,12 @@ mod tests {
         assert_eq!(db.list_time_entries(&Default::default()).unwrap().len(), 10);
         let arch = db.page_by_title("Architektur").unwrap().unwrap();
         assert_eq!(db.page_doc(arch.id).unwrap().backlinks.len(), 2);
+        let titles: Vec<_> = db.list_templates().unwrap().into_iter().map(|p| p.title).collect();
+        assert_eq!(titles, ["Besprechung", "Kundentermin"]);
 
         let mine = db.create_page(Some(arch.id), "Meine Notiz", None).unwrap();
         let n = remove(&db).unwrap();
-        assert_eq!(n, 3, "Willkommen, Jour fixe and the Wissensbasis subtree");
+        assert_eq!(n, 4, "Willkommen, Jour fixe, the Wissensbasis and the Vorlagen subtree");
         assert!(db.list_projects().unwrap().is_empty());
         assert!(db.list_time_entries(&Default::default()).unwrap().is_empty());
         assert!(db.page(mine.id).is_ok(), "user pages survive");

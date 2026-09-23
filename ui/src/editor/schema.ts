@@ -10,7 +10,7 @@ import Highlight from "@tiptap/extension-highlight";
 import { Placeholder } from "@tiptap/extensions";
 import { Markdown } from "@tiptap/markdown";
 import Link from "@tiptap/extension-link";
-import { Callouts, SlashCommand, TagHighlight, TimeEntryChip, WikiLink, WikiLinkSuggest, ZeitCommand, type LinkSuggestItem, type ZeitResult } from "./extensions";
+import { Callouts, ImageEmbed, MarkdownImage, SlashCommand, TagHighlight, TimeEntryChip, WikiLink, WikiLinkSuggest, ZeitCommand, type LinkSuggestItem, type ZeitResult } from "./extensions";
 import { FindInPage } from "./find";
 
 const lowlight = createLowlight(common);
@@ -91,6 +91,12 @@ export interface SchemaOptions {
   book?: (line: string) => Promise<ZeitResult | null>;
   /** Booked, but the `/zeit` line is gone from the document. */
   onZeitLost?: (res: ZeitResult) => void;
+  /** URL of an attachment name. */
+  attachmentUrl?: (name: string) => string;
+  /** Stores a pasted/dropped image, returns the attachment name. */
+  uploadImage?: (file: File) => Promise<string | null>;
+  onPickTemplate?: (editor: Editor) => void;
+  onPickImage?: (editor: Editor) => void;
 }
 
 export function buildExtensions(o: SchemaOptions = {}): Extensions {
@@ -114,7 +120,9 @@ export function buildExtensions(o: SchemaOptions = {}): Extensions {
     MarkdownFidelity,
     WikiLink.configure({ onOpen: o.onOpenLink ?? (() => {}), isKnown: o.isKnown ?? (() => true) }),
     WikiLinkSuggest.configure({ search: o.searchPages ?? (async () => []) }),
-    SlashCommand,
+    SlashCommand.configure({ onTemplate: o.onPickTemplate ?? null, onImage: o.onPickImage ?? null }),
+    ImageEmbed.configure({ resolve: o.attachmentUrl ?? ((n) => `attachments/${encodeURIComponent(n)}`), upload: o.uploadImage ?? null }),
+    MarkdownImage.configure({ resolve: o.attachmentUrl ?? ((n) => n) }),
     TimeEntryChip,
     ZeitCommand.configure({ book: o.book ?? (async () => null), onLost: o.onZeitLost ?? (() => {}) }),
     TagHighlight.configure({ onOpen: o.onOpenTag ?? (() => {}) }),

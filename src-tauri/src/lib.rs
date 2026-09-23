@@ -15,6 +15,7 @@ use aether_core::ai::metrics::SessionMeter;
 use aether_core::ai::rag::{self, ContextChunk};
 use aether_core::ai::router::{ModelRouter, RouteDecision, RouteInput, RouterConfig, Tier};
 use aether_core::ai::tools::{self, Risk, SystemCall};
+use aether_core::attachments::{self, SavedAttachment};
 use aether_core::backup::{self, BackupInfo};
 use aether_core::db::EntryFilter;
 use aether_core::export::{self, ExportFormat, ExportOptions, ExportResult};
@@ -24,10 +25,12 @@ use aether_core::notes::PageDoc;
 use aether_core::search::{self, SearchHit};
 use aether_core::settings::Settings;
 use aether_core::tasks::{Task, TaskFilter};
+use aether_core::templates::TemplateVars;
 use aether_core::tracking::{self, BudgetStatus, LogOutcome};
 use aether_core::trash::TrashEntry;
 use aether_core::vault::{self, ImportReport};
 use aether_core::{Database, Error, demo};
+use base64::Engine;
 use chrono::{DateTime, Local, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -90,6 +93,10 @@ impl AppState {
             None => self.data_dir.join("backups"),
         }
     }
+
+    fn attachments_dir(&self) -> PathBuf {
+        attachments::dir(&self.data_dir)
+    }
 }
 
 // ------------------------------------------------------------------- pages
@@ -120,19 +127,23 @@ fn page_create(
     content: Option<String>,
 ) -> Result<Page> {
     let db = state.db();
-    // Avoid duplicate titles so [[links]] stay unambiguous.
-    let mut name = title.trim().to_owned();
-    let base = name.clone();
+    let page = db.create_page(parent_id, &unique_title(&db, &title)?, icon.as_deref())?;
+    if let Some(c) = content {
+        db.save_page_content(page.id, &c)?;
+    }
+    Ok(page)
+}
+
+/// Avoid duplicate titles so [[links]] stay unambiguous.
+fn unique_title(db: &Database, title: &str) -> Result<String> {
+    let base = title.trim().to_owned();
+    let mut name = base.clone();
     let mut n = 2;
     while db.page_by_title(&name)?.is_some() {
         name = format!("{base} {n}");
         n += 1;
     }
-    let page = db.create_page(parent_id, &name, icon.as_deref())?;
-    if let Some(c) = content {
-        db.save_page_content(page.id, &c)?;
-    }
-    Ok(page)
+    Ok(name)
 }
 
 #[tauri::command]
@@ -242,12 +253,88 @@ fn vault_import(state: State<AppState>, path: String) -> Result<ImportReport> {
     if !dir.is_dir() {
         return Err(Error::State(format!("„{path}“ ist kein Ordner")));
     }
-    vault::import_vault(&state.db(), &dir)
+    vault::import_vault(&state.db(), &dir, &state.attachments_dir())
 }
 
 #[tauri::command]
 fn vault_export(state: State<AppState>, path: String) -> Result<usize> {
-    vault::export_vault(&state.db(), &PathBuf::from(path))
+    vault::export_vault(&state.db(), &PathBuf::from(path), &state.attachments_dir())
+}
+
+// ------------------------------------------------------------- templates
+
+fn template_vars(title: &str) -> TemplateVars {
+    let now = Local::now();
+    TemplateVars { date: now.date_naive(), time: now.time(), title: title.trim().to_owned() }
+}
+
+/// Pages below „Vorlagen“.
+#[tauri::command]
+fn templates_list(state: State<AppState>) -> Result<Vec<Page>> {
+    state.db().list_templates()
+}
+
+/// The „Vorlagen“ page, created on first use.
+#[tauri::command]
+fn templates_root(state: State<AppState>) -> Result<Page> {
+    state.db().templates_root()
+}
+
+/// Markdown of a template with its placeholders filled in.
+#[tauri::command]
+fn template_render(state: State<AppState>, id: i64, title: Option<String>) -> Result<String> {
+    state.db().render_template(id, &template_vars(title.as_deref().unwrap_or("")))
+}
+
+#[tauri::command]
+fn page_from_template(state: State<AppState>, template_id: i64, title: String, parent_id: Option<i64>) -> Result<Page> {
+    let db = state.db();
+    let name = unique_title(&db, &title)?;
+    let content = db.render_template(template_id, &template_vars(&name))?;
+    let icon = db.page(template_id)?.icon.unwrap_or_else(|| "file-text".into());
+    db.atomic(|| {
+        let page = db.create_page(parent_id, &name, Some(&icon))?;
+        db.save_page_content(page.id, &content)?;
+        Ok(page)
+    })
+}
+
+// ------------------------------------------------------------ attachments
+
+/// Stores an image (base64, optionally as a `data:` URL) and returns its `![[name]]` embed.
+#[tauri::command]
+fn attachment_save(
+    state: State<AppState>,
+    data: String,
+    name: String,
+    mime: Option<String>,
+) -> Result<SavedAttachment> {
+    let b64 = if data.starts_with("data:") { data.split_once(',').map_or("", |(_, d)| d) } else { &data };
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64.trim())
+        .map_err(|e| Error::Parse(format!("Ungültige Bilddaten: {e}")))?;
+    attachments::save(&state.attachments_dir(), &bytes, &name, mime.as_deref().unwrap_or(""))
+}
+
+/// Serves `aether-asset://localhost/<name>`: only plain file names inside the attachments folder.
+fn serve_attachment(app: &AppHandle, request: &tauri::http::Request<Vec<u8>>) -> tauri::http::Response<Vec<u8>> {
+    let respond = |status: u16, mime: &str, body: Vec<u8>| {
+        tauri::http::Response::builder()
+            .status(status)
+            .header("Content-Type", mime)
+            .header("X-Content-Type-Options", "nosniff")
+            // SVGs are images here, never documents that run scripts.
+            .header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'")
+            .body(body)
+            .unwrap_or_default()
+    };
+    let Some(state) = app.try_state::<AppState>() else { return respond(503, "text/plain", vec![]) };
+    let raw = request.uri().path().trim_start_matches('/');
+    let found = attachments::percent_decode(raw).and_then(|name| attachments::resolve(&state.attachments_dir(), &name));
+    match found.map(|p| (std::fs::read(&p), p)) {
+        Some((Ok(bytes), p)) => respond(200, attachments::mime_for(&p.to_string_lossy()), bytes),
+        _ => respond(404, "text/plain", b"not found".to_vec()),
+    }
 }
 
 // --------------------------------------------------------------------- WBS
@@ -597,7 +684,20 @@ fn export_entries(
 fn run_backup(state: &AppState) -> Result<BackupInfo> {
     let dir = state.backup_dir();
     let keep = state.settings().backup_keep;
-    backup::backup_to(&state.db(), &dir, keep)
+    let info = backup::backup_to(&state.db(), &dir, keep)?;
+    // Images live next to the database; names are content hashes, so copying new ones suffices.
+    let src = state.attachments_dir();
+    if src.is_dir() {
+        let dst = dir.join("attachments");
+        std::fs::create_dir_all(&dst)?;
+        for entry in std::fs::read_dir(&src)?.flatten() {
+            let to = dst.join(entry.file_name());
+            if entry.path().is_file() && !to.exists() {
+                std::fs::copy(entry.path(), &to)?;
+            }
+        }
+    }
+    Ok(info)
 }
 
 #[tauri::command]
@@ -1097,6 +1197,7 @@ pub fn run() {
                 })
                 .build(),
         )
+        .register_uri_scheme_protocol("aether-asset", |ctx, request| serve_attachment(ctx.app_handle(), &request))
         .setup(move |app| {
             // AETHER_DATA_DIR lets tests run against a throw-away workspace.
             let dir = match std::env::var_os("AETHER_DATA_DIR") {
@@ -1164,6 +1265,11 @@ pub fn run() {
             search_workspace,
             vault_import,
             vault_export,
+            templates_list,
+            templates_root,
+            template_render,
+            page_from_template,
+            attachment_save,
             wbs_tree,
             project_create,
             project_update,

@@ -44,6 +44,8 @@ pub struct Settings {
     pub backup_dir: Option<String>,
     /// Number of backups kept; older ones are deleted.
     pub backup_keep: usize,
+    /// Template page for new daily notes; `None` = built-in sections.
+    pub daily_template: Option<i64>,
 }
 
 impl Default for Settings {
@@ -64,6 +66,7 @@ impl Default for Settings {
             workdays: vec![1, 2, 3, 4, 5],
             backup_dir: None,
             backup_keep: 14,
+            daily_template: None,
         }
     }
 }

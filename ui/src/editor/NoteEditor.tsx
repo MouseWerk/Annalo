@@ -5,7 +5,8 @@ import { EditorContent, useEditor, useEditorState, type Editor } from "@tiptap/r
 import { BubbleMenu } from "@tiptap/react/menus";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Bold, Code, Highlighter, Italic, Link2, Strikethrough, SquareArrowOutUpRight } from "lucide-react";
-import { api } from "../lib/api";
+import { api, attachmentUrl, uploadAttachment } from "../lib/api";
+import { insertTemplate } from "../components/Templates";
 import { useApp } from "../store/app";
 import { hoursFromMinutes } from "../lib/format";
 import { pageSuggestItem, splitFrontmatter, type LinkSuggestItem } from "./extensions";
@@ -160,6 +161,33 @@ export function NoteEditor({
             return null;
           }
         },
+        attachmentUrl,
+        uploadImage: async (file) => {
+          try {
+            return (await uploadAttachment(file)).name;
+          } catch (e) {
+            useApp.getState().error("Bild nicht gespeichert", e);
+            return null;
+          }
+        },
+        onPickImage: (editor) => {
+          const input = document.createElement("input");
+          input.type = "file";
+          input.accept = "image/png,image/jpeg,image/gif,image/webp,image/svg+xml";
+          input.multiple = true;
+          input.onchange = async () => {
+            for (const file of input.files ?? []) {
+              try {
+                const saved = await uploadAttachment(file);
+                if (!editor.isDestroyed) editor.chain().focus().insertContent({ type: "imageEmbed", attrs: { name: saved.name } }).run();
+              } catch (e) {
+                useApp.getState().error("Bild nicht gespeichert", e);
+              }
+            }
+          };
+          input.click();
+        },
+        onPickTemplate: (editor) => insertTemplate(editor, useApp.getState().pages.get(doc.id)?.title ?? doc.title),
         onZeitLost: (res) =>
           useApp.getState().toast({ tone: "warning", title: "Gebucht, aber Zeile nicht mehr gefunden", detail: `${res.hours} h · ${res.target} – kein Chip eingefügt` }),
       }),
@@ -325,7 +353,7 @@ export function NoteEditor({
         </div>
       )}
       {editor && (
-        <BubbleMenu editor={editor} className="bubble" shouldShow={({ editor: e, state }) => !state.selection.empty && !e.isActive("codeBlock") && !e.isActive("wikiLink") && !e.isActive("timeEntry")}>
+        <BubbleMenu editor={editor} className="bubble" shouldShow={({ editor: e, state }) => !state.selection.empty && !e.isActive("codeBlock") && !e.isActive("wikiLink") && !e.isActive("timeEntry") && !e.isActive("imageEmbed") && !e.isActive("image")}>
           <IconButton icon={Bold} label="Fett (Ctrl B)" active={ui?.bold} onClick={() => editor.chain().focus().toggleBold().run()} tooltipSide="top" />
           <IconButton icon={Italic} label="Kursiv (Ctrl I)" active={ui?.italic} onClick={() => editor.chain().focus().toggleItalic().run()} tooltipSide="top" />
           <IconButton icon={Strikethrough} label="Durchgestrichen" active={ui?.strike} onClick={() => editor.chain().focus().toggleStrike().run()} tooltipSide="top" />

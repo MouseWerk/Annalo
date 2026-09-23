@@ -43,6 +43,12 @@ const CASES: Record<string, string> = {
   ampersand: "Schulung & Go-Live, a < b\n",
   literalStars: "Kein \\*Fett\\* hier\n",
   literalLinkish: "Text \\[\\[kein Link]]\n",
+  embed: "![[a1b2c3d4e5f60718.png]]\n",
+  embedInline: "Screenshot ![[Bild 1.PNG]] vom Fehler\n",
+  embedSize: "![[assets/diagramm.webp|300]] und ![[foto.jpg|Kunde vor Ort]]\n",
+  embedNote: "Kein Bild: ![[Notiz]]\n",
+  image: "![Logo](https://example.com/logo.png)\n",
+  imageRelative: "![Plan](attachments/plan.png \"Titel\")\n",
 };
 
 describe("markdown round-trip", () => {
@@ -60,6 +66,24 @@ describe("markdown round-trip", () => {
     const all = Object.values(CASES).join("\n");
     const once = roundtrip(all);
     expect(roundtrip(once)).toBe(once);
+  });
+});
+
+describe("image embeds", () => {
+  const html = (md: string) => {
+    const el = document.createElement("div");
+    const editor = new Editor({ element: el, extensions: buildExtensions({ attachmentUrl: (n) => `asset://${n}` }), content: md, contentType: "markdown" });
+    const out = editor.getHTML();
+    editor.destroy();
+    return out;
+  };
+  it("renders ![[x.png]] as an image of the attachment", () => {
+    expect(html("![[ordner/x.png|240]]\n")).toContain('src="asset://ordner/x.png"');
+    expect(html("![[x.png|240]]\n")).toMatch(/<img[^>]*width="240"/);
+  });
+  it("maps relative image paths to attachments, keeps web images", () => {
+    expect(html("![a](attachments/x.png)\n")).toContain('src="asset://attachments/x.png"');
+    expect(html("![a](https://example.com/x.png)\n")).toContain('src="https://example.com/x.png"');
   });
 });
 

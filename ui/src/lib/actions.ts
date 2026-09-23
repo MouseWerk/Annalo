@@ -33,7 +33,7 @@ export async function importVault(path?: string) {
     const r = await api.importVault(dir);
     await s.refreshTree();
     s.openPage(r.root_page_id);
-    s.toast({ tone: "success", title: "Vault importiert", detail: `${r.pages} Seiten, ${r.folders} Ordner${r.skipped ? `, ${r.skipped} Anhänge übersprungen` : ""}` });
+    s.toast({ tone: "success", title: "Vault importiert", detail: `${r.pages} Seiten, ${r.folders} Ordner${r.attachments ? `, ${r.attachments} Bilder` : ""}${r.skipped ? `, ${r.skipped} Dateien übersprungen` : ""}` });
   } catch (e) {
     s.error("Import fehlgeschlagen", e);
   }

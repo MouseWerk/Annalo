@@ -8,6 +8,8 @@
 //! * [`trash`] – page trash (restore, purge, 30-day expiry)
 //! * [`backup`] – database snapshots (`VACUUM INTO`) with rotation
 //! * [`vault`] – Obsidian vault import / Markdown export
+//! * [`attachments`] – pasted and imported images
+//! * [`templates`] – page templates with `{{datum}}`-style placeholders
 //! * [`settings`] – application settings
 //! * [`tasks`] – task items across all notes (due dates, priorities)
 //! * [`zeit`] – the `/zeit` slash-command parser
@@ -19,6 +21,7 @@
 
 pub mod activity;
 pub mod ai;
+pub mod attachments;
 pub mod backup;
 pub mod db;
 pub mod demo;
@@ -30,6 +33,7 @@ pub mod notes;
 pub mod search;
 pub mod settings;
 pub mod tasks;
+pub mod templates;
 pub mod tracking;
 pub mod trash;
 pub mod vault;

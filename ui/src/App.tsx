@@ -4,6 +4,7 @@ import { useApp, savePref } from "./store/app";
 import { applyTheme } from "./lib/actions";
 import { Sidebar, stopTimer } from "./components/Sidebar";
 import { ConfirmHost, StatusBar, Toasts } from "./components/Shell";
+import { TemplateHost } from "./components/Templates";
 import { Ribbon, openAssistant, openToday } from "./components/Ribbon";
 import { Workspace } from "./components/Workspace";
 import { Resizer, readSize } from "./components/Resizer";
@@ -216,6 +217,7 @@ export function App() {
       <CommandPalette />
       <Toasts />
       <ConfirmHost />
+      <TemplateHost />
     </div>
   );
 }

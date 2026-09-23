@@ -222,6 +222,9 @@
 .dialog-desc { color: var(--text-2); margin-top: 2px; }
 .dialog-body { padding: 16px 20px; overflow: auto; }
 .dialog-text { margin: 0; color: var(--text-2); line-height: 1.6; }
+.tpl-picker { display: grid; gap: 12px; }
+.tpl-list { display: grid; gap: 1px; max-height: 300px; overflow-y: auto; outline: none; }
+.tpl-loading { min-height: 120px; }
 .dialog-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 14px 20px; border-top: 1px solid var(--border); }
 @keyframes fade-in { from { opacity: 0; } }
 @keyframes pop-in { from { opacity: 0; transform: translateY(6px) scale(0.985); } }
