@@ -1126,6 +1126,25 @@ fn spawn_activity_sampler(app: AppHandle) {
     });
 }
 
+/// Whether to show the first-run choice: nothing in the workspace yet and not answered before.
+#[tauri::command]
+fn onboarding_needed(state: State<AppState>) -> Result<bool> {
+    let db = state.db();
+    Ok(db.meta_get("onboarded")?.is_none() && db.list_projects()?.is_empty() && db.page_tree()?.is_empty())
+}
+
+/// Finishes the first-run choice, optionally with the sample workspace.
+#[tauri::command]
+fn onboarding_finish(app: AppHandle, state: State<AppState>, samples: bool) -> Result<()> {
+    let db = state.db();
+    if samples {
+        demo::seed_explicit(&db, Utc::now())?;
+    }
+    db.meta_set("onboarded", "1")?;
+    let _ = app.emit("data://entries", ());
+    Ok(())
+}
+
 /// Removes the sample project and pages created on first start.
 #[tauri::command]
 fn demo_remove(app: AppHandle, state: State<AppState>) -> Result<usize> {
@@ -1213,7 +1232,7 @@ fn app_info(state: State<AppState>) -> AppInfo {
 
 #[derive(Deserialize, Default)]
 struct StartupOptions {
-    /// Seed the demo workspace on first start (default true).
+    /// Seed the demo workspace on first start (tests; users choose in the onboarding).
     demo: Option<bool>,
 }
 
@@ -1247,7 +1266,7 @@ pub fn run() {
             let opts: StartupOptions =
                 std::env::var("AETHER_STARTUP").ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
             let db = Database::open(dir.join("workspace.db"))?;
-            if opts.demo.unwrap_or(true) {
+            if opts.demo.unwrap_or(false) {
                 demo::seed(&db, Utc::now())?;
             }
             if let Err(e) = db.purge_expired_trash(Utc::now()) {
@@ -1352,6 +1371,8 @@ pub fn run() {
             ai_index_pending,
             app_info,
             demo_remove,
+            onboarding_needed,
+            onboarding_finish,
             window_backdrop,
             window_set_theme,
         ])

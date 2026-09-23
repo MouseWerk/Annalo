@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import {
-  AlertTriangle, CalendarDays, Check, ChevronLeft, ChevronRight, Clipboard, Download, MoreHorizontal, Pencil, Play, Plus, RotateCcw, Send, Square, Timer, Trash2, X,
+  AlertTriangle, CalendarDays, Check, Printer, ChevronLeft, ChevronRight, Clipboard, Download, MoreHorizontal, Pencil, Play, Plus, RotateCcw, Send, Square, Timer, Trash2, X,
 } from "lucide-react";
 import { api } from "../lib/api";
 import { useApp } from "../store/app";
@@ -86,6 +86,7 @@ export function TimesheetView() {
               </Button>
               <IconButton icon={ChevronRight} label="Nächste Woche" onClick={() => setWeek(addDays(week, 7))} />
             </div>
+            <IconButton icon={Printer} label="Woche drucken / als PDF" onClick={() => window.print()} />
             <Button icon={Download} onClick={() => setExporting(true)}>
               Export
             </Button>

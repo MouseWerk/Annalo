@@ -1,7 +1,7 @@
 // A note: title, icon, properties, editor and backlinks.
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, Columns2, CornerDownRight, FileText, Hash, Link2, MoreHorizontal, PencilLine, SmilePlus, Star, Trash2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Columns2, Printer, CornerDownRight, FileText, Hash, Link2, MoreHorizontal, PencilLine, SmilePlus, Star, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import { useApp, type Tab } from "../store/app";
 import { ViewHeader } from "../components/ViewHeader";
@@ -221,6 +221,7 @@ function PageHeader({
             { label: "Symbol ändern", icon: SmilePlus, onSelect: () => setIconOpen(true) },
             { label: "Rechts daneben öffnen", icon: Columns2, onSelect: () => s().splitTab(tab.id) },
             { label: "Link kopieren", icon: Link2, onSelect: () => navigator.clipboard.writeText(`[[${doc.title}]]`) },
+            { label: "Drucken / als PDF", icon: Printer, onSelect: () => printActivePane() },
             { label: "Unterseite anlegen", icon: CornerDownRight, onSelect: () => createSubpage(doc.id) },
             "separator",
             { label: "Seite löschen", icon: Trash2, danger: true, onSelect: () => deletePage(doc) },
@@ -345,6 +346,13 @@ function Backlinks({ doc }: { doc: PageDoc }) {
       ))}
     </section>
   );
+}
+
+/** Prints the focused pane only (the print stylesheet hides everything else); "Als PDF speichern" in the dialog. */
+export function printActivePane() {
+  flushAllEditors()
+    .catch(() => {})
+    .finally(() => setTimeout(() => window.print(), 50));
 }
 
 export async function createSubpage(parentId: number | null, title = "Unbenannt") {

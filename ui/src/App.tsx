@@ -30,7 +30,8 @@ export function App() {
       const [view] = await Promise.all([api.settings(), s.refreshTree(), s.refreshTimer(), api.meter().then((m) => s.set({ meter: m }))]);
       s.set({ settings: view });
       applyTheme(view.settings.theme);
-      if (view.settings.open_daily_on_start) {
+      if (await api.onboardingNeeded().catch(() => false)) s.set({ onboarding: true });
+      else if (view.settings.open_daily_on_start) {
         const p = await api.dailyNote();
         await s.refreshTree();
         s.openPage(p.id);

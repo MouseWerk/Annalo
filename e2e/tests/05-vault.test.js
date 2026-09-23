@@ -23,8 +23,8 @@ after(async () => {
   fs.rmSync(out, { recursive: true, force: true });
 });
 
-test("empty workspace shows the start screen", async () => {
-  await app.waitText(".home h1", /Guten/);
+test("empty workspace shows the welcome choice", async () => {
+  await app.waitText(".home h1", /Willkommen/);
   await app.shot("home-empty");
 });
 

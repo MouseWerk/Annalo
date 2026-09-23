@@ -81,6 +81,8 @@ interface State {
   editorStats: { words: number; chars: number } | null;
   toasts: Toast[];
   focusMode: boolean;
+  /** First start: show the welcome choice instead of the start page. */
+  onboarding: boolean;
   /** Question from the palette, consumed by the assistant panel once it is mounted. */
   pendingAsk: string | null;
 
@@ -236,6 +238,7 @@ export const useApp = create<State>((set, get) => ({
   editorStats: null,
   toasts: [],
   focusMode: false,
+  onboarding: false,
   pendingAsk: null,
 
   openTab: (loc, opts) => {

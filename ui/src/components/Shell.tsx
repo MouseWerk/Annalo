@@ -11,6 +11,7 @@ import { Button, Dialog, IconButton } from "./ui";
 import { clock, h1, relative, usd } from "../lib/format";
 import { useTimerSeconds, stopTimer } from "./Sidebar";
 import { createSubpage } from "../views/PageView";
+import { Onboarding } from "./Onboarding";
 import type { Page } from "../lib/types";
 
 export function tabTitle(t: Tab, pages: Map<number, { title: string }>) {
@@ -115,6 +116,13 @@ export function StatusBar() {
 }
 
 export function Home() {
+  const onboarding = useApp((st) => st.onboarding);
+  const empty = useApp((st) => st.tree.length === 0);
+  // Something imported or created meanwhile (e.g. via Settings): the choice is moot.
+  return onboarding && empty ? <Onboarding /> : <StartPage />;
+}
+
+function StartPage() {
   const [recent, setRecent] = useState<Page[]>([]);
   const s = useApp.getState;
   useEffect(() => {
