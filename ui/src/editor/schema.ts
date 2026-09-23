@@ -9,6 +9,7 @@ import { TableKit } from "@tiptap/extension-table";
 import Highlight from "@tiptap/extension-highlight";
 import { Placeholder } from "@tiptap/extensions";
 import { Markdown } from "@tiptap/markdown";
+import Link from "@tiptap/extension-link";
 import { Callouts, SlashCommand, TagHighlight, TimeEntryChip, WikiLink, WikiLinkSuggest, ZeitCommand, type LinkSuggestItem, type ZeitResult } from "./extensions";
 import { FindInPage } from "./find";
 
@@ -53,12 +54,43 @@ const MarkdownFidelity = Extension.create({
   },
 });
 
+/** Unescapes what `escapeText` added, to compare link text with its href. */
+const unescapeText = (t: string) => t.replace(/\\([\\`*_[\]~=#<>!|(])/g, "$1").replace(/&lt;/g, "<").replace(/&amp;/g, "&");
+
+// Marks are serialized as opening/closing strings without seeing their text,
+// so links are bracketed with sentinels and resolved in `cleanMarkdown`.
+const LINK_OPEN = "\uE000";
+const LINK_CLOSE = "\uE001";
+
+/** Bare URLs and e-mail addresses stay bare instead of becoming `[x](x)`. */
+export function linkMarkdown(text: string, href: string, title?: string | null): string {
+  if (!title) {
+    const plain = unescapeText(text);
+    if (plain === href) return href;
+    if (href === `mailto:${plain}`) return plain;
+    if (plain.startsWith("www.") && href === `http://${plain}`) return plain;
+  }
+  return title ? `[${text}](${href} "${title}")` : `[${text}](${href})`;
+}
+
+const MarkdownLink = Link.extend({
+  renderMarkdown: (node, h) => {
+    const href: string = node.attrs?.href ?? "";
+    const title: string = node.attrs?.title ?? "";
+    return `${LINK_OPEN}[${h.renderChildren(node)}](${href}${title ? ` "${title}"` : ""})${LINK_CLOSE}`;
+  },
+});
+
+const LINK_RE = new RegExp(`${LINK_OPEN}\\[([^${LINK_OPEN}${LINK_CLOSE}]*)\\]\\(([^\\s)]*)(?: "([^"]*)")?\\)${LINK_CLOSE}`, "g");
+
 export interface SchemaOptions {
   onOpenLink?: (target: string, newTab: boolean) => void;
   onOpenTag?: (tag: string) => void;
   isKnown?: (target: string) => boolean;
   searchPages?: (q: string) => Promise<LinkSuggestItem[]>;
   book?: (line: string) => Promise<ZeitResult | null>;
+  /** Booked, but the `/zeit` line is gone from the document. */
+  onZeitLost?: (res: ZeitResult) => void;
 }
 
 export function buildExtensions(o: SchemaOptions = {}): Extensions {
@@ -66,8 +98,9 @@ export function buildExtensions(o: SchemaOptions = {}): Extensions {
     StarterKit.configure({
       heading: { levels: [1, 2, 3, 4, 5, 6] },
       codeBlock: false,
-      link: { openOnClick: false, autolink: true, linkOnPaste: true, HTMLAttributes: { rel: "noopener noreferrer", target: null } },
+      link: false,
     }),
+    MarkdownLink.configure({ openOnClick: false, autolink: true, linkOnPaste: true, HTMLAttributes: { rel: "noopener noreferrer", target: null } }),
     CodeBlockLowlight.configure({ lowlight, defaultLanguage: null }),
     TaskList,
     TaskItem.configure({ nested: true }),
@@ -83,7 +116,7 @@ export function buildExtensions(o: SchemaOptions = {}): Extensions {
     WikiLinkSuggest.configure({ search: o.searchPages ?? (async () => []) }),
     SlashCommand,
     TimeEntryChip,
-    ZeitCommand.configure({ book: o.book ?? (async () => null) }),
+    ZeitCommand.configure({ book: o.book ?? (async () => null), onLost: o.onZeitLost ?? (() => {}) }),
     TagHighlight.configure({ onOpen: o.onOpenTag ?? (() => {}) }),
     FindInPage,
     Callouts,
@@ -102,6 +135,8 @@ export function toMarkdown(editor: Editor): string {
 export function cleanMarkdown(md: string): string {
   return (
     md
+      .replace(LINK_RE, (_m, text: string, href: string, title?: string) => linkMarkdown(text, href, title))
+      .replace(new RegExp(`[${LINK_OPEN}${LINK_CLOSE}]`, "g"), "")
       .replace(/^((?:>\s?)+)\\\[!(\w+)\\\]/gm, "$1[!$2]")
       .replace(/\n{3,}/g, "\n\n")
       .replace(/^\n+/, "")

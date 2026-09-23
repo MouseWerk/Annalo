@@ -117,8 +117,7 @@ export function CommandPalette() {
         hint: "Enter",
         run: () => {
           if (!question) return;
-          s().set({ panelOpen: true, panelTab: "assistant" });
-          window.dispatchEvent(new CustomEvent("aether:ask", { detail: question }));
+          s().set({ panelOpen: true, panelTab: "assistant", pendingAsk: question });
         },
       });
       return out;

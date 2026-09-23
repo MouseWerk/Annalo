@@ -318,6 +318,66 @@ function PageTree({
     }
   };
 
+  const menuItems = (n: PageNode) => [
+    { label: "In neuem Tab öffnen", icon: CornerDownRight, shortcut: "Ctrl Klick", onSelect: () => s().openPage(n.id, { newTab: true }) },
+    { label: "Rechts daneben öffnen", icon: Columns2, shortcut: "Alt Klick", onSelect: () => s().openPage(n.id, { split: true }) },
+    { label: "Unterseite anlegen", icon: FilePlus2, onSelect: () => createSubpage(n.id) },
+    {
+      label: n.favorite ? "Aus Favoriten entfernen" : "Zu Favoriten",
+      icon: n.favorite ? StarOff : Star,
+      onSelect: async () => {
+        try {
+          await api.setFavorite(n.id, !n.favorite);
+          s().refreshTree();
+        } catch (e) {
+          s().error("Lesezeichen konnte nicht gesetzt werden", e);
+        }
+      },
+    },
+    {
+      label: "Umbenennen",
+      icon: PencilLine,
+      onSelect: () => {
+        s().openPage(n.id);
+        setTimeout(() => document.querySelector<HTMLTextAreaElement>(".pane.active .page-title")?.select(), 150);
+      },
+    },
+    "separator" as const,
+    { label: "Löschen", icon: Trash2, danger: true, onSelect: () => deletePage(n) },
+  ];
+
+  // Keyboard: arrows move between visible rows, Left/Right collapse/expand, Enter opens.
+  const treeRef = useRef<HTMLDivElement>(null);
+  const focusRow = (id: number | null | undefined) => id != null && treeRef.current?.querySelector<HTMLElement>(`.tree-row[data-id="${id}"]`)?.focus();
+  const onRowKey = (e: React.KeyboardEvent<HTMLDivElement>, n: PageNode) => {
+    if (menu || e.target !== e.currentTarget) return;
+    const rows = [...(treeRef.current?.querySelectorAll<HTMLElement>(".tree-row[data-id]") ?? [])];
+    const i = rows.indexOf(e.currentTarget);
+    const open = n.children.length > 0 && !collapsed.has(n.id);
+    const key = e.key;
+    if ((e.shiftKey && key === "F10") || key === "ContextMenu") {
+      const r = e.currentTarget.getBoundingClientRect();
+      openMenu({ clientX: r.left + 24, clientY: r.bottom, preventDefault: () => e.preventDefault() }, menuItems(n));
+      return;
+    }
+    const handled = () => e.preventDefault();
+    if (key === "Enter" || key === " ") (handled(), s().openPage(n.id, { newTab: e.ctrlKey || e.metaKey, split: e.altKey }));
+    else if (key === "ArrowDown") (handled(), rows[i + 1]?.focus());
+    else if (key === "ArrowUp") (handled(), rows[i - 1]?.focus());
+    else if (key === "Home") (handled(), rows[0]?.focus());
+    else if (key === "End") (handled(), rows[rows.length - 1]?.focus());
+    else if (key === "ArrowRight") {
+      handled();
+      if (n.children.length && !open) toggle(n.id);
+      else if (open) focusRow(n.children[0].id);
+    } else if (key === "ArrowLeft") {
+      handled();
+      if (open) toggle(n.id);
+      else focusRow(n.parent_id);
+    }
+  };
+  const focusable = activePageId != null && s().pages.has(activePageId) ? activePageId : nodes[0]?.id;
+
   const row = (n: PageNode, depth: number): React.ReactNode => {
     const open = !collapsed.has(n.id);
     const over = drag?.over === n.id ? drag.pos : undefined;
@@ -326,6 +386,9 @@ function PageTree({
         <div
           className={`tree-row ${activePageId === n.id ? "active" : ""} ${over ? `drop-${over}` : ""}`}
           style={{ paddingLeft: 6 + depth * 14 }}
+          data-id={n.id}
+          tabIndex={focusable === n.id ? 0 : -1}
+          aria-current={activePageId === n.id ? "page" : undefined}
           draggable
           onDragStart={(e: DragEvent) => {
             e.dataTransfer.effectAllowed = "move";
@@ -348,31 +411,8 @@ function PageTree({
           }}
           onClick={(e) => s().openPage(n.id, { newTab: e.ctrlKey || e.metaKey, split: e.altKey })}
           onAuxClick={(e) => e.button === 1 && s().openPage(n.id, { newTab: true })}
-          onContextMenu={(e) =>
-            openMenu(e, [
-              { label: "In neuem Tab öffnen", icon: CornerDownRight, shortcut: "Ctrl Klick", onSelect: () => s().openPage(n.id, { newTab: true }) },
-              { label: "Rechts daneben öffnen", icon: Columns2, shortcut: "Alt Klick", onSelect: () => s().openPage(n.id, { split: true }) },
-              { label: "Unterseite anlegen", icon: FilePlus2, onSelect: () => createSubpage(n.id) },
-              {
-                label: n.favorite ? "Aus Favoriten entfernen" : "Zu Favoriten",
-                icon: n.favorite ? StarOff : Star,
-                onSelect: async () => {
-                  await api.setFavorite(n.id, !n.favorite);
-                  s().refreshTree();
-                },
-              },
-              {
-                label: "Umbenennen",
-                icon: PencilLine,
-                onSelect: () => {
-                  s().openPage(n.id);
-                  setTimeout(() => document.querySelector<HTMLTextAreaElement>(".pane.active .page-title")?.select(), 150);
-                },
-              },
-              "separator",
-              { label: "Löschen", icon: Trash2, danger: true, onSelect: () => deletePage(n) },
-            ])
-          }
+          onContextMenu={(e) => openMenu(e, menuItems(n))}
+          onKeyDown={(e) => onRowKey(e, n)}
         >
           <span
             className={`tree-twisty ${n.children.length ? "" : "leaf"}`}
@@ -405,7 +445,7 @@ function PageTree({
   };
 
   return (
-    <div className="tree" role="tree" aria-label="Seiten">
+    <div className="tree" role="tree" aria-label="Seiten" ref={treeRef}>
       {nodes.map((n) => row(n, 0))}
       {menu}
     </div>
@@ -449,11 +489,14 @@ export async function stopTimer() {
   try {
     let subtract = false;
     if (t.idle_minutes > 0) {
-      subtract = await s.confirm({
+      const choice = await s.choose({
         title: "Leerlauf erkannt",
         message: `Du warst ${t.idle_minutes} Minuten inaktiv. Soll diese Zeit von der Buchung abgezogen werden?`,
-        confirmLabel: "Abziehen",
+        confirmLabel: "Leerlauf abziehen",
+        altLabel: "Voll buchen",
       });
+      if (choice === "cancel") return; // timer keeps running
+      subtract = choice === "confirm";
     }
     const out = await api.timerStop(subtract);
     if (out.discarded) s.toast({ tone: "info", title: "Nicht gebucht", detail: "Der Timer lief weniger als eine Minute." });

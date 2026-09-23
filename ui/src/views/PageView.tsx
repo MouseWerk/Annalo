@@ -5,7 +5,7 @@ import { ChevronLeft, ChevronRight, Columns2, CornerDownRight, FileText, Hash, L
 import { api } from "../lib/api";
 import { useApp, type Tab } from "../store/app";
 import { ViewHeader } from "../components/ViewHeader";
-import { NoteEditor, type NoteEditorHandle } from "../editor/NoteEditor";
+import { NoteEditor, flushAllEditors, reloadEditors, type NoteEditorHandle } from "../editor/NoteEditor";
 import { splitFrontmatter } from "../editor/extensions";
 import { PAGE_ICONS, PageIcon } from "../components/icons";
 import { Button, EmptyState, IconButton, Spinner, useMenu } from "../components/ui";
@@ -45,15 +45,21 @@ export function PageView({ pageId, tab, active }: { pageId: number; tab: Tab; ac
     if (active && doc) useApp.getState().set({ activeDoc: doc });
   }, [active, doc]);
 
-  // Another pane changed this page: refresh tags and backlinks.
+  // Another pane changed this page (or a rename rewrote links): refresh tags and backlinks.
   useEffect(() => {
-    const onSaved = (e: Event) => {
-      const d = (e as CustomEvent<{ id: number }>).detail;
-      if (d.id !== pageId) return;
+    const refresh = () =>
       api.page(pageId).then((fresh) => setDoc((cur) => (cur ? { ...cur, tags: fresh.tags, backlinks: fresh.backlinks, unresolved_links: fresh.unresolved_links, content: fresh.content, updated_at: fresh.updated_at } : cur))).catch(() => {});
+    const onSaved = (e: Event) => (e as CustomEvent<{ id: number }>).detail.id === pageId && refresh();
+    const onReload = (e: Event) => {
+      const ids = (e as CustomEvent<{ ids?: number[] }>).detail?.ids;
+      if (!ids || ids.includes(pageId)) refresh();
     };
     window.addEventListener("aether:page-saved", onSaved);
-    return () => window.removeEventListener("aether:page-saved", onSaved);
+    window.addEventListener("aether:reload-pages", onReload);
+    return () => {
+      window.removeEventListener("aether:page-saved", onSaved);
+      window.removeEventListener("aether:reload-pages", onReload);
+    };
   }, [pageId]);
 
   const openLink = useCallback(async (target: string, newTab: boolean) => {
@@ -97,7 +103,7 @@ export function PageView({ pageId, tab, active }: { pageId: number; tab: Tab; ac
 
   return (
     <div className="page-view" ref={root}>
-      <PageHeader tab={tab} root={root} doc={doc} crumbs={crumbs} onChange={(d) => setDoc({ ...doc, ...d })} flush={() => handle.current?.flush() ?? Promise.resolve()}>
+      <PageHeader tab={tab} root={root} doc={doc} crumbs={crumbs} onChange={(d) => setDoc({ ...doc, ...d })}>
         <Properties doc={doc} />
         <NoteEditor
           key={doc.id}
@@ -105,7 +111,7 @@ export function PageView({ pageId, tab, active }: { pageId: number; tab: Tab; ac
           doc={doc}
           onSaved={(d) => {
             setDoc((cur) => (cur ? { ...cur, tags: d.tags, backlinks: d.backlinks, unresolved_links: d.unresolved_links, updated_at: d.updated_at } : d));
-            useApp.getState().set({ activeDoc: d });
+            if (activeRef.current) useApp.getState().set({ activeDoc: d });
           }}
           onOpenLink={openLink}
           onOpenTag={openTag}
@@ -123,7 +129,6 @@ function PageHeader({
   doc,
   crumbs,
   onChange,
-  flush,
   children,
 }: {
   tab: Tab;
@@ -131,7 +136,6 @@ function PageHeader({
   doc: PageDoc;
   crumbs: { id: number; title: string }[];
   onChange: (d: Partial<PageDoc>) => void;
-  flush: () => Promise<void>;
   children: React.ReactNode;
 }) {
   const [title, setTitle] = useState(doc.title);
@@ -144,9 +148,11 @@ function PageHeader({
     const t = title.trim();
     if (!t || t === doc.title) return setTitle(doc.title);
     try {
-      await flush();
+      // All editors: a pending autosave elsewhere would write the old [[links]] back.
+      await flushAllEditors();
       const n = await api.renamePage(doc.id, t, true);
       onChange({ title: t });
+      reloadEditors();
       await s().refreshTree();
       if (n > 0) s().toast({ tone: "info", title: "Umbenannt", detail: `Links in ${n} ${n === 1 ? "Seite" : "Seiten"} aktualisiert` });
     } catch (e) {
@@ -194,9 +200,13 @@ function PageHeader({
         size={26}
         iconSize={15}
         onClick={async () => {
-          await api.setFavorite(doc.id, !doc.favorite);
-          onChange({ favorite: !doc.favorite });
-          s().refreshTree();
+          try {
+            await api.setFavorite(doc.id, !doc.favorite);
+            onChange({ favorite: !doc.favorite });
+            s().refreshTree();
+          } catch (e) {
+            s().error("Lesezeichen konnte nicht gesetzt werden", e);
+          }
         }}
       />
       <IconButton
@@ -268,10 +278,14 @@ function PageHeader({
                     aria-label={name}
                     className={doc.icon === name ? "on" : ""}
                     onClick={async () => {
-                      await api.setIcon(doc.id, name);
-                      onChange({ icon: name });
-                      setIconOpen(false);
-                      s().refreshTree();
+                      try {
+                        await api.setIcon(doc.id, name);
+                        onChange({ icon: name });
+                        setIconOpen(false);
+                        s().refreshTree();
+                      } catch (e) {
+                        s().error("Symbol konnte nicht geändert werden", e);
+                      }
                     }}
                   >
                     <Icon size={18} strokeWidth={1.75} />
@@ -351,9 +365,13 @@ export async function deletePage(page: { id: number; title: string }) {
     ? `„${page.title}“ und ${kids} ${kids === 1 ? "Unterseite" : "Unterseiten"} werden gelöscht. Das kann nicht rückgängig gemacht werden.`
     : `„${page.title}“ wird gelöscht. Das kann nicht rückgängig gemacht werden.`;
   if (!(await s.confirm({ title: "Seite löschen?", message, confirmLabel: "Löschen", danger: true }))) return;
-  await api.deletePage(page.id);
-  await s.refreshTree();
-  s.toast({ tone: "info", title: "Seite gelöscht", detail: page.title });
+  try {
+    await api.deletePage(page.id);
+    await s.refreshTree();
+    s.toast({ tone: "info", title: "Seite gelöscht", detail: page.title });
+  } catch (e) {
+    s.error("Seite konnte nicht gelöscht werden", e);
+  }
 }
 
 export function NewPageButton() {

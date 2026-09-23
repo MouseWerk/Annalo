@@ -145,7 +145,36 @@ test("Ctrl+Shift+F searches all notes in the sidebar", async () => {
   await app.click('.side-tabs [aria-label="Dateien"]');
 });
 
+test("renaming a page updates links shown in another pane", async () => {
+  // Architektur links to nothing; PRJ-2026-X Rollout links to [[Architektur]].
+  await openFromTree("PRJ-2026-X Rollout");
+  await app.waitText(".pane.active .vh-title-text", /PRJ-2026-X Rollout/);
+  await openFromTree("Architektur", { alt: true });
+  await app.browser.waitUntil(async () => (await app.$$(".pane")).length === 2);
+  await app.waitFor(".pane.active .page-title");
+  await app.browser.execute(() => {
+    const t = document.querySelector(".pane.active .page-title");
+    t.focus();
+    const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set;
+    set.call(t, "Architektur neu");
+    t.dispatchEvent(new Event("input", { bubbles: true }));
+    t.blur();
+  });
+  await app.browser.waitUntil(
+    async () => app.browser.execute(() => document.querySelectorAll(".pane")[0].querySelector(".ProseMirror")?.textContent.includes("Architektur neu")),
+    { timeout: 6000, timeoutMsg: "left pane kept the old link" },
+  );
+  // Nothing writes the old title back.
+  await app.browser.pause(1200);
+  const id = (await app.invoke("page_resolve", { title: "PRJ-2026-X Rollout", create: false })).id;
+  const doc = await app.invoke("page_get", { id });
+  assert.match(doc.content, /\[\[Architektur neu\]\]/);
+  assert.doesNotMatch(doc.content, /\[\[Architektur\]\]/);
+  for (const t of await app.$$(".pane:nth-of-type(2) .tab")) await app.browser.execute((e) => e.querySelector(".tab-close")?.click(), t);
+  await app.browser.waitUntil(async () => (await app.$$(".pane")).length === 1);
+});
+
 test("status bar shows word count of the active note", async () => {
-  await openFromTree("Architektur");
+  await openFromTree("Architektur neu");
   await app.waitText(".statusbar", /Wörter/);
 });

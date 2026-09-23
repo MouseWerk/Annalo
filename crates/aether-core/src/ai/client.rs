@@ -171,6 +171,10 @@ impl LiteLlmClient {
 
         let mut decoder = SseDecoder::default();
         let mut stream = resp.bytes_stream();
+        // One waiter for the whole stream: recreating it per chunk would restart its
+        // timer every time and never fire while chunks keep arriving.
+        let cancel_wait = wait_cancel();
+        tokio::pin!(cancel_wait);
         'outer: loop {
             let chunk = tokio::select! {
                 c = tokio::time::timeout(STREAM_IDLE_TIMEOUT, stream.next()) => match c {
@@ -178,7 +182,7 @@ impl LiteLlmClient {
                     Ok(None) => break,
                     Err(_) => return Err(Error::Provider { status: 0, body: "Keine Antwort vom Modell (Zeitüberschreitung)".into() }),
                 },
-                _ = wait_cancel() => {
+                _ = &mut cancel_wait => {
                     acc.finish_reason = Some("cancelled".into());
                     break;
                 }

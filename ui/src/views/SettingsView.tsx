@@ -36,6 +36,8 @@ export function SettingsView() {
 
   const update = (patch: Partial<Settings>) => setDraft({ ...draft, ...patch });
   const save = async (next = draft) => {
+    if (next.thresholds.warning >= next.thresholds.critical)
+      return s().toast({ tone: "warning", title: "Nicht gespeichert", detail: "Die Warnschwelle muss unter der kritischen Schwelle liegen." });
     setSaving(true);
     try {
       const saved = await api.saveSettings(next);
@@ -280,6 +282,38 @@ function ModelInput({ value, models, onChange, label, allowEmpty }: { value: str
 
 // ------------------------------------------------------------------ time
 
+/** Number field that keeps what is typed and only validates and clamps on blur/Enter. */
+function NumberInput({ value, min, max, onCommit, ...rest }: { value: number; min: number; max: number; onCommit: (v: number) => void } & Omit<React.InputHTMLAttributes<HTMLInputElement>, "value" | "min" | "max" | "onChange">) {
+  const [raw, setRaw] = useState(String(value));
+  const [editing, setEditing] = useState(false);
+  useEffect(() => {
+    if (!editing) setRaw(String(value));
+  }, [value, editing]);
+  const parsed = raw.trim() === "" ? NaN : Number(raw.replace(",", "."));
+  const commit = () => {
+    const v = Number.isFinite(parsed) ? Math.round(Math.min(max, Math.max(min, parsed))) : value;
+    setRaw(String(v));
+    if (v !== value) onCommit(v);
+  };
+  return (
+    <Input
+      {...rest}
+      type="number"
+      min={min}
+      max={max}
+      value={raw}
+      aria-invalid={!Number.isFinite(parsed) || parsed < min || parsed > max}
+      onFocus={() => setEditing(true)}
+      onChange={(e) => setRaw(e.target.value)}
+      onBlur={() => {
+        setEditing(false);
+        commit();
+      }}
+      onKeyDown={(e) => e.key === "Enter" && commit()}
+    />
+  );
+}
+
 function TimeSection({ draft, update }: { draft: Settings; update: (p: Partial<Settings>) => void }) {
   const [las, setLas] = useState<[string, string][]>([]);
   const [newLa, setNewLa] = useState({ code: "", desc: "" });
@@ -301,7 +335,7 @@ function TimeSection({ draft, update }: { draft: Settings; update: (p: Partial<S
       <Group title="Timer">
         <Row label="Leerlauf ab" description="Pausen ohne Tastatur- oder Mauseingabe, die länger dauern, werden beim Stoppen zum Abziehen angeboten.">
           <div className="unit-input">
-            <Input type="number" min={1} max={120} value={draft.idle_threshold_minutes} onChange={(e) => update({ idle_threshold_minutes: Math.max(1, +e.target.value || 5) })} aria-label="Minuten" />
+            <NumberInput min={1} max={120} value={draft.idle_threshold_minutes} onCommit={(v) => update({ idle_threshold_minutes: v })} aria-label="Minuten" />
             <span className="faint">Minuten</span>
           </div>
         </Row>
@@ -309,16 +343,19 @@ function TimeSection({ draft, update }: { draft: Settings; update: (p: Partial<S
       <Group title="Budgetwarnungen" description="Gilt für Netzpläne und Vorgänge.">
         <Row label="Warnung ab">
           <div className="unit-input">
-            <Input type="number" min={1} max={100} value={pct(draft.thresholds.warning)} onChange={(e) => update({ thresholds: { ...draft.thresholds, warning: (+e.target.value || 75) / 100 } })} aria-label="Warnung in Prozent" />
+            <NumberInput min={1} max={100} value={pct(draft.thresholds.warning)} onCommit={(v) => update({ thresholds: { ...draft.thresholds, warning: v / 100 } })} aria-label="Warnung in Prozent" />
             <span className="faint">% verbraucht</span>
           </div>
         </Row>
         <Row label="Kritisch ab" description="Oder wenn die Prognose (gebucht + Restaufwand) den Plan übersteigt.">
           <div className="unit-input">
-            <Input type="number" min={1} max={100} value={pct(draft.thresholds.critical)} onChange={(e) => update({ thresholds: { ...draft.thresholds, critical: (+e.target.value || 90) / 100 } })} aria-label="Kritisch in Prozent" />
+            <NumberInput min={1} max={100} value={pct(draft.thresholds.critical)} onCommit={(v) => update({ thresholds: { ...draft.thresholds, critical: v / 100 } })} aria-label="Kritisch in Prozent" />
             <span className="faint">% verbraucht</span>
           </div>
         </Row>
+        {pct(draft.thresholds.warning) >= pct(draft.thresholds.critical) && (
+          <p className="error-note small" role="alert">Die Warnschwelle muss unter der kritischen Schwelle liegen.</p>
+        )}
       </Group>
       <Group title="SAP CATS">
         <Row label="Personalnummer (PERNR)">

@@ -3,7 +3,7 @@
 import { Fragment, useRef, useState, type DragEvent } from "react";
 import { Columns2, PanelRight, Plus, X } from "lucide-react";
 import { useApp, savePref, type Pane, type Tab } from "../store/app";
-import { IconButton, useMenu } from "./ui";
+import { IconButton, useMenu, type MenuEntry } from "./ui";
 import { Home, TabIcon, tabTitle } from "./Shell";
 import { Resizer } from "./Resizer";
 import { ViewHeader } from "./ViewHeader";
@@ -131,6 +131,13 @@ function PaneTabs({ pane, last }: { pane: Pane; last: boolean }) {
     s().moveTab(id, pane.id, index);
   };
 
+  const tabMenu = (t: Tab): MenuEntry[] => [
+    { label: "Rechts daneben öffnen", icon: Columns2, disabled: paneCount >= 3 && last, onSelect: () => s().splitTab(t.id) },
+    "separator",
+    { label: "Schließen", icon: X, onSelect: () => s().closeTab(t.id) },
+    { label: "Andere Tabs schließen", onSelect: () => s().closeOthers(t.id), disabled: pane.tabs.length < 2 },
+  ];
+
   return (
     <div
       className="tabbar"
@@ -161,14 +168,23 @@ function PaneTabs({ pane, last }: { pane: Pane; last: boolean }) {
               onDrop={(e) => onDrop(e, i)}
               onMouseDown={(e) => e.button === 0 && s().activateTab(t.id)}
               onAuxClick={(e) => e.button === 1 && s().closeTab(t.id)}
-              onContextMenu={(e) =>
-                openMenu(e, [
-                  { label: "Rechts daneben öffnen", icon: Columns2, disabled: paneCount >= 3 && last, onSelect: () => s().splitTab(t.id) },
-                  "separator",
-                  { label: "Schließen", icon: X, onSelect: () => s().closeTab(t.id) },
-                  { label: "Andere Tabs schließen", onSelect: () => s().closeOthers(t.id), disabled: pane.tabs.length < 2 },
-                ])
-              }
+              onContextMenu={(e) => openMenu(e, tabMenu(t))}
+              tabIndex={selected ? 0 : -1}
+              onKeyDown={(e) => {
+                if (menu || e.target !== e.currentTarget) return;
+                const sibling = (d: number) => {
+                  const all = [...(e.currentTarget.parentElement?.querySelectorAll<HTMLElement>(".tab") ?? [])];
+                  all[(all.indexOf(e.currentTarget) + d + all.length) % all.length]?.focus();
+                };
+                if (e.key === "Enter" || e.key === " ") (e.preventDefault(), s().activateTab(t.id));
+                else if (e.key === "ArrowRight") (e.preventDefault(), sibling(1));
+                else if (e.key === "ArrowLeft") (e.preventDefault(), sibling(-1));
+                else if (e.key === "Delete") (e.preventDefault(), s().closeTab(t.id));
+                else if ((e.shiftKey && e.key === "F10") || e.key === "ContextMenu") {
+                  const r = e.currentTarget.getBoundingClientRect();
+                  openMenu({ clientX: r.left + 12, clientY: r.bottom, preventDefault: () => e.preventDefault() }, tabMenu(t));
+                }
+              }}
               title={title}
             >
               <span className="tab-icon">

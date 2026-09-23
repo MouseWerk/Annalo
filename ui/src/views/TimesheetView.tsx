@@ -217,8 +217,12 @@ function TimerCard({ wbs, las }: { wbs: ProjectTree[]; las: [string, string][] }
             variant="ghost"
             onClick={async () => {
               if (!(await s().confirm({ title: "Timer verwerfen?", message: "Die laufende Zeit wird nicht gebucht.", confirmLabel: "Verwerfen", danger: true }))) return;
-              await api.timerDiscard();
-              s().bumpEntries();
+              try {
+                await api.timerDiscard();
+                s().bumpEntries();
+              } catch (e) {
+                s().error("Timer konnte nicht verworfen werden", e);
+              }
             }}
           >
             Verwerfen
@@ -341,6 +345,14 @@ function EntryList({ rows, selected, setSelected, onEdit, week }: { rows: TimeEn
     return [...g.entries()];
   }, [rows]);
   void week;
+  const setStatus = async (id: number, status: StatusFlag) => {
+    try {
+      await api.setStatus([id], status);
+      s().bumpEntries();
+    } catch (e) {
+      s().error("Status konnte nicht geändert werden", e);
+    }
+  };
   const toggle = (id: number) => {
     const next = new Set(selected);
     next.has(id) ? next.delete(id) : next.add(id);
@@ -350,7 +362,7 @@ function EntryList({ rows, selected, setSelected, onEdit, week }: { rows: TimeEn
     <div className="entry-list">
       {groups.map(([day, list]) => {
         const sum = list.reduce((a, r) => a + (r.duration_minutes ?? 0), 0);
-        const selectable = list.filter((r) => r.status_flag !== "running");
+        const selectable = list.filter((r) => r.status_flag !== "running" && r.status_flag !== "exported");
         const allSel = selectable.length > 0 && selectable.every((r) => selected.has(r.id));
         return (
           <div key={day} className="entry-day">
@@ -372,7 +384,7 @@ function EntryList({ rows, selected, setSelected, onEdit, week }: { rows: TimeEn
             </div>
             {list.map((r) => (
               <div key={r.id} className={`entry ${selected.has(r.id) ? "sel" : ""}`} onDoubleClick={() => r.status_flag !== "running" && r.status_flag !== "exported" && onEdit(r)}>
-                <input type="checkbox" className="check" checked={selected.has(r.id)} disabled={r.status_flag === "running"} onChange={() => toggle(r.id)} aria-label="Auswählen" />
+                <input type="checkbox" className="check" checked={selected.has(r.id)} disabled={r.status_flag === "running" || r.status_flag === "exported"} onChange={() => toggle(r.id)} aria-label="Auswählen" title={r.status_flag === "exported" ? "Bereits exportiert" : undefined} />
                 <span className="entry-time num faint">
                   {time(r.start_time)}–{r.end_time ? time(r.end_time) : "…"}
                 </span>
@@ -393,8 +405,8 @@ function EntryList({ rows, selected, setSelected, onEdit, week }: { rows: TimeEn
                     openMenu(e, [
                       { label: "Bearbeiten", icon: Pencil, disabled: r.status_flag === "exported", onSelect: () => onEdit(r) },
                       r.status_flag === "released"
-                        ? { label: "Zurück auf Entwurf", icon: RotateCcw, onSelect: async () => (await api.setStatus([r.id], "draft"), s().bumpEntries()) }
-                        : { label: "Freigeben", icon: Check, disabled: r.status_flag === "exported", onSelect: async () => (await api.setStatus([r.id], "released"), s().bumpEntries()) },
+                        ? { label: "Zurück auf Entwurf", icon: RotateCcw, onSelect: () => setStatus(r.id, "draft") }
+                        : { label: "Freigeben", icon: Check, disabled: r.status_flag === "exported", onSelect: () => setStatus(r.id, "released") },
                       "separator",
                       {
                         label: "Löschen",
@@ -402,8 +414,12 @@ function EntryList({ rows, selected, setSelected, onEdit, week }: { rows: TimeEn
                         danger: true,
                         onSelect: async () => {
                           if (!(await s().confirm({ title: "Eintrag löschen?", message: `${r.description || r.netzplan_nr} (${hoursFromMinutes(r.duration_minutes)} h) wird gelöscht.`, confirmLabel: "Löschen", danger: true }))) return;
-                          await api.deleteEntry(r.id);
-                          s().bumpEntries();
+                          try {
+                            await api.deleteEntry(r.id);
+                            s().bumpEntries();
+                          } catch (e) {
+                            s().error("Löschen fehlgeschlagen", e);
+                          }
                         },
                       },
                     ])
@@ -540,8 +556,12 @@ function ExportDialog({ week, onClose }: { week: Date; onClose: () => void }) {
         path = await saveDialog({ defaultPath: `zeiten-${from}-${to}.${f.ext}`, filters: [{ name: f.label, extensions: [f.ext] }] });
         if (!path) return;
       }
-      const res = await api.exportEntries({ format, ...range(), onlyReleased, markExported: mark, path });
-      if (target === "clipboard") await navigator.clipboard.writeText(res.content);
+      // Clipboard: copy first, mark only once the copy succeeded.
+      const res = await api.exportEntries({ format, ...range(), onlyReleased, markExported: mark && target === "file", path });
+      if (target === "clipboard") {
+        await navigator.clipboard.writeText(res.content);
+        if (mark && res.exported_ids.length) await api.setStatus(res.exported_ids, "exported");
+      }
       s().toast({ tone: "success", title: target === "file" ? "Export gespeichert" : "In Zwischenablage kopiert", detail: `${res.exported_ids.length} Einträge${mark ? ", als exportiert markiert" : ""}` });
       if (mark) s().bumpEntries();
       onClose();

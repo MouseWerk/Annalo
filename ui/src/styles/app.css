@@ -728,3 +728,5 @@ button.side-section-title:hover { color: var(--text-2); }
   .settings { grid-template-columns: 180px minmax(0, 1fr); }
   .settings-body { padding: 28px 28px 120px; }
 }
+.tree-row:focus-visible { outline-offset: -2px; }
+.tree-row:focus-visible .tree-row-actions { display: flex; }

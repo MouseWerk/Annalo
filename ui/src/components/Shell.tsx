@@ -194,15 +194,16 @@ export function ConfirmHost() {
   return (
     <Dialog
       open
-      onClose={() => req.resolve(false)}
+      onClose={() => req.resolve("cancel")}
       title={req.title}
-      width={420}
+      width={req.altLabel ? 480 : 420}
       footer={
         <>
-          <Button variant="ghost" onClick={() => req.resolve(false)}>
+          <Button variant="ghost" onClick={() => req.resolve("cancel")}>
             Abbrechen
           </Button>
-          <Button variant={req.danger ? "danger" : "primary"} onClick={() => req.resolve(true)} data-autofocus>
+          {req.altLabel && <Button onClick={() => req.resolve("alt")}>{req.altLabel}</Button>}
+          <Button variant={req.danger ? "danger" : "primary"} onClick={() => req.resolve("confirm")} data-autofocus>
             {req.confirmLabel}
           </Button>
         </>

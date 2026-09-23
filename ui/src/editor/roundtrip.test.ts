@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 import { Editor } from "@tiptap/core";
 import { buildExtensions, toMarkdown } from "./schema";
+import { splitFrontmatter } from "./extensions";
 
 function roundtrip(md: string) {
   const el = document.createElement("div");
@@ -28,6 +29,11 @@ const CASES: Record<string, string> = {
   code: "```ts\nconst x = 42;\n```\n",
   table: "| A   | B   |\n| --- | --- |\n| 1   | 2   |\n",
   link: "Web: [Anthropic](https://www.anthropic.com)\n",
+  bareUrl: "Siehe https://example.com/pfad?a=1 für Details\n",
+  bareUrlUnderscore: "Doku: https://example.com/snake_case/_intern\n",
+  bareEmail: "Mail an max.mustermann@example.de bitte\n",
+  bareWww: "Oder www.example.com direkt\n",
+  linkTitle: 'Mit [Titel](https://example.com "Hinweis") hier\n',
   hr: "Oben\n\n---\n\nUnten\n",
   timeEntry: 'Gebucht: <time-entry id="12" hours="2,50" target="NP-8801/1020">Systemintegration</time-entry>\n',
   umlauts: "Grüße aus Köln: äöü ß €\n",
@@ -45,9 +51,33 @@ describe("markdown round-trip", () => {
     });
   }
 
+  it("keeps <autolinks> as bare URLs", () => {
+    expect(roundtrip("Kurz: <https://example.com>\n")).toBe("Kurz: https://example.com\n");
+  });
+
   it("is stable on a second pass", () => {
     const all = Object.values(CASES).join("\n");
     const once = roundtrip(all);
     expect(roundtrip(once)).toBe(once);
+  });
+});
+
+describe("splitFrontmatter", () => {
+  it("trennt YAML-Frontmatter ab", () => {
+    expect(splitFrontmatter("---\ntags: [a]\ntitle: X\n---\n\nText\n")).toEqual({ frontmatter: "---\ntags: [a]\ntitle: X\n---\n", body: "Text\n" });
+  });
+  it("akzeptiert Frontmatter am Dateiende", () => {
+    expect(splitFrontmatter("---\nalias: y\n---")).toEqual({ frontmatter: "---\nalias: y\n---\n", body: "" });
+  });
+  it("hält eine führende Trennlinie nicht für Frontmatter", () => {
+    const md = "---\n\nText\n\n---\n\nMehr\n";
+    expect(splitFrontmatter(md)).toEqual({ frontmatter: "", body: md });
+  });
+  it("verlangt key: in der ersten Zeile", () => {
+    const md = "---\nNur ein Absatz\n---\nRest\n";
+    expect(splitFrontmatter(md)).toEqual({ frontmatter: "", body: md });
+  });
+  it("ohne Frontmatter", () => {
+    expect(splitFrontmatter("# Titel\n")).toEqual({ frontmatter: "", body: "# Titel\n" });
   });
 });

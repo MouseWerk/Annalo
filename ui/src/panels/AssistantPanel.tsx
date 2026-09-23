@@ -104,11 +104,15 @@ export function AssistantPanel() {
     if (el && stick.current) el.scrollTop = el.scrollHeight;
   }, [turns]);
 
+  // A palette question may arrive before this panel mounts; take it once idle.
+  const pendingAsk = useApp((st) => st.pendingAsk);
   useEffect(() => {
-    const onAsk = (e: Event) => send((e as CustomEvent<string>).detail);
-    window.addEventListener("aether:ask", onAsk);
-    return () => window.removeEventListener("aether:ask", onAsk);
-  });
+    const q = s().pendingAsk;
+    if (!q || busy) return;
+    s().set({ pendingAsk: null });
+    send(q);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingAsk, busy]);
 
   useEffect(() => {
     if (!input.trim()) return setPreview(null);

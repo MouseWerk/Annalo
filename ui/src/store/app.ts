@@ -37,13 +37,19 @@ export interface ConfirmRequest {
   title: string;
   message: string;
   confirmLabel: string;
+  /** Optional third button between Abbrechen and the confirm button. */
+  altLabel?: string;
   danger: boolean;
-  resolve: (ok: boolean) => void;
+  resolve: (choice: ConfirmChoice) => void;
 }
+export type ConfirmChoice = "confirm" | "alt" | "cancel";
+type ConfirmOpts = { title: string; message: string; confirmLabel?: string; danger?: boolean };
 
 interface State {
   confirmRequest: ConfirmRequest | null;
-  confirm: (opts: { title: string; message: string; confirmLabel?: string; danger?: boolean }) => Promise<boolean>;
+  confirm: (opts: ConfirmOpts) => Promise<boolean>;
+  /** Three-way dialog: confirm, alternative, or cancel. */
+  choose: (opts: ConfirmOpts & { altLabel: string }) => Promise<ConfirmChoice>;
   /** Tabs and active tab of the focused pane (mirrors `panes`). */
   tabs: Tab[];
   activeTabId: string;
@@ -75,6 +81,8 @@ interface State {
   editorStats: { words: number; chars: number } | null;
   toasts: Toast[];
   focusMode: boolean;
+  /** Question from the palette, consumed by the assistant panel once it is mounted. */
+  pendingAsk: string | null;
 
   openTab: (loc: Loc, opts?: OpenOpts) => void;
   openPage: (pageId: number, opts?: OpenOpts) => void;
@@ -187,17 +195,19 @@ let toastSeq = 0;
 
 export const useApp = create<State>((set, get) => ({
   confirmRequest: null,
-  confirm: (opts) =>
-    new Promise<boolean>((resolve) =>
+  confirm: async (opts) => (await get().choose({ ...opts, altLabel: "" })) === "confirm",
+  choose: (opts) =>
+    new Promise<ConfirmChoice>((resolve) =>
       set({
         confirmRequest: {
           title: opts.title,
           message: opts.message,
           confirmLabel: opts.confirmLabel ?? "Bestätigen",
+          altLabel: opts.altLabel || undefined,
           danger: opts.danger ?? false,
-          resolve: (ok) => {
+          resolve: (choice) => {
             set({ confirmRequest: null });
-            resolve(ok);
+            resolve(choice);
           },
         },
       }),
@@ -226,6 +236,7 @@ export const useApp = create<State>((set, get) => ({
   editorStats: null,
   toasts: [],
   focusMode: false,
+  pendingAsk: null,
 
   openTab: (loc, opts) => {
     const { panes, activePaneId, paneSizes } = get();

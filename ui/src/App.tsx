@@ -10,6 +10,7 @@ import { Resizer, readSize } from "./components/Resizer";
 import { CommandPalette } from "./components/CommandPalette";
 import { RightPanel } from "./panels/RightPanel";
 import { createSubpage } from "./views/PageView";
+import { flushAllEditors } from "./editor/NoteEditor";
 import type { ActivityTick } from "./lib/types";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { tabTitle } from "./components/Shell";
@@ -115,6 +116,31 @@ export function App() {
     return () => {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("mouseup", onMouse);
+    };
+  }, []);
+
+  // Store pending edits before the window closes.
+  useEffect(() => {
+    const win = getCurrentWindow();
+    let closing = false;
+    const unlisten = win
+      .onCloseRequested(async (e) => {
+        e.preventDefault();
+        if (closing) return;
+        closing = true;
+        try {
+          await Promise.race([flushAllEditors(), new Promise((r) => setTimeout(r, 5000))]);
+        } finally {
+          // Needs core:window:allow-destroy.
+          await win.destroy().catch((err) => {
+            closing = false;
+            useApp.getState().error("Fenster konnte nicht geschlossen werden", err);
+          });
+        }
+      })
+      .catch(() => null);
+    return () => {
+      unlisten.then((f) => f?.());
     };
   }, []);
 

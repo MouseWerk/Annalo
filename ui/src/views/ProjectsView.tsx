@@ -6,7 +6,7 @@ import { Briefcase, MoreHorizontal, Pencil, Play, Plus, Trash2 } from "lucide-re
 import { api } from "../lib/api";
 import { useApp } from "../store/app";
 import { Badge, Button, Dialog, EmptyState, Field, IconButton, Input, Progress, Spinner, useMenu, type Tone } from "../components/ui";
-import { compact, h1 } from "../lib/format";
+import { compact, h1, parseGermanNumber } from "../lib/format";
 import { useWbs } from "./wbs";
 import type { AlertLevel, BudgetStatus, NetzplanTree, ProjectTree, Schedule, Vorgang } from "../lib/types";
 
@@ -265,21 +265,42 @@ function WbsDialog({ state, onClose }: { state: DialogState; onClose: () => void
     return { nr: v?.vorgang_nr ?? "", desc: v?.description ?? "", days: String(v?.duration_days ?? 1), hours: String(v?.planned_hours ?? ""), rest: v?.remaining_hours != null ? String(v.remaining_hours) : "", after: "" };
   });
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value });
-  const n = (v: string) => Number(v.replace(",", ".")) || 0;
+  const [bad, setBad] = useState<Record<string, string>>({});
+  const errHint = (k: string, hint?: string) => (bad[k] ? <span className="field-error">{bad[k]}</span> : hint);
   const editing = (state.kind === "project" && state.project) || (state.kind === "netzplan" && state.netzplan) || (state.kind === "vorgang" && state.vorgang);
 
   const submit = async () => {
+    // Validate numbers up front (German notation, "1.200,5").
+    const errs: Record<string, string> = {};
+    const n = (k: string, emptyZero = false) => {
+      const raw = (f[k] ?? "").trim();
+      if (!raw && emptyZero) return 0;
+      const v = parseGermanNumber(raw);
+      if (v == null || v < 0) {
+        errs[k] = "Keine gültige Zahl";
+        return 0;
+      }
+      return v;
+    };
+    let hours = 0, days = 0, rest: number | null = null;
+    if (state.kind !== "project") hours = n("hours", true);
+    if (state.kind === "vorgang") {
+      days = n("days");
+      rest = (f.rest ?? "").trim() === "" ? null : n("rest");
+    }
+    setBad(errs);
+    if (Object.keys(errs).length) return;
     setBusy(true);
     try {
       if (state.kind === "project") {
         if (state.project) await api.updateProject(state.project.id, f.name);
         else await api.createProject(f.code, f.name);
       } else if (state.kind === "netzplan") {
-        if (state.netzplan) await api.updateNetzplan(state.netzplan.id, f.wbs, f.desc, n(f.hours));
-        else await api.createNetzplan(state.projectId, f.nr, f.wbs, f.desc, n(f.hours));
+        if (state.netzplan) await api.updateNetzplan(state.netzplan.id, f.wbs, f.desc, hours);
+        else await api.createNetzplan(state.projectId, f.nr, f.wbs, f.desc, hours);
       } else {
-        if (state.vorgang) await api.updateVorgang(state.vorgang.id, f.desc, n(f.days), n(f.hours), f.rest.trim() === "" ? null : n(f.rest));
-        else await api.createVorgang(state.netzplan.id, f.nr, f.desc, n(f.days), n(f.hours), f.after.split(",").map((x) => x.trim()).filter(Boolean));
+        if (state.vorgang) await api.updateVorgang(state.vorgang.id, f.desc, days, hours, rest);
+        else await api.createVorgang(state.netzplan.id, f.nr, f.desc, days, hours, f.after.split(",").map((x) => x.trim()).filter(Boolean));
       }
       s().bumpWbs();
       s().bumpEntries();
@@ -299,9 +320,13 @@ function WbsDialog({ state, onClose }: { state: DialogState; onClose: () => void
         icon={Trash2}
         onClick={async () => {
           if (!(await s().confirm({ title: "Vorgang löschen?", message: `${state.vorgang!.vorgang_nr} ${state.vorgang!.description} wird gelöscht. Gebuchte Zeiten bleiben erhalten.`, confirmLabel: "Löschen", danger: true }))) return;
-          await api.deleteVorgang(state.vorgang!.id);
-          s().bumpWbs();
-          onClose();
+          try {
+            await api.deleteVorgang(state.vorgang!.id);
+            s().bumpWbs();
+            onClose();
+          } catch (e) {
+            s().error("Löschen fehlgeschlagen", e);
+          }
         }}
       >
         Löschen
@@ -355,8 +380,8 @@ function WbsDialog({ state, onClose }: { state: DialogState; onClose: () => void
             <Field label="Beschreibung">
               <Input value={f.desc} onChange={set("desc")} placeholder="Systemintegration" />
             </Field>
-            <Field label="Planstunden">
-              <Input value={f.hours} onChange={set("hours")} inputMode="decimal" placeholder="120" />
+            <Field label="Planstunden" hint={errHint("hours")}>
+              <Input value={f.hours} onChange={set("hours")} inputMode="decimal" placeholder="120" aria-invalid={!!bad.hours} />
             </Field>
           </>
         )}
@@ -368,15 +393,15 @@ function WbsDialog({ state, onClose }: { state: DialogState; onClose: () => void
             <Field label="Beschreibung">
               <Input value={f.desc} onChange={set("desc")} placeholder="Hypercare" />
             </Field>
-            <Field label="Dauer (Tage)">
-              <Input value={f.days} onChange={set("days")} inputMode="decimal" />
+            <Field label="Dauer (Tage)" hint={errHint("days")}>
+              <Input value={f.days} onChange={set("days")} inputMode="decimal" aria-invalid={!!bad.days} />
             </Field>
-            <Field label="Planstunden">
-              <Input value={f.hours} onChange={set("hours")} inputMode="decimal" />
+            <Field label="Planstunden" hint={errHint("hours")}>
+              <Input value={f.hours} onChange={set("hours")} inputMode="decimal" aria-invalid={!!bad.hours} />
             </Field>
             {state.vorgang ? (
-              <Field label="Restaufwand (h)" hint="Leer lassen, um Plan minus gebucht zu verwenden">
-                <Input value={f.rest} onChange={set("rest")} inputMode="decimal" placeholder="automatisch" />
+              <Field label="Restaufwand (h)" hint={errHint("rest", "Leer lassen, um Plan minus gebucht zu verwenden")}>
+                <Input value={f.rest} onChange={set("rest")} aria-invalid={!!bad.rest} inputMode="decimal" placeholder="automatisch" />
               </Field>
             ) : (
               <Field label="Nach Vorgang" hint="Vorgänger, kommagetrennt">

@@ -274,10 +274,16 @@ export interface ZeitResult {
 }
 
 /** Enter on a paragraph that starts with `/zeit …` books the time and turns the line into a chip. */
-export const ZeitCommand = Extension.create<{ book: (line: string) => Promise<ZeitResult | null> }>({
+export const ZeitCommand = Extension.create<
+  { book: (line: string) => Promise<ZeitResult | null>; onLost: (res: ZeitResult) => void },
+  { pending: Set<string> }
+>({
   name: "zeitCommand",
   addOptions() {
-    return { book: async () => null };
+    return { book: async () => null, onLost: () => {} };
+  },
+  addStorage() {
+    return { pending: new Set<string>() };
   },
   addKeyboardShortcuts() {
     return {
@@ -286,19 +292,38 @@ export const ZeitCommand = Extension.create<{ book: (line: string) => Promise<Ze
         if (!empty || $from.parent.type.name !== "paragraph") return false;
         const text = $from.parent.textContent.trim();
         if (!/^\/(zeit|time)\s+\S+\s+\S+/i.test(text)) return false;
+        // A second Enter while the booking is in flight must not book twice.
+        const pending = this.storage.pending;
+        if (pending.has(text)) return true;
+        pending.add(text);
         const start = $from.start();
-        const end = $from.end();
-        this.options.book(text).then((res) => {
-          if (!res) return;
-          const node = editor.state.doc.nodeAt(start - 1);
-          if (!node || node.textContent.trim() !== text) return; // text changed meanwhile
-          editor
-            .chain()
-            .insertContentAt({ from: start, to: end }, [{ type: "timeEntry", attrs: res }])
-            .insertContentAt(start + 1, { type: "paragraph" })
-            .focus(start + 2)
-            .run();
-        });
+        this.options
+          .book(text)
+          .then((res) => {
+            if (!res || editor.isDestroyed) return;
+            // Find the line again: at its old position, else anywhere (the doc may have changed).
+            let from = -1;
+            const at = editor.state.doc.nodeAt(start - 1);
+            if (at?.type.name === "paragraph" && at.textContent.trim() === text) from = start;
+            else
+              editor.state.doc.descendants((node, pos) => {
+                if (from >= 0) return false;
+                if (node.type.name === "paragraph" && node.textContent.trim() === text) {
+                  from = pos + 1;
+                  return false;
+                }
+                return true;
+              });
+            if (from < 0) return this.options.onLost(res);
+            const to = from + editor.state.doc.nodeAt(from - 1)!.content.size;
+            editor
+              .chain()
+              .insertContentAt({ from, to }, [{ type: "timeEntry", attrs: res }])
+              .insertContentAt(from + 1, { type: "paragraph" })
+              .focus(from + 2)
+              .run();
+          })
+          .finally(() => pending.delete(text));
         return true;
       },
     };
@@ -355,8 +380,9 @@ export const TagHighlight = Extension.create<{ onOpen: (tag: string) => void }>(
 
 /** Splits YAML frontmatter off so the editor never mangles it. */
 export function splitFrontmatter(md: string): { frontmatter: string; body: string } {
-  const m = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/.exec(md);
-  if (!m) return { frontmatter: "", body: md };
+  const m = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(md);
+  // A leading horizontal rule is not frontmatter: the first line must be a `key:`.
+  if (!m || !/^[\w-]+\s*:/.test(m[1].split(/\r?\n/)[0])) return { frontmatter: "", body: md };
   return { frontmatter: m[0].endsWith("\n") ? m[0] : m[0] + "\n", body: md.slice(m[0].length).replace(/^\r?\n/, "") };
 }
 

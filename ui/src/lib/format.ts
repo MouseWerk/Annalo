@@ -69,3 +69,18 @@ export function parseDurationInput(s: string): number | null {
 
 /** Days/hours without a trailing ",0" for whole numbers. */
 export const compact = (x: number) => (Number.isInteger(x) ? String(x) : nf1.format(x));
+
+/** Parses German numbers: "1.200,5" → 1200,5, "1,5" → 1,5; without a comma a single dot is the decimal point. Null if invalid. */
+export function parseGermanNumber(s: string): number | null {
+  let v = s.trim().replace(/[\s ']/g, "");
+  if (v.includes(",")) {
+    if (v.indexOf(",") !== v.lastIndexOf(",")) return null;
+    if (v.includes(".") && !/^-?\d{1,3}(\.\d{3})*,\d*$/.test(v)) return null;
+    v = v.replace(/\./g, "").replace(",", ".");
+  } else if (/^-?\d{1,3}(\.\d{3}){2,}$/.test(v)) {
+    v = v.replace(/\./g, "");
+  }
+  if (!/^-?(\d+\.?\d*|\.\d+)$/.test(v)) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}

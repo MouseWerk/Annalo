@@ -106,6 +106,7 @@
 .field-label { font-size: var(--fs-sm); font-weight: 500; color: var(--text-2); }
 .field-control { display: grid; }
 .field-hint { font-size: var(--fs-xs); color: var(--text-3); }
+.field-error { color: var(--danger); }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; margin-bottom: 14px; }
 
 .switch {

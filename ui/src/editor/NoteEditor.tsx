@@ -22,6 +22,19 @@ export interface NoteEditorHandle {
   flush: () => Promise<void>;
 }
 
+// Flush handles of all mounted editors (rename, window close).
+const flushers = new Set<() => Promise<void>>();
+
+/** Saves pending edits of every open editor. */
+export async function flushAllEditors() {
+  await Promise.all([...flushers].map((f) => f().catch(() => {})));
+}
+
+/** Editors showing one of `ids` (all when omitted) refetch their page, unless they hold unsaved edits. */
+export function reloadEditors(ids?: number[]) {
+  window.dispatchEvent(new CustomEvent("aether:reload-pages", { detail: { ids } }));
+}
+
 export function NoteEditor({
   doc,
   onSaved,
@@ -49,13 +62,42 @@ export function NoteEditor({
   activeRef.current = active;
   const instance = useRef(Math.random().toString(36).slice(2));
 
+  // Another pane saved this page while we had edits: reload once ours are stored.
+  const foreignPending = useRef(false);
+  const busy = () => dirty.current || saving.current !== null;
+
+  const apply = (editor: Editor, content: string) => {
+    const { frontmatter: fm, body } = splitFrontmatter(content);
+    frontmatter.current = fm;
+    if (toMarkdown(editor) === body) return;
+    const { from, to } = editor.state.selection;
+    editor.commands.setContent(body, { contentType: "markdown", emitUpdate: false });
+    const max = editor.state.doc.content.size;
+    editor.commands.setTextSelection({ from: Math.min(from, max), to: Math.min(to, max) });
+    if (activeRef.current) publishOutline(editor);
+  };
+
+  const reload = async (editor: Editor) => {
+    if (busy()) return void (foreignPending.current = true);
+    foreignPending.current = false;
+    try {
+      const fresh = await api.page(doc.id);
+      if (editor.isDestroyed) return;
+      if (busy()) return void (foreignPending.current = true);
+      apply(editor, fresh.content);
+    } catch {
+      /* page gone: the view shows that */
+    }
+  };
+
   const save = async (editor: Editor) => {
     if (!dirty.current) return;
     dirty.current = false;
     setStatus("saving");
     const md = frontmatter.current + toMarkdown(editor);
-    const p = api
-      .savePage(doc.id, md)
+    // Saves run one after another so an older one never lands last.
+    const p: Promise<void> = (saving.current ?? Promise.resolve())
+      .then(() => api.savePage(doc.id, md))
       .then((saved) => {
         cb.current.onSaved(saved);
         // Other panes showing the same page pick up the new content.
@@ -66,6 +108,11 @@ export function NoteEditor({
         dirty.current = true;
         setStatus("dirty");
         useApp.getState().error("Speichern fehlgeschlagen", e);
+      })
+      .finally(() => {
+        if (saving.current !== p) return;
+        saving.current = null;
+        if (foreignPending.current && !dirty.current && !editor.isDestroyed) reload(editor);
       });
     saving.current = p;
     await p;
@@ -113,6 +160,8 @@ export function NoteEditor({
             return null;
           }
         },
+        onZeitLost: (res) =>
+          useApp.getState().toast({ tone: "warning", title: "Gebucht, aber Zeile nicht mehr gefunden", detail: `${res.hours} h · ${res.target} – kein Chip eingefügt` }),
       }),
       content: splitFrontmatter(doc.content).body,
       contentType: "markdown",
@@ -135,26 +184,28 @@ export function NoteEditor({
         if (activeRef.current) publishOutline(editor);
       },
       onCreate: ({ editor }) => activeRef.current && publishOutline(editor),
+      // Other panes with this page store their edits first, so we continue from them.
+      onFocus: () => window.dispatchEvent(new CustomEvent("aether:flush-page", { detail: { id: doc.id, from: instance.current } })),
     },
     [doc.id],
   );
 
   useEffect(() => {
     if (!editor) return;
-    handleRef?.({
-      editor,
-      flush: async () => {
-        window.clearTimeout(saveTimer.current);
-        await save(editor);
-        await saving.current;
-      },
-    });
+    const flushNow = async () => {
+      window.clearTimeout(saveTimer.current);
+      await save(editor);
+      await saving.current;
+    };
+    handleRef?.({ editor, flush: flushNow });
+    flushers.add(flushNow);
     const flush = () => {
       window.clearTimeout(saveTimer.current);
       save(editor);
     };
     window.addEventListener("blur", flush);
     return () => {
+      flushers.delete(flushNow);
       window.removeEventListener("blur", flush);
       flush();
     };
@@ -174,22 +225,35 @@ export function NoteEditor({
     });
   }, [editor, active]);
 
-  // Same page open in another pane: take over its saved content unless we have unsaved edits.
+  // Same page open in another pane: take over its saved content unless we have unsaved
+  // (or in-flight) edits; then reload after our own save. Renames reload all pages.
   useEffect(() => {
     if (!editor) return;
     const onSaved = (e: Event) => {
       const d = (e as CustomEvent<{ id: number; content: string; from: string }>).detail;
-      if (d.id !== doc.id || d.from === instance.current || dirty.current) return;
-      const { frontmatter: fm, body } = splitFrontmatter(d.content);
-      frontmatter.current = fm;
-      if (toMarkdown(editor) === body) return;
-      const { from, to } = editor.state.selection;
-      editor.commands.setContent(body, { contentType: "markdown", emitUpdate: false });
-      const max = editor.state.doc.content.size;
-      editor.commands.setTextSelection({ from: Math.min(from, max), to: Math.min(to, max) });
+      if (d.id !== doc.id || d.from === instance.current) return;
+      if (busy()) foreignPending.current = true;
+      else apply(editor, d.content);
+    };
+    const onReload = (e: Event) => {
+      const ids = (e as CustomEvent<{ ids?: number[] }>).detail?.ids;
+      if (!ids || ids.includes(doc.id)) reload(editor);
+    };
+    const onFlushPage = (e: Event) => {
+      const d = (e as CustomEvent<{ id: number; from: string }>).detail;
+      if (d.id !== doc.id || d.from === instance.current) return;
+      window.clearTimeout(saveTimer.current);
+      save(editor);
     };
     window.addEventListener("aether:page-saved", onSaved);
-    return () => window.removeEventListener("aether:page-saved", onSaved);
+    window.addEventListener("aether:reload-pages", onReload);
+    window.addEventListener("aether:flush-page", onFlushPage);
+    return () => {
+      window.removeEventListener("aether:page-saved", onSaved);
+      window.removeEventListener("aether:reload-pages", onReload);
+      window.removeEventListener("aether:flush-page", onFlushPage);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editor, doc.id]);
 
   // Ctrl+F: find in this page.
