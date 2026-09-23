@@ -2,20 +2,21 @@
 // notes (vault import/export); backups; appearance; about.
 
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, DatabaseBackup, Eye, EyeOff, FolderInput, FolderOpen, FolderOutput, KeyRound, Loader2, Palette, Plus, RefreshCw, Server, Sparkles, Timer, Trash2, NotebookPen, Info, XCircle } from "lucide-react";
+import { CheckCircle2, DatabaseBackup, Monitor, Eye, EyeOff, FolderInput, FolderOpen, FolderOutput, KeyRound, Loader2, Palette, Plus, RefreshCw, Server, Sparkles, Timer, Trash2, NotebookPen, Info, XCircle } from "lucide-react";
 import { api } from "../lib/api";
 import { useApp } from "../store/app";
 import { applyTheme, exportVault, importVault, pickFolder } from "../lib/actions";
 import { fileSize, relative } from "../lib/format";
 import { Badge, Button, Field, IconButton, Input, Segmented, Select, Switch, TextArea } from "../components/ui";
-import type { BackupInfo, ConnectionTest, Page, Settings } from "../lib/types";
+import type { BackupInfo, ConnectionTest, DesktopInfo, Page, Settings } from "../lib/types";
 
-type Section = "ai" | "time" | "notes" | "backup" | "appearance" | "about";
+type Section = "ai" | "time" | "notes" | "backup" | "desktop" | "appearance" | "about";
 const SECTIONS: { id: Section; label: string; icon: typeof Server }[] = [
   { id: "ai", label: "KI & LiteLLM", icon: Sparkles },
   { id: "time", label: "Zeiterfassung", icon: Timer },
   { id: "notes", label: "Notizen", icon: NotebookPen },
   { id: "backup", label: "Sicherung", icon: DatabaseBackup },
+  { id: "desktop", label: "Desktop", icon: Monitor },
   { id: "appearance", label: "Darstellung", icon: Palette },
   { id: "about", label: "Über", icon: Info },
 ];
@@ -79,6 +80,7 @@ export function SettingsView() {
               }}
             />
           )}
+          {section === "desktop" && <DesktopSection draft={draft} update={update} />}
           {section === "appearance" && (
             <AppearanceSection
               draft={draft}
@@ -652,6 +654,79 @@ function BackupSection({ draft, update }: { draft: Settings; update: (p: Partial
   );
 }
 
+function DesktopSection({ draft, update }: { draft: Settings; update: (p: Partial<Settings>) => void }) {
+  const [info, setInfo] = useState<DesktopInfo | null>(null);
+  const s = useApp.getState;
+  const view = useApp((st) => st.settings);
+  useEffect(() => {
+    api.desktopInfo().then(setInfo, () => setInfo(null));
+  }, [view]);
+  const setAutostart = async (on: boolean) => {
+    try {
+      setInfo(await api.setAutostart(on));
+    } catch (e) {
+      s().error("Autostart konnte nicht geändert werden", e);
+    }
+  };
+  const reminderOn = draft.reminder_time != null;
+
+  return (
+    <>
+      <header className="settings-head">
+        <h1>Desktop</h1>
+        <p>Symbol im Infobereich, Autostart, Erinnerungen und die Schnellerfassung.</p>
+      </header>
+      <Group title="Fenster">
+        <Row
+          label="In den Infobereich schließen"
+          description={
+            <>
+              Schließen blendet das Fenster nur aus; Timer und Erinnerungen laufen weiter. Beenden über das Symbol im Infobereich.
+              {info && !info.tray && <Badge tone="warning">Kein Infobereich verfügbar – das Fenster wird minimiert</Badge>}
+            </>
+          }
+        >
+          <Switch label="In den Infobereich schließen" checked={draft.close_to_tray} onChange={(v) => update({ close_to_tray: v })} />
+        </Row>
+        <Row label="Mit Windows starten" description="Startet bei der Anmeldung minimiert im Infobereich. Wird sofort übernommen.">
+          <Switch label="Mit Windows starten" checked={!!info?.autostart} onChange={setAutostart} />
+        </Row>
+      </Group>
+      <Group title="Feierabend-Erinnerung" description="Hinweis an Arbeitstagen, wenn weniger als das Tagessoll gebucht ist. Ein Klick darauf öffnet die Zeiterfassung. Läuft nach 20 Uhr noch ein Timer, erinnert AETHER OS einmal daran.">
+        <Row label="Erinnern um">
+          <div className="unit-input">
+            <Switch label="Feierabend-Erinnerung" checked={reminderOn} onChange={(v) => update({ reminder_time: v ? "17:30" : null })} />
+            {reminderOn && (
+              <Input
+                type="time"
+                value={draft.reminder_time ?? ""}
+                onChange={(e) => update({ reminder_time: e.target.value || null })}
+                aria-label="Uhrzeit der Erinnerung"
+              />
+            )}
+            <span className="faint">{reminderOn ? "Uhr" : "Aus"}</span>
+          </div>
+        </Row>
+      </Group>
+      <Group title="Schnellerfassung" description="Ein kleines Fenster über allen anderen: Text landet in der heutigen Tagesnotiz, „todo …“ oder „- [ ] …“ als Aufgabe, „/zeit …“ wird gebucht.">
+        <Row
+          label="Tastenkürzel (global)"
+          description={
+            <>
+              z. B. Ctrl+Shift+Space. Ctrl+Alt meiden – das ist AltGr auf deutschen Tastaturen. Leer = aus.
+              {info && draft.capture_shortcut === view?.settings.capture_shortcut && (
+                info.capture_shortcut_active ? <Badge tone="success">Aktiv</Badge> : <Badge tone="warning">Nicht registriert</Badge>
+              )}
+            </>
+          }
+        >
+          <Input value={draft.capture_shortcut} onChange={(e) => update({ capture_shortcut: e.target.value })} placeholder="Ctrl+Shift+Space" aria-label="Tastenkürzel Schnellerfassung" className="mono" />
+        </Row>
+      </Group>
+    </>
+  );
+}
+
 function AppearanceSection({ draft, update }: { draft: Settings; update: (p: Partial<Settings>) => void }) {
   return (
     <>
@@ -681,6 +756,7 @@ function AboutSection() {
     ["Ctrl K", "Befehlspalette & Suche"],
     ["Ctrl O", "Seite öffnen"],
     ["Alt Space", "Befehlspalette (global)"],
+    ["Ctrl Shift Space", "Schnellerfassung (global)"],
     ["Ctrl N", "Neue Seite"],
     ["Ctrl Shift D", "Heutige Tagesnotiz"],
     ["Ctrl Shift T", "Timer starten / stoppen"],

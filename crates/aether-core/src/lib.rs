@@ -16,6 +16,7 @@
 //! * [`tracking`] – timers, manual logging, budget/ETC alerts
 //! * [`netzplan`] – critical path method (CPM) over Vorgänge
 //! * [`export`] – SAP PS (CATS), Jira worklog, CSV and JSON exports
+//! * [`desktop`] – quick capture into the daily note, end-of-day reminders
 //! * [`activity`] – idle detection and active window probing (Win32 on Windows)
 //! * [`ai`] – LiteLLM client, model router, token/cost metrics, local RAG
 
@@ -25,6 +26,7 @@ pub mod attachments;
 pub mod backup;
 pub mod db;
 pub mod demo;
+pub mod desktop;
 pub mod error;
 pub mod export;
 pub mod model;

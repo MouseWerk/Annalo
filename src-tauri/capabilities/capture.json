@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "capture",
+  "description": "Permissions of the quick-capture window (it talks to the shell through app commands only)",
+  "windows": ["capture"],
+  "permissions": [
+    "core:default",
+    "core:event:default"
+  ]
+}

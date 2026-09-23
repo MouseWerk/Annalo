@@ -52,6 +52,23 @@ Migration v2 converts the old block model: blocks are concatenated into
 - **Backups** (`backup.rs`): `VACUUM INTO` writes a consistent snapshot `aether-YYYYMMDD-HHMMSS.db`;
   older files beyond `backup_keep` (default 14) are deleted. The shell backs up on start when the newest
   backup is older than 24 h and re-checks hourly, into `backup_dir` or `<data dir>/backups`.
+- **Single instance**: a second launch only focuses the running window (tauri-plugin-single-instance),
+  so two processes never write one workspace. Test runs with `AETHER_DATA_DIR` skip the check.
+- **Close to tray / quit**: with `close_to_tray` the UI flushes its editors and calls `window_hide`;
+  „Beenden“ in the tray emits `app://quit-requested`, the UI flushes (asking if that fails) and calls
+  `app_quit`. Without it the UI destroys the main window and the shell exits.
+
+## Desktop integration (`desktop.rs` in core and shell)
+
+- Tray menu (Öffnen, Timer stoppen / Zuletzt verwendet starten, Schnellerfassung, Beenden); the
+  activity sampler refreshes the tooltip and checks reminders every 30 s.
+- Quick capture: a second, undecorated always-on-top window (label `capture`, `index.html#capture`)
+  created on first use by the global shortcut (`capture_shortcut`, default Ctrl+Shift+Space – Ctrl+Alt
+  is AltGr on German keyboards). `capture_submit` books `/zeit` lines and appends the rest to today's
+  daily note (`desktop::capture`, all or nothing).
+- Reminders: `end_of_day_reminder` and `late_timer_reminder` are pure functions of time, settings,
+  booked minutes and the last notified day (kept in `settings` meta rows). Desktop notifications cannot
+  report clicks, so after an end-of-day reminder the next focus of the main window opens the timesheet.
 
 ## Notes model
 

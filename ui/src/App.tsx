@@ -16,6 +16,25 @@ import type { ActivityTick } from "./lib/types";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { tabTitle } from "./components/Shell";
 
+/** Stores pending edits before the app goes away; false when the user chose to stay. */
+async function flushBeforeExit(): Promise<boolean> {
+  try {
+    await Promise.race([flushAllEditors(), new Promise((_, fail) => setTimeout(() => fail(new Error("Zeitüberschreitung")), 5000))]);
+    return true;
+  } catch {
+    // Quitting from the tray: the window may be hidden, but the question needs an answer.
+    const win = getCurrentWindow();
+    await win.show().catch(() => {});
+    await win.setFocus().catch(() => {});
+    return useApp.getState().confirm({
+      title: "Nicht gespeicherte Änderungen",
+      message: "Einige Änderungen konnten nicht gespeichert werden. Trotzdem schließen? Sie gehen dann verloren.",
+      confirmLabel: "Trotzdem schließen",
+      danger: true,
+    });
+  }
+}
+
 export function App() {
   const sidebarOpen = useApp((s) => s.sidebarOpen);
   const panelOpen = useApp((s) => s.panelOpen);
@@ -51,6 +70,13 @@ export function App() {
         if (st.timer && t.timer_idle_minutes != null && t.timer_idle_minutes !== st.timer.idle_minutes)
           st.set({ timer: { ...st.timer, idle_minutes: t.timer_idle_minutes, is_idle: t.is_idle } });
       }),
+      // Tray „Beenden“: store edits, then quit for real.
+      on("app://quit-requested", async () => {
+        if (await flushBeforeExit()) await api.quit().catch((e) => useApp.getState().error("Beenden fehlgeschlagen", e));
+      }),
+      on("tray://timer-stop", () => stopTimer()),
+      // Clicked the end-of-day reminder (or came back after it).
+      on("nav://timesheet", () => useApp.getState().openTab({ kind: "timesheet" })),
       on("palette://toggle", () => {
         const st = useApp.getState();
         st.set({ paletteOpen: !st.paletteOpen, paletteMode: "all", paletteQuery: "" });
@@ -135,19 +161,16 @@ export function App() {
         e.preventDefault();
         if (closing) return;
         closing = true;
-        try {
-          await Promise.race([flushAllEditors(), new Promise((_, fail) => setTimeout(() => fail(new Error("Zeitüberschreitung")), 5000))]);
-        } catch {
-          const ok = await useApp.getState().confirm({
-            title: "Nicht gespeicherte Änderungen",
-            message: "Einige Änderungen konnten nicht gespeichert werden. Trotzdem schließen? Sie gehen dann verloren.",
-            confirmLabel: "Trotzdem schließen",
-            danger: true,
-          });
-          if (!ok) {
-            closing = false;
-            return;
-          }
+        // Close to tray: the app keeps running, so unsaved edits stay in the editors.
+        if (useApp.getState().settings?.settings.close_to_tray) {
+          await flushAllEditors().catch(() => {});
+          await api.hideWindow().catch((err) => useApp.getState().error("Fenster konnte nicht ausgeblendet werden", err));
+          closing = false;
+          return;
+        }
+        if (!(await flushBeforeExit())) {
+          closing = false;
+          return;
         }
         // Needs core:window:allow-destroy.
         await win.destroy().catch((err) => {
