@@ -1,13 +1,15 @@
 // Custom TipTap extensions: wiki links, [[ autocomplete, slash commands,
-// /zeit booking, #tag highlighting and time-entry chips.
+// /zeit booking, #tag highlighting, time-entry chips and image embeds.
 
 import { Extension, Node, mergeAttributes, type Editor, type Range } from "@tiptap/core";
 import Suggestion from "@tiptap/suggestion";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
 import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import type { Node as PMNode } from "@tiptap/pm/model";
+import type { EditorView } from "@tiptap/pm/view";
+import Image from "@tiptap/extension-image";
 import {
-  AlertTriangle, Info, CheckSquare, Code2, FilePlus2, Heading1, Heading2, Heading3, Link2, List, ListOrdered, Minus, Quote, Table2, Text, Timer, CalendarDays, Highlighter,
+  AlertTriangle, Info, CheckSquare, Code2, FilePlus2, Heading1, Heading2, Heading3, Link2, List, ListOrdered, Minus, Quote, Table2, Text, Timer, CalendarDays, Highlighter, ImagePlus, LayoutTemplate,
 } from "lucide-react";
 import { popupRenderer, type PopupItem } from "./suggestion-popup";
 import { PageIcon } from "../components/icons";
@@ -134,7 +136,14 @@ interface SlashItem extends PopupItem {
 
 const ic = (C: typeof Text) => <C size={15} strokeWidth={1.75} />;
 
-function slashItems(): SlashItem[] {
+export interface SlashOptions {
+  /** Opens the template picker; the `/…` text is already removed. */
+  onTemplate: ((editor: Editor) => void) | null;
+  /** Opens a file chooser and inserts the chosen images. */
+  onImage: ((editor: Editor) => void) | null;
+}
+
+function slashItems(o: SlashOptions): SlashItem[] {
   const today = new Date().toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" });
   return [
     { id: "text", title: "Text", icon: ic(Text), section: "Grundlagen", keywords: "absatz paragraph text", run: (e, r) => e.chain().focus().deleteRange(r).setParagraph().run() },
@@ -155,6 +164,12 @@ function slashItems(): SlashItem[] {
     { id: "date", title: "Heutiges Datum", icon: ic(CalendarDays), hint: today, section: "Einfügen", keywords: "datum date heute", run: (e, r) => e.chain().focus().deleteRange(r).insertContent(today + " ").run() },
     { id: "zeit", title: "Zeit buchen", subtitle: "NP-8801/1020 2.5h Beschreibung", icon: ic(Timer), hint: "/zeit", section: "Zeiterfassung", keywords: "zeit time buchen stunden", run: (e, r) => e.chain().focus().deleteRange(r).insertContent("/zeit ").run() },
     { id: "subpage", title: "Unterseite", icon: ic(FilePlus2), section: "Einfügen", keywords: "seite page unterseite", run: (e, r) => e.chain().focus().deleteRange(r).insertContent("[[").run() },
+    ...(o.onImage
+      ? [{ id: "image", title: "Bild", subtitle: "Datei wählen, oder einfügen mit Ctrl V", icon: ic(ImagePlus), section: "Einfügen", keywords: "bild image foto screenshot anhang", run: (e: Editor, r: Range) => (e.chain().deleteRange(r).run(), o.onImage!(e)) }]
+      : []),
+    ...(o.onTemplate
+      ? [{ id: "template", title: "Vorlage einfügen", subtitle: "Seite aus „Vorlagen“", icon: ic(LayoutTemplate), section: "Einfügen", keywords: "vorlage template muster", run: (e: Editor, r: Range) => (e.chain().deleteRange(r).run(), o.onTemplate!(e)) }]
+      : []),
   ];
 }
 
@@ -174,9 +189,13 @@ export function fuzzyIncludes(text: string, query: string) {
   return hay.includes(q) || hay.includes(qAscii);
 }
 
-export const SlashCommand = Extension.create({
+export const SlashCommand = Extension.create<SlashOptions>({
   name: "slashCommand",
+  addOptions() {
+    return { onTemplate: null, onImage: null };
+  },
   addProseMirrorPlugins() {
+    const opts = this.options;
     return [
       Suggestion<SlashItem>({
         editor: this.editor,
@@ -193,12 +212,137 @@ export const SlashCommand = Extension.create({
         },
         items: ({ query }) => {
           const q = query.toLowerCase().trim();
-          return slashItems().filter((i) => !q || fuzzyIncludes(`${i.title} ${i.keywords}`, q) || i.id.startsWith(q));
+          return slashItems(opts).filter((i) => !q || fuzzyIncludes(`${i.title} ${i.keywords}`, q) || i.id.startsWith(q));
         },
         command: ({ editor, range, props }) => props.run(editor, range),
         render: popupRenderer<SlashItem>("Kein Befehl gefunden"),
       }),
     ];
+  },
+});
+
+// ---------------------------------------------------------------- images
+
+export interface ImageOptions {
+  /** URL for an attachment name (`bild.png`). */
+  resolve: (name: string) => string;
+  /** Stores a pasted or dropped file; returns its attachment name. */
+  upload: ((file: File) => Promise<string | null>) | null;
+}
+
+const IMAGE_EXT = "png|jpe?g|gif|webp|svg";
+const EMBED_RE = new RegExp(`^!\\[\\[([^\\]|\\n]+?\\.(?:${IMAGE_EXT}))(?:\\|([^\\]\\n]*))?\\]\\]`, "i");
+
+/** `300` or `300x200` after the `|` is a size (Obsidian), anything else the alt text. */
+function embedSize(alt: string | null): { width?: string; height?: string } {
+  const m = /^(\d+)(?:x(\d+))?$/.exec(alt?.trim() ?? "");
+  return m ? { width: m[1], height: m[2] } : {};
+}
+
+/** Obsidian embed `![[bild.png]]` / `![[bild.png|300]]` of a stored attachment. */
+export const ImageEmbed = Node.create<ImageOptions>({
+  name: "imageEmbed",
+  group: "inline",
+  inline: true,
+  atom: true,
+  draggable: true,
+
+  addOptions() {
+    return { resolve: (name) => `attachments/${encodeURIComponent(name)}`, upload: null };
+  },
+  addAttributes() {
+    return { name: { default: "" }, alt: { default: null } };
+  },
+  parseHTML() {
+    return [{ tag: "img[data-embed]", getAttrs: (el) => ({ name: (el as HTMLElement).dataset.embed, alt: (el as HTMLElement).dataset.alt ?? null }) }];
+  },
+  renderHTML({ node }) {
+    const { name, alt } = node.attrs;
+    const size = embedSize(alt);
+    return [
+      "img",
+      {
+        "data-embed": name,
+        ...(alt != null ? { "data-alt": alt } : {}),
+        src: this.options.resolve(name),
+        alt: size.width ? name : (alt ?? name),
+        title: name,
+        class: "embed-image",
+        loading: "lazy",
+        draggable: "true",
+        ...size,
+      },
+    ];
+  },
+  renderText: ({ node }) => `![[${node.attrs.name}${node.attrs.alt != null ? "|" + node.attrs.alt : ""}]]`,
+
+  markdownTokenizer: {
+    name: "imageEmbed",
+    level: "inline",
+    start: (src: string) => src.indexOf("![["),
+    tokenize(src: string) {
+      const m = EMBED_RE.exec(src);
+      if (!m) return undefined;
+      return { type: "imageEmbed", raw: m[0], name: m[1].trim(), alt: m[2] ?? null };
+    },
+  },
+  parseMarkdown: (token) => ({ type: "imageEmbed", attrs: { name: token.name, alt: token.alt } }),
+  renderMarkdown: (node) => `![[${node.attrs?.name}${node.attrs?.alt != null ? "|" + node.attrs.alt : ""}]]`,
+
+  addProseMirrorPlugins() {
+    const upload = this.options.upload;
+    if (!upload) return [];
+    const type = this.type;
+    const imageFiles = (list?: FileList | null) => [...(list ?? [])].filter((f) => f.type.startsWith("image/"));
+    const insert = async (view: EditorView, files: File[], at?: number) => {
+      for (const file of files) {
+        const name = await upload(file);
+        if (!name || view.isDestroyed) continue;
+        const pos = at ?? view.state.selection.from;
+        view.dispatch(view.state.tr.insert(Math.min(pos, view.state.doc.content.size), type.create({ name })).scrollIntoView());
+        if (at != null) at += 1;
+      }
+    };
+    return [
+      new Plugin({
+        key: new PluginKey("imagePaste"),
+        props: {
+          handlePaste(view, event) {
+            const files = imageFiles(event.clipboardData?.files);
+            if (!files.length) return false;
+            event.preventDefault();
+            insert(view, files);
+            return true;
+          },
+          handleDrop(view, event, _slice, moved) {
+            if (moved) return false;
+            const files = imageFiles(event.dataTransfer?.files);
+            if (!files.length) return false;
+            event.preventDefault();
+            insert(view, files, view.posAtCoords({ left: event.clientX, top: event.clientY })?.pos);
+            return true;
+          },
+        },
+      }),
+    ];
+  },
+});
+
+/** Standard Markdown images `![alt](src)`; relative paths (`attachments/x.png`) show the stored attachment. */
+export const MarkdownImage = Image.extend<ImageOptions & { inline: boolean; allowBase64: boolean; HTMLAttributes: Record<string, unknown> }>({
+  addOptions() {
+    return { ...this.parent!(), inline: true, resolve: (name: string) => name, upload: null };
+  },
+  renderHTML({ HTMLAttributes }) {
+    const src = String(HTMLAttributes.src ?? "");
+    const local = src && !/^(https?:|data:|blob:|aether-asset:)/i.test(src);
+    let path = src;
+    try {
+      path = decodeURI(src);
+    } catch {
+      /* keep as is */
+    }
+    return ["img", mergeAttributes(this.options.HTMLAttributes, HTMLAttributes, { src: local ? this.options.resolve(path) : src, class: "embed-image", loading: "lazy" })];
   },
 });
 

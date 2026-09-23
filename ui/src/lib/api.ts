@@ -1,6 +1,6 @@
 // Typed wrappers around the Tauri IPC commands (see src-tauri/src/lib.rs).
 
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type * as T from "./types";
 
@@ -26,6 +26,14 @@ export const api = {
   search: (query: string, limit = 30) => call<T.SearchHit[]>("search_workspace", { query, limit }),
   importVault: (path: string) => call<T.ImportReport>("vault_import", { path }),
   exportVault: (path: string) => call<number>("vault_export", { path }),
+
+  // templates + attachments
+  templates: () => call<T.Page[]>("templates_list"),
+  templatesRoot: () => call<T.Page>("templates_root"),
+  renderTemplate: (id: number, title?: string) => call<string>("template_render", { id, title: title ?? null }),
+  pageFromTemplate: (templateId: number, title: string, parentId: number | null = null) =>
+    call<T.Page>("page_from_template", { templateId, title, parentId }),
+  saveAttachment: (data: string, name: string, mime: string) => call<T.SavedAttachment>("attachment_save", { data, name, mime }),
 
   // WBS
   wbs: () => call<T.ProjectTree[]>("wbs_tree"),
@@ -87,6 +95,27 @@ export const api = {
 
 export function on<P>(event: string, handler: (payload: P) => void): Promise<UnlistenFn> {
   return listen<P>(event, (e) => handler(e.payload));
+}
+
+/** URL of a stored attachment (served by the shell's `aether-asset:` protocol); folders in `![[a/b.png]]` are ignored. */
+export function attachmentUrl(name: string) {
+  const base = name.split(/[\\/]/).pop() ?? name;
+  try {
+    return convertFileSrc(base, "aether-asset");
+  } catch {
+    return `attachments/${encodeURIComponent(base)}`;
+  }
+}
+
+/** Reads a file as base64 (without the `data:` prefix) and stores it as an attachment. */
+export async function uploadAttachment(file: File): Promise<T.SavedAttachment> {
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result));
+    r.onerror = () => reject(r.error);
+    r.readAsDataURL(file);
+  });
+  return api.saveAttachment(dataUrl.slice(dataUrl.indexOf(",") + 1), file.name || "bild", file.type);
 }
 
 /** Errors from Rust arrive as plain strings. */

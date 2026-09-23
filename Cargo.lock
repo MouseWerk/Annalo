@@ -28,6 +28,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.20",
  "tokio",
  "windows-sys 0.61.2",
@@ -38,6 +39,7 @@ name = "aether-os"
 version = "1.0.0-concept"
 dependencies = [
  "aether-core",
+ "base64 0.22.1",
  "chrono",
  "keyring",
  "serde",

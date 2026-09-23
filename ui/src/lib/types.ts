@@ -154,6 +154,8 @@ export interface Settings {
   jira_issue_map: Record<string, string>;
   theme: "system" | "light" | "dark";
   open_daily_on_start: boolean;
+  /** Template page for new daily notes. */
+  daily_template: number | null;
 }
 export interface SettingsView {
   settings: Settings;
@@ -231,8 +233,15 @@ export type ToolPlan =
 export interface ImportReport {
   pages: number;
   folders: number;
+  attachments: number;
   skipped: number;
   root_page_id: number;
+}
+export interface SavedAttachment {
+  name: string;
+  path: string;
+  size: number;
+  markdown: string;
 }
 export interface ActivityTick {
   idle_seconds: number | null;

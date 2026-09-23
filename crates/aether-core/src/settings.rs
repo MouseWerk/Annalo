@@ -36,6 +36,8 @@ pub struct Settings {
     pub theme: String,
     /// Open today's daily note on start.
     pub open_daily_on_start: bool,
+    /// Template page for new daily notes; `None` = built-in sections.
+    pub daily_template: Option<i64>,
 }
 
 impl Default for Settings {
@@ -52,6 +54,7 @@ impl Default for Settings {
             jira_issue_map: HashMap::new(),
             theme: "system".into(),
             open_daily_on_start: false,
+            daily_template: None,
         }
     }
 }

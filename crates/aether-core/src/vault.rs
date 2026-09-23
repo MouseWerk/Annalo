@@ -4,12 +4,15 @@
 //! Folders become pages; a `Name.md` next to a folder `Name/` becomes that
 //! folder page's content (the "folder note" convention). Titles are file
 //! names without extension, so Obsidian `[[links]]` keep working.
+//! Images are copied into the attachments folder under their file name, so
+//! `![[bild.png]]` embeds keep working; export writes them to `attachments/`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::attachments;
 use crate::db::Database;
 use crate::error::Result;
 use crate::model::PageNode;
@@ -18,7 +21,10 @@ use crate::model::PageNode;
 pub struct ImportReport {
     pub pages: usize,
     pub folders: usize,
-    /// Files that are not Markdown (attachments) and were left out.
+    /// Images copied into the attachments folder.
+    #[serde(default)]
+    pub attachments: usize,
+    /// Other files (PDFs, …) that were left out.
     pub skipped: usize,
     /// Page created to hold the import.
     pub root_page_id: i64,
@@ -43,27 +49,65 @@ fn read_text(p: &Path) -> Result<String> {
     Ok(text.strip_prefix('\u{feff}').unwrap_or(&text).replace("\r\n", "\n"))
 }
 
-/// Imports `dir` under a new top-level page named after the folder.
-pub fn import_vault(db: &Database, dir: &Path) -> Result<ImportReport> {
+/// Imports `dir` under a new top-level page named after the folder; images go to `attachments_dir`.
+pub fn import_vault(db: &Database, dir: &Path, attachments_dir: &Path) -> Result<ImportReport> {
     let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("Import").to_owned();
     db.atomic(|| {
         let root = db.create_page(None, &name, Some("library"))?;
         let mut report = ImportReport { root_page_id: root.id, ..Default::default() };
-        import_dir(db, dir, root.id, &mut report)?;
+        import_dir(db, dir, root.id, attachments_dir, &mut report)?;
         Ok(report)
     })
 }
 
-fn import_dir(db: &Database, dir: &Path, parent: i64, report: &mut ImportReport) -> Result<()> {
-    let mut entries: Vec<PathBuf> =
-        fs::read_dir(dir)?.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| !hidden(p)).collect();
+/// Copies an image by its file name (Obsidian resolves embeds by name). An existing
+/// file with the same name is kept, so importing twice does not duplicate anything.
+fn import_attachment(path: &Path, attachments_dir: &Path) -> Result<bool> {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else { return Ok(false) };
+    if attachments::image_extension(name).is_none() || name.contains(':') {
+        return Ok(false);
+    }
+    fs::create_dir_all(attachments_dir)?;
+    let target = attachments_dir.join(name);
+    if !target.exists() {
+        fs::copy(path, &target)?;
+    }
+    Ok(true)
+}
+
+fn visible_entries(dir: &Path) -> Result<Vec<PathBuf>> {
+    Ok(fs::read_dir(dir)?.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| !hidden(p)).collect())
+}
+
+fn has_markdown(dir: &Path) -> bool {
+    visible_entries(dir).is_ok_and(|v| v.iter().any(|p| if p.is_dir() { has_markdown(p) } else { is_md(p) }))
+}
+
+fn import_files_only(dir: &Path, attachments_dir: &Path, report: &mut ImportReport) -> Result<()> {
+    for path in visible_entries(dir)? {
+        if path.is_dir() {
+            import_files_only(&path, attachments_dir, report)?;
+        } else if import_attachment(&path, attachments_dir)? {
+            report.attachments += 1;
+        } else {
+            report.skipped += 1;
+        }
+    }
+    Ok(())
+}
+
+fn import_dir(db: &Database, dir: &Path, parent: i64, attachments_dir: &Path, report: &mut ImportReport) -> Result<()> {
+    let mut entries = visible_entries(dir)?;
     entries.sort_by_key(|p| (!p.is_dir(), p.file_name().map(|n| n.to_ascii_lowercase())));
 
     // Full folder names: `v1.2/` pairs with `v1.2.md`, whose stem is also `v1.2`.
     let folder_names: Vec<String> =
         entries.iter().filter(|p| p.is_dir()).filter_map(|p| p.file_name()?.to_str().map(str::to_owned)).collect();
     for path in &entries {
-        if path.is_dir() {
+        if path.is_dir() && !has_markdown(path) {
+            // Pure attachment folders (`assets/`) do not become pages.
+            import_files_only(path, attachments_dir, report)?;
+        } else if path.is_dir() {
             let title = path.file_name().and_then(|n| n.to_str()).unwrap_or("Ordner").to_owned();
             let note = dir.join(format!("{title}.md"));
             let page = db.create_page(Some(parent), &title, Some("folder"))?;
@@ -72,7 +116,7 @@ fn import_dir(db: &Database, dir: &Path, parent: i64, report: &mut ImportReport)
                 report.pages += 1;
             }
             report.folders += 1;
-            import_dir(db, path, page.id, report)?;
+            import_dir(db, path, page.id, attachments_dir, report)?;
         } else if is_md(path) {
             let title = stem(path);
             if folder_names.iter().any(|f| f == &title) {
@@ -81,6 +125,8 @@ fn import_dir(db: &Database, dir: &Path, parent: i64, report: &mut ImportReport)
             let page = db.create_page(Some(parent), &title, Some("file-text"))?;
             db.save_page_content(page.id, &read_text(path)?)?;
             report.pages += 1;
+        } else if import_attachment(path, attachments_dir)? {
+            report.attachments += 1;
         } else {
             report.skipped += 1;
         }
@@ -125,19 +171,39 @@ fn unique(dir: &Path, base: &str, ext: &str) -> PathBuf {
     candidate
 }
 
-/// Writes every page as a Markdown file below `dir`. Returns the number of files.
-pub fn export_vault(db: &Database, dir: &Path) -> Result<usize> {
+/// Writes every page as a Markdown file below `dir` and the embedded images to
+/// `dir/attachments/`. Returns the number of Markdown files.
+pub fn export_vault(db: &Database, dir: &Path, attachments_dir: &Path) -> Result<usize> {
     fs::create_dir_all(dir)?;
     let mut count = 0;
+    let mut embedded: Vec<String> = vec![];
     for node in db.page_tree()? {
-        export_node(db, &node, dir, &mut count)?;
+        export_node(db, &node, dir, &mut count, &mut embedded)?;
+    }
+    let out = dir.join(attachments::DIR_NAME);
+    for name in embedded {
+        if let Some(src) = attachments::resolve(attachments_dir, &name) {
+            fs::create_dir_all(&out)?;
+            fs::copy(src, out.join(&name))?;
+        }
     }
     Ok(count)
 }
 
-fn export_node(db: &Database, node: &PageNode, dir: &Path, count: &mut usize) -> Result<()> {
+fn export_node(
+    db: &Database,
+    node: &PageNode,
+    dir: &Path,
+    count: &mut usize,
+    embedded: &mut Vec<String>,
+) -> Result<()> {
     let base = file_name(&node.page.title);
     let content = db.page_doc(node.page.id)?.content;
+    for name in attachments::embeds(&content) {
+        if !embedded.contains(&name) {
+            embedded.push(name);
+        }
+    }
     let file = unique(dir, &base, ".md");
     if !content.is_empty() || node.children.is_empty() {
         fs::write(&file, content)?;
@@ -147,7 +213,7 @@ fn export_node(db: &Database, node: &PageNode, dir: &Path, count: &mut usize) ->
         let sub = unique(dir, &base, "");
         fs::create_dir_all(&sub)?;
         for child in &node.children {
-            export_node(db, child, &sub, count)?;
+            export_node(db, child, &sub, count, embedded)?;
         }
     }
     Ok(())
@@ -172,18 +238,23 @@ mod tests {
         fs::create_dir_all(vault.join("Projekte/Rollout")).unwrap();
         fs::write(vault.join("Projekte.md"), "Übersicht aller [[Rollout]]-Themen #projekt").unwrap();
         fs::write(vault.join("Projekte/Rollout/Plan.md"), "# Plan\n\nSiehe [[Projekte]]").unwrap();
-        fs::write(vault.join("Inbox.md"), "- [ ] Aufgabe").unwrap();
-        fs::write(vault.join("bild.png"), [0u8; 4]).unwrap();
+        fs::write(vault.join("Inbox.md"), "- [ ] Aufgabe\n\n![[bild.png]]").unwrap();
+        fs::create_dir_all(vault.join("assets")).unwrap();
+        fs::write(vault.join("assets/bild.png"), [7u8; 4]).unwrap();
+        fs::write(vault.join("handbuch.pdf"), [0u8; 4]).unwrap();
 
         let db = Database::open_in_memory().unwrap();
-        let r = import_vault(&db, &vault).unwrap();
-        assert_eq!((r.pages, r.folders, r.skipped), (3, 2, 1));
+        let att = tmp("att");
+        let r = import_vault(&db, &vault, &att).unwrap();
+        assert_eq!((r.pages, r.folders, r.attachments, r.skipped), (3, 2, 1, 1));
+        assert_eq!(fs::read(att.join("bild.png")).unwrap(), [7u8; 4]);
         let projekte = db.page_by_title("Projekte").unwrap().unwrap();
         assert_eq!(db.page_doc(projekte.id).unwrap().backlinks.len(), 1, "Plan links to Projekte");
         assert_eq!(db.pages_with_tag("projekt").unwrap().len(), 1);
 
         let out = tmp("out");
-        assert_eq!(export_vault(&db, &out).unwrap(), 3);
+        assert_eq!(export_vault(&db, &out, &att).unwrap(), 3);
+        assert_eq!(fs::read(out.join("attachments/bild.png")).unwrap(), [7u8; 4]);
         let root = out.join(vault.file_name().unwrap());
         assert_eq!(fs::read_to_string(root.join("Projekte/Rollout/Plan.md")).unwrap(), "# Plan\n\nSiehe [[Projekte]]");
         assert!(root.join("Projekte.md").is_file());

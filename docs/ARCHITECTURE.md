@@ -48,6 +48,12 @@ Migration v2 converts the old block model: blocks are concatenated into
   `[[Target#Heading|Alias]]` for links and `<time-entry id=… hours=… target=…>text</time-entry>` for booked time.
 - YAML frontmatter is split off before editing and re-attached on save, so imported Obsidian notes keep their properties.
 - Autosave runs 450 ms after the last change and on window blur. Renames rewrite `[[links]]` in every referencing page.
+- Images live as files in `<data_dir>/attachments/`, named by the first 16 hex digits of their SHA-256 (same image, same file),
+  and are embedded Obsidian-style as `![[name.png|300]]`. The shell serves them through the `aether-asset:` URI scheme, which
+  only answers plain file names inside that folder (no separators, `..` or hidden files; canonical path checked). Regular
+  `![alt](https://…)` images load directly (CSP `img-src https:`). Vault import copies images by name; export writes the embedded ones to `attachments/`.
+- Templates are the pages below the top-level page „Vorlagen“ (`templates.rs`); placeholders are filled by `apply_template`.
+  The daily note uses `settings.daily_template` when set.
 
 ## Key algorithms
 

@@ -1,7 +1,7 @@
 import {
   BookOpen, Box, Briefcase, Bug, Calendar, CalendarDays, ClipboardList, Code2, Database, FileText, Flag,
   Folder, FolderKanban, Globe, GraduationCap, Heart, Layers, Library, Lightbulb, ListTodo, Map, MessageSquare,
-  Notebook, Rocket, Shield, Sparkles, Star, Target, Users, Zap, Blocks, type LucideIcon,
+  Notebook, Rocket, Shield, Sparkles, Star, Target, Users, Zap, Blocks, LayoutTemplate, type LucideIcon,
 } from "lucide-react";
 
 /** Page icons users can pick; stored by name in the database. */
@@ -37,6 +37,7 @@ export const PAGE_ICONS: Record<string, LucideIcon> = {
   zap: Zap,
   heart: Heart,
   "graduation-cap": GraduationCap,
+  "layout-template": LayoutTemplate,
 };
 
 export function PageIcon({ name, size = 16, className }: { name: string | null | undefined; size?: number; className?: string }) {

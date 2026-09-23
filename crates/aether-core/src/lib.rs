@@ -6,6 +6,8 @@
 //! * [`db`] – embedded SQLite store (FTS5 full-text search, embeddings as BLOBs)
 //! * [`notes`] – Markdown documents, backlinks, tags, daily notes
 //! * [`vault`] – Obsidian vault import / Markdown export
+//! * [`attachments`] – pasted and imported images
+//! * [`templates`] – page templates with `{{datum}}`-style placeholders
 //! * [`settings`] – application settings
 //! * [`zeit`] – the `/zeit` slash-command parser
 //! * [`tracking`] – timers, manual logging, budget/ETC alerts
@@ -16,6 +18,7 @@
 
 pub mod activity;
 pub mod ai;
+pub mod attachments;
 pub mod db;
 pub mod demo;
 pub mod error;
@@ -25,6 +28,7 @@ pub mod netzplan;
 pub mod notes;
 pub mod search;
 pub mod settings;
+pub mod templates;
 pub mod tracking;
 pub mod vault;
 pub mod zeit;

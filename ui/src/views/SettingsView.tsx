@@ -7,7 +7,7 @@ import { api } from "../lib/api";
 import { useApp } from "../store/app";
 import { applyTheme, exportVault, importVault } from "../lib/actions";
 import { Badge, Button, Field, IconButton, Input, Segmented, Select, Switch, TextArea } from "../components/ui";
-import type { ConnectionTest, Settings } from "../lib/types";
+import type { ConnectionTest, Page, Settings } from "../lib/types";
 
 type Section = "ai" | "time" | "notes" | "appearance" | "about";
 const SECTIONS: { id: Section; label: string; icon: typeof Server }[] = [
@@ -455,6 +455,11 @@ function TimeSection({ draft, update }: { draft: Settings; update: (p: Partial<S
 
 function NotesSection({ draft, update }: { draft: Settings; update: (p: Partial<Settings>) => void }) {
   const [path, setPath] = useState("");
+  const [templates, setTemplates] = useState<Page[]>([]);
+  useEffect(() => {
+    api.templates().then(setTemplates, () => {});
+  }, []);
+  const missing = draft.daily_template != null && !templates.some((t) => t.id === draft.daily_template);
   return (
     <>
       <header className="settings-head">
@@ -465,8 +470,24 @@ function NotesSection({ draft, update }: { draft: Settings; update: (p: Partial<
         <Row label="Tagesnotiz beim Start öffnen">
           <Switch checked={draft.open_daily_on_start} onChange={(v) => update({ open_daily_on_start: v })} label="Tagesnotiz beim Start" />
         </Row>
+        <Row label="Vorlage für Tagesnotizen" description="Gilt für neu angelegte Tagesnotizen. Vorlagen sind die Seiten unter „Vorlagen“.">
+          <Select
+            value={draft.daily_template == null ? "" : String(draft.daily_template)}
+            onChange={(e) => update({ daily_template: e.target.value ? Number(e.target.value) : null })}
+            aria-label="Vorlage für Tagesnotizen"
+            className="w-360"
+          >
+            <option value="">Standard (Fokus und Notizen)</option>
+            {missing && templates.length > 0 && <option value={String(draft.daily_template)}>Gelöschte Vorlage</option>}
+            {templates.map((t) => (
+              <option key={t.id} value={String(t.id)}>
+                {t.title}
+              </option>
+            ))}
+          </Select>
+        </Row>
       </Group>
-      <Group title="Obsidian" description="Ordner werden zu Seiten, [[Links]] und #Tags bleiben erhalten. Anhänge werden übersprungen.">
+      <Group title="Obsidian" description="Ordner werden zu Seiten, [[Links]] und #Tags bleiben erhalten. Bilder werden als Anhänge übernommen, andere Dateien übersprungen.">
         <Row label="Vault importieren">
           <Button icon={FolderInput} onClick={() => importVault()}>
             Ordner wählen …

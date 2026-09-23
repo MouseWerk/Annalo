@@ -75,7 +75,9 @@ pub fn wiki_links(markdown: &str) -> Vec<String> {
             let Some(end) = after.find("]]") else { break };
             let inner = &after[..end];
             let target = inner.split(['|', '#']).next().unwrap_or("").trim();
-            if !target.is_empty() && !out.iter().any(|t| t.to_lowercase() == target.to_lowercase()) {
+            // `![[bild.png]]` embeds an attachment, it does not link a page.
+            let embed = rest[..start].ends_with('!') && crate::attachments::image_extension(target).is_some();
+            if !embed && !target.is_empty() && !out.iter().any(|t| t.to_lowercase() == target.to_lowercase()) {
                 out.push(target.to_owned());
             }
             rest = &after[end + 2..];
@@ -478,7 +480,15 @@ impl Database {
         self.move_page(page.id, Some(journal.id), 0)?;
         self.conn().execute("UPDATE pages SET daily_date = ?2 WHERE id = ?1", params![page.id, key])?;
         // The UI shows the weekday and date under the title, so the body starts with the sections.
-        self.save_page_content(page.id, "## Fokus\n\n- [ ] \n\n## Notizen\n\n")?;
+        let template = self.load_settings()?.daily_template.filter(|&id| id != page.id && self.page(id).is_ok());
+        let content = match template {
+            Some(id) => {
+                let time = chrono::Local::now().time();
+                self.render_template(id, &crate::templates::TemplateVars { date, time, title: key.clone() })?
+            }
+            None => "## Fokus\n\n- [ ] \n\n## Notizen\n\n".to_owned(),
+        };
+        self.save_page_content(page.id, &content)?;
         self.page(page.id)
     }
 }
@@ -593,6 +603,27 @@ mod tests {
         assert_eq!(db.daily_note(d).unwrap().id, p.id);
         assert!(db.page_doc(p.id).unwrap().content.starts_with("## Fokus"));
         assert_eq!(db.page(p.parent_id.unwrap()).unwrap().title, JOURNAL_TITLE);
+    }
+
+    #[test]
+    fn daily_note_uses_template_from_settings() {
+        let db = Database::open_in_memory().unwrap();
+        let root = db.templates_root().unwrap();
+        let t = db.create_page(Some(root.id), "Tag", None).unwrap();
+        db.save_page_content(t.id, "# {{wochentag}}, {{datum}}\n\nKW {{kw}} · {{titel}}\n").unwrap();
+        let s = crate::settings::Settings { daily_template: Some(t.id), ..Default::default() };
+        db.save_settings(&s).unwrap();
+        let p = db.daily_note(NaiveDate::from_ymd_opt(2026, 9, 23).unwrap()).unwrap();
+        assert_eq!(db.page_doc(p.id).unwrap().content, "# Mittwoch, 23.09.2026\n\nKW 39 · 2026-09-23\n");
+        // A deleted template falls back to the built-in sections.
+        db.delete_page(t.id).unwrap();
+        let q = db.daily_note(NaiveDate::from_ymd_opt(2026, 9, 24).unwrap()).unwrap();
+        assert!(db.page_doc(q.id).unwrap().content.starts_with("## Fokus"));
+    }
+
+    #[test]
+    fn image_embeds_are_not_page_links() {
+        assert_eq!(wiki_links("![[bild.png]] ![[Notiz]] [[foto.jpg]] ![[a/b.webp|200]]"), ["Notiz", "foto.jpg"]);
     }
 
     #[test]

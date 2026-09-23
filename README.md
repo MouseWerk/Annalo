@@ -11,10 +11,12 @@ assistant that runs against **your own LiteLLM server**.
 - Live-preview Markdown editor: headings, lists, task lists, tables, code blocks with syntax highlighting, highlights, links
 - `[[Wiki links]]` with autocomplete; clicking a missing page creates it; renames rewrite links everywhere
 - Backlinks under every page and in the side panel, outline, tags (`#tag`) with a tag view
-- Daily notes (Ctrl Shift D) with previous/next day navigation
+- Daily notes (Ctrl Shift D) with previous/next day navigation, optionally from a template
+- Images: paste or drop screenshots into a note; they are stored under `attachments/` and embedded as `![[name.png]]`
+- Templates: pages under „Vorlagen“ with `{{datum}}`, `{{date}}`, `{{zeit}}`, `{{titel}}`, `{{wochentag}}`, `{{kw}}`; `/Vorlage einfügen` or „Neue Seite aus Vorlage…“ in the palette
 - Slash menu (`/`), formatting toolbar on selection, find in page (Ctrl F)
 - Tabs, favorites, a drag-and-drop page tree, a command palette (Ctrl K) and a quick switcher (Ctrl O)
-- Import an Obsidian vault (folders, frontmatter, links, tags kept), export everything back to Markdown files
+- Import an Obsidian vault (folders, frontmatter, links, tags and images kept), export everything back to Markdown files
 
 **Time tracking**
 - Type `/zeit NP-8801/1020 2.5h #DEV Systemintegration` in any note and press Enter. It books the time and leaves a chip in the note

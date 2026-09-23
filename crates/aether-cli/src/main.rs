@@ -305,11 +305,14 @@ fn run(cli: Cli) -> Result<()> {
             }
         }
         Cmd::Import { dir } => {
-            let r = aether_core::vault::import_vault(&db, &dir)?;
-            println!("{} Seiten, {} Ordner importiert ({} Anhänge übersprungen)", r.pages, r.folders, r.skipped);
+            let r = aether_core::vault::import_vault(&db, &dir, &attachments_dir(&cli.db))?;
+            println!(
+                "{} Seiten, {} Ordner, {} Bilder importiert ({} Dateien übersprungen)",
+                r.pages, r.folders, r.attachments, r.skipped
+            );
         }
         Cmd::ExportVault { dir } => {
-            let n = aether_core::vault::export_vault(&db, &dir)?;
+            let n = aether_core::vault::export_vault(&db, &dir, &attachments_dir(&cli.db))?;
             println!("{n} Markdown-Dateien nach {} geschrieben", dir.display());
         }
         Cmd::Export { format, from, to, pernr, jira_map, mark } => {
@@ -339,6 +342,11 @@ fn run(cli: Cli) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Attachments live next to the database, as in the desktop app.
+fn attachments_dir(db: &std::path::Path) -> PathBuf {
+    aether_core::attachments::dir(db.parent().unwrap_or(std::path::Path::new(".")))
 }
 
 fn main() -> ExitCode {

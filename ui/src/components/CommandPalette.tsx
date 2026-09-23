@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowLeft, ArrowRight, Columns2, Plus, Briefcase, CalendarCheck2, Download, FilePlus2, FolderInput, Hash, Moon, PanelLeft, PanelRight, RefreshCw, Search, Settings, Sparkles, Square, Timer, Play, Focus,
+  ArrowLeft, ArrowRight, Columns2, LayoutTemplate, Plus, Briefcase, CalendarCheck2, Download, FilePlus2, FolderInput, Hash, Moon, PanelLeft, PanelRight, RefreshCw, Search, Settings, Sparkles, Square, Timer, Play, Focus,
 } from "lucide-react";
 import { api } from "../lib/api";
 import { useApp, savePref } from "../store/app";
@@ -14,6 +14,7 @@ import { stopTimer } from "./Sidebar";
 import { hoursFromMinutes } from "../lib/format";
 import type { SearchHit } from "../lib/types";
 import { importVault, exportVault, toggleTheme } from "../lib/actions";
+import { newPageFromTemplate } from "./Templates";
 
 interface Item {
   id: string;
@@ -150,6 +151,7 @@ export function CommandPalette() {
 
     const commands: Omit<Item, "section">[] = [
       { id: "new", title: "Neue Seite", icon: ic(FilePlus2), hint: "Ctrl N", run: () => createSubpage(null) },
+      { id: "from-template", title: "Neue Seite aus Vorlage…", icon: ic(LayoutTemplate), run: () => newPageFromTemplate() },
       {
         id: "today",
         title: "Heutige Tagesnotiz",
