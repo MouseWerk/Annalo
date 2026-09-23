@@ -6,5 +6,6 @@ cd "$(dirname "$0")/.."
 npm --prefix ui run build
 cargo build -p aether-os --features custom-protocol
 cd e2e
+rm -f screenshots/FAIL-*
 [ -d node_modules ] || npm ci
 AETHER_APP="$PWD/../target/debug/aether-os" node --test --test-concurrency=1 --test-reporter=spec tests/*.test.js
