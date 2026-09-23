@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowLeft, ArrowRight, Columns2, Plus, Briefcase, CalendarCheck2, Download, FilePlus2, FolderInput, Hash, Moon, PanelLeft, PanelRight, RefreshCw, Search, Settings, Sparkles, Square, Timer, Trash2, Play, Focus, ListChecks, LayoutTemplate,
+  ArrowLeft, ArrowRight, Columns2, Plus, Briefcase, CalendarCheck2, Download, FilePlus2, FolderInput, Hash, Moon, PanelLeft, PanelRight, RefreshCw, Search, Settings, Sparkles, Square, Timer, Trash2, Play, Focus, ListChecks, LayoutTemplate, Mail,
 } from "lucide-react";
 import { api } from "../lib/api";
 import { useApp, savePref } from "../store/app";
@@ -11,7 +11,7 @@ import { openAssistant, openToday } from "./Ribbon";
 import { PageIcon } from "./icons";
 import { createSubpage } from "../views/PageView";
 import { stopTimer } from "./Sidebar";
-import { hoursFromMinutes } from "../lib/format";
+import { hoursFromMinutes, isoDay, isoWeek, weekStart } from "../lib/format";
 import type { SearchHit } from "../lib/types";
 import { importVault, exportVault, toggleTheme } from "../lib/actions";
 import { newPageFromTemplate } from "./Templates";
@@ -171,6 +171,7 @@ export function CommandPalette() {
       { id: "tasks", title: "Aufgaben", subtitle: "Offene Aufgaben aus allen Notizen", icon: ic(ListChecks), hint: "Ctrl Shift A", run: () => s().openTab({ kind: "tasks" }) },
       { id: "projects", title: "Projekte öffnen", icon: ic(Briefcase), run: () => s().openTab({ kind: "projects" }) },
       { id: "assistant", title: "Assistent fragen", icon: ic(Sparkles), hint: "Ctrl J", run: () => openAssistant() },
+      { id: "weekly-report", title: "Wochenbericht erstellen", subtitle: "Status-E-Mail aus Buchungen und erledigten Aufgaben", icon: ic(Mail), run: () => askWeeklyReport() },
       { id: "trash", title: "Papierkorb", icon: ic(Trash2), run: () => s().openTab({ kind: "trash" }) },
       { id: "settings", title: "Einstellungen", icon: ic(Settings), hint: "Ctrl ,", run: () => s().openTab({ kind: "settings" }) },
       { id: "sidebar", title: "Seitenleiste umschalten", icon: ic(PanelLeft), hint: "Ctrl \\", run: () => { const v = !s().sidebarOpen; s().set({ sidebarOpen: v }); savePref("aether.sidebar", v); } },
@@ -302,6 +303,20 @@ export function CommandPalette() {
       </div>
     </div>
   );
+}
+
+/** Opens the assistant with a request for this week's status e-mail (time_summary + list_tasks). */
+export function askWeeklyReport(now = new Date()) {
+  const from = isoDay(weekStart(now));
+  const to = isoDay(now);
+  const kw = isoWeek(now);
+  const text = [
+    `Erstelle eine Status-E-Mail auf Deutsch für KW ${kw} (${from} bis ${to}).`,
+    `Hole die gebuchten Stunden mit dem Werkzeug time_summary (from "${from}", to "${to}") und die erledigten Aufgaben mit list_tasks (status "done").`,
+    "Gliederung: Betreff, kurze Zusammenfassung, Erledigt je Netzplan/Vorgang mit Stunden und Stichpunkten aus den Buchungstexten, erledigte Aufgaben, nächste Schritte, Summe der Stunden.",
+    "Antworte nur mit der E-Mail in Markdown, ohne Vorbemerkung.",
+  ].join("\n");
+  useApp.getState().set({ panelOpen: true, panelTab: "assistant", pendingAsk: { text, pageTitle: `Wochenbericht KW ${kw}`, tools: true } });
 }
 
 const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");

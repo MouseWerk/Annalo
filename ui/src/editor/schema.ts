@@ -10,7 +10,7 @@ import Highlight from "@tiptap/extension-highlight";
 import { Placeholder } from "@tiptap/extensions";
 import { Markdown } from "@tiptap/markdown";
 import Link from "@tiptap/extension-link";
-import { Callouts, ImageEmbed, MarkdownImage, SlashCommand, TagHighlight, TimeEntryChip, WikiLink, WikiLinkSuggest, ZeitCommand, type LinkSuggestItem, type ZeitResult } from "./extensions";
+import { Callouts, ImageEmbed, MarkdownImage, SlashCommand, TagHighlight, TimeEntryChip, WikiLink, WikiLinkSuggest, ZeitCommand, ZeitSuggest, type LinkSuggestItem, type ZeitResult, type ZeitSuggestItem } from "./extensions";
 import { FindInPage } from "./find";
 
 const lowlight = createLowlight(common);
@@ -134,6 +134,10 @@ export interface SchemaOptions {
   uploadImage?: (file: File) => Promise<string | null>;
   onPickTemplate?: (editor: Editor) => void;
   onPickImage?: (editor: Editor) => void;
+  /** `/zeit` autocomplete: Netzplan/Vorgang options for the typed query. */
+  zeitRefs?: (query: string) => Promise<ZeitSuggestItem[]>;
+  /** `/zeit` autocomplete: Leistungsarten after `#`. */
+  zeitLeistungsarten?: (query: string) => Promise<ZeitSuggestItem[]>;
 }
 
 export function buildExtensions(o: SchemaOptions = {}): Extensions {
@@ -163,6 +167,7 @@ export function buildExtensions(o: SchemaOptions = {}): Extensions {
     MarkdownImage.configure({ resolve: o.attachmentUrl ?? ((n) => n) }),
     TimeEntryChip,
     ZeitCommand.configure({ book: o.book ?? (async () => null), onLost: o.onZeitLost ?? (() => {}) }),
+    ZeitSuggest.configure({ refs: o.zeitRefs ?? (async () => []), leistungsarten: o.zeitLeistungsarten ?? (async () => []) }),
     TagHighlight.configure({ onOpen: o.onOpenTag ?? (() => {}) }),
     FindInPage,
     Callouts,

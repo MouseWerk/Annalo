@@ -68,17 +68,21 @@ pub struct ContextChunk {
 }
 
 /// Exact cosine top-k over all embedded blocks: `(block_id, similarity)`.
+/// Template pages („Vorlagen“) are skipped: their placeholders are no knowledge.
 pub fn vector_top_k(db: &Database, query: &[f32], k: usize) -> Result<Vec<(i64, f32)>> {
+    let templates = db.template_page_ids()?;
     // Trashed pages are not searched.
     let mut st = db.conn().prepare_cached(
-        "SELECT b.id, b.vector_embedding FROM notes_blocks b JOIN pages p ON p.id = b.page_id
+        "SELECT b.id, b.vector_embedding, b.page_id FROM notes_blocks b JOIN pages p ON p.id = b.page_id
          WHERE b.vector_embedding IS NOT NULL AND p.deleted_at IS NULL",
     )?;
     let mut scored: Vec<(i64, f32)> = st
         .query_map([], |r| {
             let blob: Vec<u8> = r.get(1)?;
-            Ok((r.get::<_, i64>(0)?, cosine(query, &decode(&blob))))
+            Ok((r.get::<_, i64>(0)?, cosine(query, &decode(&blob)), r.get::<_, i64>(2)?))
         })?
+        .filter(|r| r.as_ref().map_or(true, |(_, _, page)| !templates.contains(page)))
+        .map(|r| r.map(|(id, score, _)| (id, score)))
         .collect::<rusqlite::Result<_>>()?;
     scored.sort_by(|a, b| b.1.total_cmp(&a.1));
     scored.truncate(k);
@@ -100,7 +104,7 @@ fn best_chunk(db: &Database, page_id: i64, query_text: &str) -> Result<Option<i6
 }
 
 /// Hybrid retrieval: vector similarity (when a query embedding is given) fused
-/// with keyword search over blocks and time logs.
+/// with keyword search over blocks and time logs. Template pages are left out.
 pub fn retrieve(
     db: &Database,
     query_text: &str,
@@ -114,6 +118,7 @@ pub fn retrieve(
         Entry(i64),
     }
     let mut fused: HashMap<Key, f64> = HashMap::new();
+    let templates = db.template_page_ids()?;
 
     if let Some(q) = query_embedding {
         for (rank, (id, _)) in vector_top_k(db, q, k * 2)?.into_iter().enumerate() {
@@ -124,6 +129,7 @@ pub fn retrieve(
         let key = match hit {
             // Title hits carry no passage; the page's chunks are found via content.
             SearchHit::Page { .. } => continue,
+            SearchHit::Note { page_id, .. } if templates.contains(&page_id) => continue,
             SearchHit::Note { page_id, .. } => match best_chunk(db, page_id, query_text)? {
                 Some(id) => Key::Block(id),
                 None => continue,
@@ -233,5 +239,33 @@ mod tests {
         let ids: Vec<_> = chunks.iter().filter_map(|c| c.block_id).collect();
         assert!(ids.contains(&a) && ids.contains(&b), "{chunks:?}");
         assert!(format_context(&chunks).contains("[1] (Seite: Architektur)"));
+    }
+
+    #[test]
+    fn template_pages_are_not_retrieved() {
+        let db = Database::open_in_memory().unwrap();
+        let root = db.templates_root().unwrap();
+        db.save_page_content(root.id, "Vorlagen für Statusberichte zum Rollout.").unwrap();
+        let tpl = db.create_page(Some(root.id), "Statusbericht", None).unwrap();
+        db.save_page_content(tpl.id, "# Statusbericht {{kw}}\n\nRollout-Status: …").unwrap();
+        let nested = db.create_page(Some(tpl.id), "Statusbericht kurz", None).unwrap();
+        db.save_page_content(nested.id, "Rollout kurz: {{datum}}").unwrap();
+        let note = db.create_page(None, "Projekt", None).unwrap();
+        db.save_page_content(note.id, "Der Rollout startet im Oktober.").unwrap();
+        for (i, (id, _)) in pending_blocks(&db, 10).unwrap().into_iter().enumerate() {
+            store_embedding(&db, id, &[1.0, i as f32 * 0.01]).unwrap();
+        }
+
+        let pages = |chunks: Vec<ContextChunk>| chunks.into_iter().filter_map(|c| c.page_id).collect::<Vec<_>>();
+        assert_eq!(pages(retrieve(&db, "Rollout", None, 5).unwrap()), [note.id], "keyword");
+        assert_eq!(pages(retrieve(&db, "Rollout", Some(&[1.0, 0.0]), 5).unwrap()), [note.id], "keyword + vector");
+        let vec_pages: Vec<i64> = vector_top_k(&db, &[1.0, 0.0], 10)
+            .unwrap()
+            .into_iter()
+            .map(|(id, _)| {
+                db.conn().query_row("SELECT page_id FROM notes_blocks WHERE id = ?1", [id], |r| r.get(0)).unwrap()
+            })
+            .collect();
+        assert_eq!(vec_pages, [note.id], "vector");
     }
 }

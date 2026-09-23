@@ -11,6 +11,7 @@ import { useApp } from "../store/app";
 import { hoursFromMinutes } from "../lib/format";
 import { pageSuggestItem, splitFrontmatter, type LinkSuggestItem } from "./extensions";
 import { buildExtensions, toMarkdown } from "./schema";
+import { zeitLaItems, zeitRefItems } from "./zeit-source";
 import { IconButton } from "../components/ui";
 import { findKey } from "./find";
 import { ChevronDown, ChevronUp, Search, X } from "lucide-react";
@@ -164,6 +165,8 @@ export function NoteEditor({
             return null;
           }
         },
+        zeitRefs: zeitRefItems,
+        zeitLeistungsarten: zeitLaItems,
         attachmentUrl,
         uploadImage: async (file) => {
           try {

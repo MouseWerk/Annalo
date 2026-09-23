@@ -14,6 +14,7 @@ import {
 import { isoDay } from "../lib/format";
 import { popupRenderer, type PopupItem } from "./suggestion-popup";
 import { PageIcon } from "../components/icons";
+import { zeitToken } from "./zeit-suggest";
 
 // ------------------------------------------------------------- wiki links
 
@@ -481,6 +482,63 @@ export const ZeitCommand = Extension.create<
         return true;
       },
     };
+  },
+});
+
+/** An option of the `/zeit` autocomplete; `insert` replaces the token under the caret. */
+export interface ZeitSuggestItem extends PopupItem {
+  insert: string;
+}
+
+export const zeitSuggestKey = new PluginKey("zeitSuggest");
+
+/**
+ * Autocomplete inside a `/zeit …` paragraph: Netzplan/Vorgang for the first argument,
+ * Leistungsarten after `#`. Runs before the Enter shortcut of ZeitCommand (higher
+ * priority), so Enter picks an item while the popup shows one and books otherwise.
+ */
+export const ZeitSuggest = Extension.create<{
+  refs: (query: string) => Promise<ZeitSuggestItem[]>;
+  leistungsarten: (query: string) => Promise<ZeitSuggestItem[]>;
+}>({
+  name: "zeitSuggest",
+  priority: 1000,
+  addOptions() {
+    return { refs: async () => [], leistungsarten: async () => [] };
+  },
+  addProseMirrorPlugins() {
+    const opts = this.options;
+    return [
+      Suggestion<ZeitSuggestItem>({
+        editor: this.editor,
+        pluginKey: zeitSuggestKey,
+        char: "/zeit",
+        findSuggestionMatch: ({ $position }) => {
+          if ($position.parent.type.name !== "paragraph") return null;
+          const before = $position.parent.textBetween(0, $position.parentOffset, undefined, "\ufffc");
+          const tok = zeitToken(before);
+          if (!tok) return null;
+          const from = $position.start() + tok.from;
+          return { range: { from, to: $position.pos }, query: (tok.kind === "la" ? "#" : "") + tok.query, text: before.slice(tok.from) };
+        },
+        items: ({ query }) => (query.startsWith("#") ? opts.leistungsarten(query.slice(1)) : opts.refs(query)),
+        command: ({ editor, range, props }) => {
+          // Replace the whole word, also the part after the caret.
+          const $to = editor.state.doc.resolve(range.to);
+          const after = $to.parent.textBetween($to.parentOffset, $to.parent.content.size, undefined, "\ufffc");
+          const rest = /^\S*/.exec(after)![0].length;
+          const spaceFollows = /^\s/.test(after.slice(rest));
+          const to = range.to + rest;
+          editor
+            .chain()
+            .focus()
+            .insertContentAt({ from: range.from, to }, { type: "text", text: props.insert + (spaceFollows ? "" : " ") })
+            .setTextSelection(range.from + props.insert.length + 1)
+            .run();
+        },
+        render: popupRenderer<ZeitSuggestItem>(null),
+      }),
+    ];
   },
 });
 

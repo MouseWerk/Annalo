@@ -3,7 +3,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  ArrowUp, Check, ChevronDown, Copy, FilePlus2, FileText, Gauge, GitBranch, Globe, ListChecks, Loader2, Plus, Search, Settings2, ShieldAlert, Sparkles, Square, Terminal, Timer, Wrench, X,
+  ArrowUp, CalendarRange, Check, ChevronDown, Copy, FilePlus2, FileText, Gauge, GitBranch, Globe, ListChecks, Loader2, Plus, Search, Settings2, ShieldAlert, Sparkles, Square, Terminal, Timer, Wrench, X,
 } from "lucide-react";
 import { api, errorText, on } from "../lib/api";
 import { renderMarkdown } from "../lib/markdown";
@@ -23,6 +23,8 @@ type Turn =
       sources?: ContextChunk[];
       error?: string;
       cancelled?: boolean;
+      /** Offers „In neue Seite einfügen“ with this title (weekly report). */
+      pageTitle?: string;
     }
   | { id: string; kind: "tool"; name: string; label: string; status: "running" | "done" | "error" | "pending" | "rejected"; summary?: string; output?: string; decide?: (ok: boolean) => void };
 
@@ -31,6 +33,7 @@ const TOOL_META: Record<string, { label: string; icon: typeof Search }> = {
   search_workspace: { label: "Workspace durchsuchen", icon: Search },
   budget_status: { label: "Budget abfragen", icon: Gauge },
   list_tasks: { label: "Aufgaben abfragen", icon: ListChecks },
+  time_summary: { label: "Zeitübersicht abfragen", icon: CalendarRange },
   run_powershell: { label: "PowerShell ausführen", icon: Terminal },
   git: { label: "Git-Befehl", icon: GitBranch },
   http_request: { label: "HTTP-Anfrage", icon: Globe },
@@ -111,7 +114,8 @@ export function AssistantPanel() {
     const q = s().pendingAsk;
     if (!q || busy) return;
     s().set({ pendingAsk: null });
-    send(q);
+    if (typeof q === "string") send(q);
+    else send(q.text, { pageTitle: q.pageTitle, tools: q.tools });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingAsk, busy]);
 
@@ -161,8 +165,9 @@ export function AssistantPanel() {
     return results;
   };
 
-  async function send(textArg?: string) {
+  async function send(textArg?: string, opts: { pageTitle?: string; tools?: boolean } = {}) {
     const text = (textArg ?? input).trim();
+    const tools = opts.tools ?? useTools;
     if (!text || busy) return;
     setInput("");
     setBusy(true);
@@ -175,8 +180,8 @@ export function AssistantPanel() {
         const aid = uid();
         const rid = crypto.randomUUID();
         requestId.current = rid;
-        setTurns((ts) => [...ts, { id: aid, kind: "assistant", text: "", streaming: true }]);
-        const out = await api.chat({ requestId: rid, messages: history.current, useTools, tier, pageId: includePage && pageContext ? pageContext.id : null });
+        setTurns((ts) => [...ts, { id: aid, kind: "assistant", text: "", streaming: true, pageTitle: opts.pageTitle }]);
+        const out = await api.chat({ requestId: rid, messages: history.current, useTools: tools, tier, pageId: includePage && pageContext ? pageContext.id : null });
         const c = out.completion;
         requestId.current = null;
         update(aid, {
@@ -369,7 +374,7 @@ export function AssistantPanel() {
 function summarizeArgs(c: ToolCall) {
   try {
     const a = JSON.parse(c.function.arguments);
-    return a.command ?? a.query ?? a.netzplan ?? "";
+    return a.command ?? a.query ?? a.netzplan ?? (a.from && a.to ? `${a.from} – ${a.to}` : "");
   } catch {
     return "";
   }
@@ -479,15 +484,19 @@ function TurnView({ turn }: { turn: Turn }) {
           />
           <IconButton
             icon={FilePlus2}
-            label="Als Seite speichern"
+            label={turn.pageTitle ? "In neue Seite einfügen" : "Als Seite speichern"}
             size={22}
             iconSize={12}
             tooltipSide="top"
             onClick={async () => {
-              const title = turn.text.split("\n").find((l) => l.trim())?.replace(/^#+\s*/, "").slice(0, 60) || "Antwort";
-              const p = await api.createPage(title, null, "sparkles", turn.text);
-              await s().refreshTree();
-              s().openPage(p.id, { newTab: true });
+              const title = turn.pageTitle ?? (turn.text.split("\n").find((l) => l.trim())?.replace(/^#+\s*/, "").slice(0, 60) || "Antwort");
+              try {
+                const p = await api.createPage(title, null, turn.pageTitle ? "file-text" : "sparkles", turn.text);
+                await s().refreshTree();
+                s().openPage(p.id, { newTab: true });
+              } catch (e) {
+                s().error("Seite nicht angelegt", e);
+              }
             }}
           />
           </span>
