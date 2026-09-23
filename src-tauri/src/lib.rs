@@ -22,6 +22,7 @@ use aether_core::export::{self, ExportFormat, ExportOptions, ExportResult};
 use aether_core::model::*;
 use aether_core::netzplan::{self, Schedule};
 use aether_core::notes::PageDoc;
+use aether_core::report;
 use aether_core::search::{self, SearchHit};
 use aether_core::settings::Settings;
 use aether_core::tasks::{Task, TaskFilter};
@@ -1043,6 +1044,13 @@ fn ai_run_workspace_tool(app: AppHandle, state: State<AppState>, name: String, a
         "budget_status" => {
             let np = db.netzplan_by_ref(&arg("netzplan"))?;
             serde_json::to_string(&tracking::budget_status(&db, np.id, &t)?)?
+        }
+        "time_summary" => {
+            let date = |k: &str| {
+                NaiveDate::parse_from_str(arg(k).trim(), "%Y-%m-%d")
+                    .map_err(|_| Error::Parse(format!("'{k}' muss ein Datum YYYY-MM-DD sein")))
+            };
+            serde_json::to_string(&report::time_summary(&db, date("from")?, date("to")?, &Local)?)?
         }
         "list_tasks" => {
             let filter: TaskFilter = serde_json::from_value(args.clone())?;

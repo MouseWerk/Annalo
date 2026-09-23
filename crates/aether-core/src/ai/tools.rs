@@ -1,6 +1,6 @@
 //! Function calling: tool definitions offered to the model and a guarded executor.
 //!
-//! Workspace tools (logging time, searching, budget lookups) run directly.
+//! Workspace tools (logging time, searching, budget lookups, time summaries) run directly.
 //! System tools (PowerShell, Git, REST) never run on the model's say-so alone:
 //! [`classify`] marks them [`Risk::RequiresApproval`] and the shell must show
 //! the exact command to the user before calling [`execute_system_tool`].
@@ -58,6 +58,13 @@ pub fn definitions() -> Vec<Value> {
                 "tag": { "type": "string", "description": "Tag der Aufgabe oder ihrer Seite, ohne #" } } }),
         ),
         f(
+            "time_summary",
+            "Gebuchte Stunden je Netzplan/Vorgang mit den Beschreibungen der Einträge und Summen je Tag, für Statusberichte.",
+            json!({ "type": "object", "properties": {
+                "from": { "type": "string", "description": "Erster Tag, YYYY-MM-DD" },
+                "to": { "type": "string", "description": "Letzter Tag einschließlich, YYYY-MM-DD" } }, "required": ["from", "to"] }),
+        ),
+        f(
             "run_powershell",
             "Führt ein PowerShell-Skript aus. Der Nutzer muss jede Ausführung bestätigen.",
             json!({ "type": "object", "properties": { "script": { "type": "string" }, "cwd": { "type": "string" } }, "required": ["script"] }),
@@ -82,7 +89,7 @@ pub fn definitions() -> Vec<Value> {
 
 pub fn classify(tool: &str) -> Risk {
     match tool {
-        "log_time" | "search_workspace" | "budget_status" | "list_tasks" => Risk::Workspace,
+        "log_time" | "search_workspace" | "budget_status" | "list_tasks" | "time_summary" => Risk::Workspace,
         _ => Risk::RequiresApproval,
     }
 }
@@ -244,6 +251,12 @@ mod tests {
                 Risk::RequiresApproval => {}
             }
         }
+    }
+
+    #[test]
+    fn time_summary_is_offered_as_workspace_tool() {
+        assert!(definitions().iter().any(|d| d["function"]["name"] == "time_summary"));
+        assert_eq!(classify("time_summary"), Risk::Workspace);
     }
 
     #[test]

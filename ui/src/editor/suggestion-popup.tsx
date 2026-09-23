@@ -83,14 +83,19 @@ export const SuggestionPopup = forwardRef<PopupHandle, PopupProps>(({ items, com
   );
 });
 
-/** Mounts a SuggestionPopup next to the caret and forwards keyboard events. */
-export function popupRenderer<I extends PopupItem>(empty?: string): SuggestionOptions<I>["render"] {
+/**
+ * Mounts a SuggestionPopup next to the caret and forwards keyboard events.
+ * With `empty === null` the popup hides while nothing matches (and keys pass through).
+ */
+export function popupRenderer<I extends PopupItem>(empty?: string | null): SuggestionOptions<I>["render"] {
   return () => {
     let renderer: ReactRenderer<PopupHandle, PopupProps> | null = null;
     let host: HTMLDivElement | null = null;
     const place = (props: SuggestionProps<I>) => {
+      if (!host) return;
+      host.style.display = empty === null && !props.items.length ? "none" : "";
       const rect = props.clientRect?.();
-      if (!rect || !host) return;
+      if (!rect) return;
       const h = host.offsetHeight || 280;
       const below = rect.bottom + 6 + h < window.innerHeight;
       host.style.left = `${Math.min(rect.left, window.innerWidth - 340)}px`;
@@ -103,13 +108,13 @@ export function popupRenderer<I extends PopupItem>(empty?: string): SuggestionOp
         document.body.appendChild(host);
         renderer = new ReactRenderer(SuggestionPopup, {
           editor: props.editor,
-          props: { items: props.items, command: props.command as (i: PopupItem) => void, empty },
+          props: { items: props.items, command: props.command as (i: PopupItem) => void, empty: empty ?? undefined },
         });
         host.appendChild(renderer.element);
         requestAnimationFrame(() => place(props));
       },
       onUpdate: (props) => {
-        renderer?.updateProps({ items: props.items, command: props.command as (i: PopupItem) => void, empty });
+        renderer?.updateProps({ items: props.items, command: props.command as (i: PopupItem) => void, empty: empty ?? undefined });
         requestAnimationFrame(() => place(props));
       },
       onKeyDown: (props) => {

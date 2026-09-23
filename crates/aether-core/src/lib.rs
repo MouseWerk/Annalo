@@ -14,6 +14,7 @@
 //! * [`tasks`] – task items across all notes (due dates, priorities)
 //! * [`zeit`] – the `/zeit` slash-command parser
 //! * [`tracking`] – timers, manual logging, budget/ETC alerts
+//! * [`report`] – time summaries per Netzplan/Vorgang and day (status reports)
 //! * [`netzplan`] – critical path method (CPM) over Vorgänge
 //! * [`export`] – SAP PS (CATS), Jira worklog, CSV and JSON exports
 //! * [`activity`] – idle detection and active window probing (Win32 on Windows)
@@ -30,6 +31,7 @@ pub mod export;
 pub mod model;
 pub mod netzplan;
 pub mod notes;
+pub mod report;
 pub mod search;
 pub mod settings;
 pub mod tasks;

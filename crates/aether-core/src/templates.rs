@@ -1,6 +1,8 @@
 //! Templates: pages below the top-level page „Vorlagen“. Placeholders like
 //! `{{datum}}` are filled in when a template is inserted or a page is created from it.
 
+use std::collections::HashSet;
+
 use chrono::{Datelike, NaiveDate, NaiveTime, Timelike};
 use rusqlite::OptionalExtension;
 
@@ -96,6 +98,14 @@ impl Database {
             walk(&node.children, &mut out);
         }
         Ok(out)
+    }
+
+    /// IDs of „Vorlagen“ itself and every live page below it. Creates nothing.
+    pub fn template_page_ids(&self) -> Result<HashSet<i64>> {
+        let Some(root) = self.find_templates_root()? else { return Ok(HashSet::new()) };
+        let mut ids: HashSet<i64> = self.list_templates()?.into_iter().map(|p| p.id).collect();
+        ids.insert(root.id);
+        Ok(ids)
     }
 
     /// Whether `id` is a live page below „Vorlagen“.

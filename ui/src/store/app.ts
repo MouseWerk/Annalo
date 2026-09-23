@@ -45,6 +45,15 @@ export interface ConfirmRequest {
 export type ConfirmChoice = "confirm" | "alt" | "cancel";
 type ConfirmOpts = { title: string; message: string; confirmLabel?: string; danger?: boolean };
 
+/** A preset request for the assistant (e.g. the weekly report). */
+export interface PendingAsk {
+  text: string;
+  /** Title for „In neue Seite einfügen“ on the answer. */
+  pageTitle?: string;
+  /** Offer the tools even if the user switched them off. */
+  tools?: boolean;
+}
+
 interface State {
   confirmRequest: ConfirmRequest | null;
   confirm: (opts: ConfirmOpts) => Promise<boolean>;
@@ -84,7 +93,7 @@ interface State {
   /** First start: show the welcome choice instead of the start page. */
   onboarding: boolean;
   /** Question from the palette, consumed by the assistant panel once it is mounted. */
-  pendingAsk: string | null;
+  pendingAsk: string | PendingAsk | null;
 
   openTab: (loc: Loc, opts?: OpenOpts) => void;
   openPage: (pageId: number, opts?: OpenOpts) => void;

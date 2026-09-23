@@ -81,6 +81,9 @@ Migration v2 converts the old block model: blocks are concatenated into
   Privacy markers override everything, including manual overrides.
 - **RAG** (`ai/rag.rs`): exact cosine scan over stored embeddings fused with FTS5 BM25
   hits (reciprocal rank fusion), so exact identifiers like `NP-8801` are always found.
+  Template pages (the „Vorlagen“ subtree) are never retrieved.
+- **Time summary** (`report.rs`): finished entries of local days `from..=to` grouped per Netzplan/Vorgang
+  (hours, deduplicated descriptions) plus a total per day; offered to the assistant as the `time_summary` tool.
 - **Streaming** (`ai/client.rs`): SSE decoder tolerant of split chunks and keep-alives;
   tool-call deltas are merged by index; `stream_options.include_usage` for exact counts,
   LiteLLM's `x-litellm-response-cost` header preferred for cost, the price table as fallback.

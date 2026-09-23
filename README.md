@@ -21,6 +21,7 @@ assistant that runs against **your own LiteLLM server**.
 
 **Time tracking**
 - Type `/zeit NP-8801/1020 2.5h #DEV Systemintegration` in any note and press Enter. It books the time and leaves a chip in the note
+- `/zeit` autocompletes: Netzplan/Vorgang (recently booked first, with the remaining plan hours) and, after `#`, the Leistungsart
 - Timer with idle detection (inactive time can be subtracted), quick booking, manual entries
 - Weekly timesheet with a grid per Netzplan/Vorgang, release workflow, and export to SAP CATS, Jira worklogs, CSV or JSON
 - Projects view: budget, booked hours, remaining effort (ETC), forecast (EAC), critical path and float, as tables
@@ -30,6 +31,7 @@ assistant that runs against **your own LiteLLM server**.
 - Streams answers from your LiteLLM server; knows the open page and searches notes and time logs (keyword + semantic)
 - Model routing: local, standard and reasoning models; `#privat` content always stays on the local model
 - Can book time, search and check budgets; system tools (PowerShell, git, HTTP) only run after you approve them
+- „Wochenbericht erstellen“ (Ctrl K) drafts this week's status e-mail from your bookings and done tasks; „In neue Seite einfügen“ saves it as „Wochenbericht KW nn“
 - Shows sources, time to first token, tokens/s, tokens and cost per answer and per session
 
 ## Connecting your LiteLLM server
