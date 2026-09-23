@@ -282,12 +282,12 @@
 :root[data-theme="light"] .prose pre .hljs-title, :root[data-theme="light"] .prose pre .hljs-function { color: #1d4ed8; }
 :root[data-theme="light"] .prose pre .hljs-type { color: #a16207; }
 
+/* Zero-height sticky anchor: the find bar floats over the text without reflowing it. */
+.find-anchor { position: sticky; top: 8px; height: 0; z-index: 20; }
 .find-bar {
-  position: sticky;
-  top: 8px;
-  z-index: 20;
-  float: right;
-  margin: -8px -24px 0 0;
+  position: absolute;
+  top: -8px;
+  right: -24px;
   display: flex;
   align-items: center;
   gap: 6px;

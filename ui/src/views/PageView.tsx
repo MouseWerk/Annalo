@@ -365,7 +365,8 @@ export async function deletePage(page: { id: number; title: string }) {
   const message = kids
     ? `„${page.title}“ und ${kids} ${kids === 1 ? "Unterseite" : "Unterseiten"} werden in den Papierkorb verschoben. Nach 30 Tagen werden sie endgültig gelöscht.`
     : `„${page.title}“ wird in den Papierkorb verschoben. Nach 30 Tagen wird die Seite endgültig gelöscht.`;
-  if (!(await s.confirm({ title: "Seite löschen?", message, confirmLabel: "Löschen", danger: true }))) return;
+  // A single page just moves to the trash (undo in the toast); only subtrees ask first.
+  if (kids && !(await s.confirm({ title: "Seite löschen?", message, confirmLabel: "Löschen", danger: true }))) return;
   try {
     await api.deletePage(page.id);
     await s.refreshTree();

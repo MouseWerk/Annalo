@@ -75,8 +75,20 @@ fn import_attachment(path: &Path, attachments_dir: &Path) -> Result<bool> {
     Ok(true)
 }
 
+/// Visible files and folders of `dir`. Symlinks are skipped entirely: following them could
+/// copy files from outside the vault (e.g. `~/.ssh`) or recurse forever.
 fn visible_entries(dir: &Path) -> Result<Vec<PathBuf>> {
-    Ok(fs::read_dir(dir)?.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| !hidden(p)).collect())
+    Ok(fs::read_dir(dir)?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_ok_and(|t| !t.is_symlink()))
+        .map(|e| e.path())
+        .filter(|p| !hidden(p))
+        .collect())
+}
+
+/// A regular file, not a symlink to one.
+fn is_plain_file(p: &Path) -> bool {
+    fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_file())
 }
 
 fn has_markdown(dir: &Path) -> bool {
@@ -111,7 +123,7 @@ fn import_dir(db: &Database, dir: &Path, parent: i64, attachments_dir: &Path, re
             let title = path.file_name().and_then(|n| n.to_str()).unwrap_or("Ordner").to_owned();
             let note = dir.join(format!("{title}.md"));
             let page = db.create_page(Some(parent), &title, Some("folder"))?;
-            if note.is_file() {
+            if is_plain_file(&note) {
                 db.save_page_content(page.id, &read_text(&note)?)?;
                 report.pages += 1;
             }
@@ -272,5 +284,33 @@ mod tests {
         assert_eq!(file_name("CON"), "CON_");
         assert_eq!(file_name("nul.txt"), "nul.txt_");
         assert_eq!(file_name(&"x".repeat(300)).len(), 120);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinks_are_skipped() {
+        use std::os::unix::fs::symlink;
+        let outside = tmp("outside");
+        fs::write(outside.join("id_rsa.png"), [1u8; 4]).unwrap();
+        fs::write(outside.join("Geheim.md"), "geheim").unwrap();
+        let vault = tmp("links");
+        fs::write(vault.join("Echt.md"), "echt").unwrap();
+        symlink(&outside, vault.join("ssh")).unwrap();
+        symlink(outside.join("id_rsa.png"), vault.join("key.png")).unwrap();
+        symlink(outside.join("Geheim.md"), vault.join("Link.md")).unwrap();
+        fs::create_dir_all(vault.join("Ordner")).unwrap();
+        fs::write(vault.join("Ordner/Innen.md"), "innen").unwrap();
+        symlink(&vault, vault.join("Ordner/schleife")).unwrap();
+        symlink(outside.join("Geheim.md"), vault.join("Ordner.md")).unwrap();
+
+        let db = Database::open_in_memory().unwrap();
+        let att = tmp("links-att");
+        let r = import_vault(&db, &vault, &att).unwrap();
+        assert_eq!((r.pages, r.folders, r.attachments, r.skipped), (2, 1, 0, 0));
+        assert!(fs::read_dir(&att).unwrap().next().is_none());
+        assert!(db.page_by_title("Geheim").unwrap().is_none());
+        assert!(db.page_by_title("Link").unwrap().is_none());
+        let ordner = db.page_by_title("Ordner").unwrap().unwrap();
+        assert_eq!(db.page_doc(ordner.id).unwrap().content, "", "symlinked folder note is not read");
     }
 }

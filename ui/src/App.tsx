@@ -43,6 +43,7 @@ export function App() {
     media.addEventListener("change", onMedia);
     const unlisten = [
       on("data://entries", () => useApp.getState().bumpEntries()),
+      on<string>("backup://failed", (msg) => useApp.getState().toast({ tone: "warning", title: "Automatische Sicherung fehlgeschlagen", detail: msg })),
       // A task was toggled outside the editor: open editors of that page take over the new Markdown.
       on<number>("data://tasks", (pageId) => reloadEditors([pageId])),
       on<ActivityTick>("activity://tick", (t) => {
@@ -63,6 +64,8 @@ export function App() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // AltGr arrives as Ctrl+Alt on Windows; it types characters like \ | [ ] @ on German keyboards.
+      if (e.getModifierState("AltGraph") || (e.ctrlKey && e.altKey)) return;
       const st = useApp.getState();
       const mod = e.ctrlKey || e.metaKey;
       const k = e.key.toLowerCase();
@@ -96,12 +99,12 @@ export function App() {
           const next = st.tabs[(i + (e.shiftKey ? -1 : 1) + st.tabs.length) % st.tabs.length];
           if (next) st.activateTab(next.id);
         });
-      else if (mod && e.key === "\\" && !e.shiftKey)
+      else if (mod && e.code === "Backslash" && !e.shiftKey)
         run(() => {
           st.set({ sidebarOpen: !st.sidebarOpen });
           savePref("aether.sidebar", !st.sidebarOpen);
         });
-      else if (mod && (e.key === "|" || (e.shiftKey && e.code === "Backslash")))
+      else if (mod && e.shiftKey && e.code === "Backslash")
         run(() => {
           st.set({ panelOpen: !st.panelOpen });
           savePref("aether.panel", !st.panelOpen);
@@ -133,14 +136,24 @@ export function App() {
         if (closing) return;
         closing = true;
         try {
-          await Promise.race([flushAllEditors(), new Promise((r) => setTimeout(r, 5000))]);
-        } finally {
-          // Needs core:window:allow-destroy.
-          await win.destroy().catch((err) => {
-            closing = false;
-            useApp.getState().error("Fenster konnte nicht geschlossen werden", err);
+          await Promise.race([flushAllEditors(), new Promise((_, fail) => setTimeout(() => fail(new Error("Zeitüberschreitung")), 5000))]);
+        } catch {
+          const ok = await useApp.getState().confirm({
+            title: "Nicht gespeicherte Änderungen",
+            message: "Einige Änderungen konnten nicht gespeichert werden. Trotzdem schließen? Sie gehen dann verloren.",
+            confirmLabel: "Trotzdem schließen",
+            danger: true,
           });
+          if (!ok) {
+            closing = false;
+            return;
+          }
         }
+        // Needs core:window:allow-destroy.
+        await win.destroy().catch((err) => {
+          closing = false;
+          useApp.getState().error("Fenster konnte nicht geschlossen werden", err);
+        });
       })
       .catch(() => null);
     return () => {

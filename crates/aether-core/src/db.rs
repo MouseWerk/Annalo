@@ -21,6 +21,10 @@ const MIGRATIONS: &[&str] = &[
 /// A migration with this marker adds a derived page index; every page is re-indexed after it ran.
 const REINDEX_MARKER: &str = "-- aether:reindex";
 
+/// Settings key of the flag that a re-index is pending. It is set in the same transaction as
+/// the migration that needs it and cleared with the re-index, so a crash in between re-runs it.
+const NEEDS_REINDEX: &str = "needs_reindex";
+
 pub(crate) const PAGE_COLS: &str = "id, parent_id, title, icon, position, updated_at, favorite, daily_date, deleted_at";
 
 pub(crate) fn map_page(r: &Row) -> rusqlite::Result<Page> {
@@ -99,17 +103,28 @@ impl Database {
                 MIGRATIONS.len()
             )));
         }
-        let mut reindex = false;
         for (i, sql) in MIGRATIONS.iter().enumerate().skip(current) {
-            reindex |= sql.contains(REINDEX_MARKER);
+            // v2 turned blocks into a derived chunk index (and created the settings table);
+            // build it (and later derived indexes) from page content.
+            let reindex = i >= 1 && (i == 1 || sql.contains(REINDEX_MARKER));
             let tx = self.conn.transaction()?;
             tx.execute_batch(sql)?;
             tx.pragma_update(None, "user_version", (i + 1) as i64)?;
+            if reindex {
+                tx.execute(
+                    "INSERT INTO settings (key, value) VALUES (?1, '1')
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    [format!("meta.{NEEDS_REINDEX}")],
+                )?;
+            }
             tx.commit()?;
         }
-        // v2 turned blocks into a derived chunk index; build it (and later derived indexes) from page content.
-        if reindex || (current < 2 && MIGRATIONS.len() >= 2) {
-            self.reindex_all()?;
+        if MIGRATIONS.len() >= 2 && self.meta_get(NEEDS_REINDEX)?.is_some() {
+            self.atomic(|| {
+                self.reindex_all()?;
+                self.conn.execute("DELETE FROM settings WHERE key = ?1", [format!("meta.{NEEDS_REINDEX}")])?;
+                Ok(())
+            })?;
         }
         Ok(())
     }
@@ -699,6 +714,30 @@ mod tests {
         let p = db.create_project("PRJ-2026-X", "Aether Rollout").unwrap();
         let np = db.create_netzplan(p.id, "NP-8801", "NP-8801-1020", "Systemintegration", 40.0).unwrap();
         (db, np)
+    }
+
+    #[test]
+    fn pending_reindex_survives_a_crash() {
+        let path = std::env::temp_dir().join(format!("aether-reindex-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        {
+            let db = Database::open(&path).unwrap();
+            assert_eq!(db.schema_version().unwrap(), MIGRATIONS.len());
+            assert!(db.meta_get(NEEDS_REINDEX).unwrap().is_none(), "cleared after the first open");
+            let p = db.create_page(None, "Liste", None).unwrap();
+            db.save_page_content(p.id, "- [ ] offen\n").unwrap();
+            // As if the app died after the marker migration committed, before the re-index ran.
+            db.conn().execute("DELETE FROM tasks", []).unwrap();
+            db.meta_set(NEEDS_REINDEX, "1").unwrap();
+        }
+        let db = Database::open(&path).unwrap();
+        let tasks = db.list_tasks(&Default::default()).unwrap();
+        assert_eq!(tasks.iter().map(|t| t.text.as_str()).collect::<Vec<_>>(), ["offen"]);
+        assert!(db.meta_get(NEEDS_REINDEX).unwrap().is_none());
+        drop(db);
+        for ext in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{ext}", path.display()));
+        }
     }
 
     #[test]

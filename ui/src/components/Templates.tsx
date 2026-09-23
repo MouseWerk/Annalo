@@ -90,7 +90,10 @@ function TemplatePicker({ req }: { req: Request }) {
   // while the dialog opens); the inputs handle their own keys.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement | null)?.closest?.(".tpl-picker input, .dialog-foot")) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.closest?.(".tpl-picker input, .dialog-foot")) return;
+      // Other buttons (close, empty-state action) keep their own Enter/Space.
+      if (target?.closest?.("button, a, [role=button]") && !target.closest(".tpl-list")) return;
       keyRef.current?.(e);
     };
     window.addEventListener("keydown", onKey, true);

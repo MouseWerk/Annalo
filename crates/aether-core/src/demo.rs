@@ -194,6 +194,15 @@ pub fn remove(db: &Database) -> Result<usize> {
         fn sweep(db: &Database, nodes: &[crate::model::PageNode], removed: &mut usize) -> Result<()> {
             for n in nodes {
                 if only_demo(n) {
+                    // Trashed pages below a sample page belong to the user: move them to the top level
+                    // so the delete cascade spares them and they stay in the trash.
+                    db.conn().execute(
+                        "WITH RECURSIVE sub(id) AS (
+                             SELECT ?1 UNION ALL
+                             SELECT p.id FROM pages p JOIN sub ON p.parent_id = sub.id WHERE p.deleted_at IS NULL)
+                         UPDATE pages SET parent_id = NULL WHERE deleted_at IS NOT NULL AND parent_id IN sub",
+                        [n.page.id],
+                    )?;
                     db.delete_page(n.page.id)?;
                     *removed += 1;
                 } else {
@@ -237,5 +246,23 @@ mod tests {
         assert!(db.page(mine.id).is_ok(), "user pages survive");
         assert!(db.page_by_title("Architektur").unwrap().is_some(), "parent of a user page is kept");
         assert!(db.page_by_title("SAP CATS Leitfaden").unwrap().is_none());
+    }
+
+    #[test]
+    fn remove_keeps_trashed_user_pages() {
+        let db = Database::open_in_memory().unwrap();
+        seed(&db, Utc::now()).unwrap();
+        let cats = db.page_by_title("SAP CATS Leitfaden").unwrap().unwrap();
+        let mine = db.create_page(Some(cats.id), "Meine Notiz", None).unwrap();
+        let sub = db.create_page(Some(mine.id), "Unterseite", None).unwrap();
+        db.trash_page(mine.id).unwrap();
+        remove(&db).unwrap();
+        assert!(db.page_by_title("Wissensbasis").unwrap().is_none(), "sample subtree is gone");
+        let trash = db.list_trash().unwrap();
+        assert_eq!(trash.len(), 1);
+        assert_eq!((trash[0].page.id, trash[0].descendants), (mine.id, 1));
+        assert_eq!(db.page(mine.id).unwrap().parent_id, None);
+        assert_eq!(db.page(sub.id).unwrap().parent_id, Some(mine.id));
+        assert_eq!(db.restore_page(mine.id).unwrap().parent_id, None);
     }
 }

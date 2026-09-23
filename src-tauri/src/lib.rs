@@ -236,8 +236,15 @@ fn tasks_list(state: State<AppState>, filter: Option<TaskFilter>) -> Result<Vec<
 
 /// Checks or unchecks one task in its page's Markdown; the UI then reloads open editors of that page.
 #[tauri::command]
-fn task_set_done(app: AppHandle, state: State<AppState>, page_id: i64, ordinal: i64, done: bool) -> Result<()> {
-    state.db().set_task_done(page_id, ordinal, done)?;
+fn task_set_done(
+    app: AppHandle,
+    state: State<AppState>,
+    page_id: i64,
+    ordinal: i64,
+    done: bool,
+    expected_text: Option<String>,
+) -> Result<()> {
+    state.db().set_task_done(page_id, ordinal, done, expected_text.as_deref())?;
     let _ = app.emit("data://tasks", page_id);
     Ok(())
 }
@@ -309,11 +316,22 @@ fn attachment_save(
     name: String,
     mime: Option<String>,
 ) -> Result<SavedAttachment> {
-    let b64 = if data.starts_with("data:") { data.split_once(',').map_or("", |(_, d)| d) } else { &data };
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(b64.trim())
-        .map_err(|e| Error::Parse(format!("Ungültige Bilddaten: {e}")))?;
+    let bytes = decode_attachment(&data)?;
     attachments::save(&state.attachments_dir(), &bytes, &name, mime.as_deref().unwrap_or(""))
+}
+
+/// Decodes base64 (optionally a `data:` URL, possibly line-wrapped). Oversized input is
+/// rejected before anything is decoded, so a huge paste cannot allocate the decoded bytes.
+fn decode_attachment(data: &str) -> Result<Vec<u8>> {
+    let b64 = if data.starts_with("data:") { data.split_once(',').map_or("", |(_, d)| d) } else { data };
+    let len = b64.bytes().filter(|b| !b.is_ascii_whitespace()).count();
+    if len > attachments::MAX_BYTES.div_ceil(3) * 4 + 4 {
+        return Err(Error::State(format!("Datei ist größer als {} MB", attachments::MAX_BYTES / 1024 / 1024)));
+    }
+    let compact: String = b64.chars().filter(|c| !c.is_ascii_whitespace()).collect();
+    base64::engine::general_purpose::STANDARD
+        .decode(compact)
+        .map_err(|e| Error::Parse(format!("Ungültige Bilddaten: {e}")))
 }
 
 /// Serves `aether-asset://localhost/<name>`: only plain file names inside the attachments folder.
@@ -688,16 +706,34 @@ fn run_backup(state: &AppState) -> Result<BackupInfo> {
     // Images live next to the database; names are content hashes, so copying new ones suffices.
     let src = state.attachments_dir();
     if src.is_dir() {
-        let dst = dir.join("attachments");
-        std::fs::create_dir_all(&dst)?;
-        for entry in std::fs::read_dir(&src)?.flatten() {
-            let to = dst.join(entry.file_name());
-            if entry.path().is_file() && !to.exists() {
-                std::fs::copy(entry.path(), &to)?;
-            }
-        }
+        copy_new_attachments(&src, &dir.join("attachments"))?;
     }
     Ok(info)
+}
+
+/// Copies regular files from `src` that `dst` lacks. Hidden files and symlinks are skipped;
+/// each file is written under a temporary name and renamed, so an interrupted copy never
+/// leaves a truncated file that later runs would take as complete.
+fn copy_new_attachments(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)?.flatten() {
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else { continue };
+        if name_str.starts_with('.') || !entry.file_type()?.is_file() {
+            continue;
+        }
+        let to = dst.join(&name);
+        if to.exists() {
+            continue;
+        }
+        let tmp = dst.join(format!(".{name_str}.part"));
+        let copied = std::fs::copy(entry.path(), &tmp).and_then(|_| std::fs::rename(&tmp, &to));
+        if let Err(e) = copied {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e.into());
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -722,6 +758,7 @@ fn spawn_backup_scheduler(app: AppHandle) {
             };
             if due && let Err(e) = run_backup(&state) {
                 eprintln!("backup failed: {e}");
+                let _ = app.emit("backup://failed", e.to_string());
             }
             std::thread::sleep(Duration::from_secs(3600));
         }
@@ -1119,7 +1156,9 @@ fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
         .title("AETHER OS")
         .inner_size(1480.0, 920.0)
         .min_inner_size(900.0, 560.0)
-        .center();
+        .center()
+        // The native file-drop handler swallows HTML5 drag & drop on Windows (image drop, tabs, sidebar).
+        .disable_drag_drop_handler();
     #[cfg(windows)]
     let builder = if mica {
         builder.transparent(true).effects(tauri::utils::config::WindowEffectsConfig {
@@ -1318,4 +1357,37 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running AETHER OS");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn attachment_base64_is_bounded_and_whitespace_tolerant() {
+        assert_eq!(decode_attachment("data:image/png;base64,aGFs\r\nbG8=").unwrap(), b"hallo");
+        assert_eq!(decode_attachment(" aGFs bG8=\n").unwrap(), b"hallo");
+        let huge = "A".repeat(attachments::MAX_BYTES.div_ceil(3) * 4 + 8);
+        assert!(matches!(decode_attachment(&huge), Err(Error::State(_))));
+        assert!(matches!(decode_attachment("%%%"), Err(Error::Parse(_))));
+    }
+
+    #[test]
+    fn backup_copies_only_plain_visible_files() {
+        let base = std::env::temp_dir().join(format!("aether-att-copy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (src, dst) = (base.join("src"), base.join("dst"));
+        std::fs::create_dir_all(src.join("sub")).unwrap();
+        std::fs::write(src.join("a.png"), [1u8; 3]).unwrap();
+        std::fs::write(src.join(".hidden"), [2u8; 3]).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(src.join("a.png"), src.join("link.png")).unwrap();
+        copy_new_attachments(&src, &dst).unwrap();
+        let mut names: Vec<_> =
+            std::fs::read_dir(&dst).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        names.sort();
+        assert_eq!(names, ["a.png"]);
+        assert_eq!(std::fs::read(dst.join("a.png")).unwrap(), [1u8; 3]);
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

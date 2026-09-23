@@ -21,9 +21,6 @@ const deleteFromTree = async (title) => {
   await row.click({ button: "right" });
   await app.waitFor(".menu");
   await app.click(".menu-item.danger");
-  await app.waitFor(".dialog");
-  assert.match(await app.text(".dialog-text"), /Papierkorb/);
-  await app.click(".dialog .btn-danger");
   await app.waitText(".toast-title", /Seite gelöscht/);
   await app.browser.waitUntil(async () => !(await treeRow(title)), { timeoutMsg: "page still in tree" });
 };
@@ -44,7 +41,7 @@ test("deleting a page can be undone from the toast", async () => {
 
 test("deleted page appears in the trash and is restored from there", async () => {
   await deleteFromTree(PAGE);
-  await app.click('.side-toolbar [aria-label="Papierkorb"]');
+  await app.click('.sidebar-foot [aria-label^="Papierkorb"]');
   await app.waitText(".pane.active .vh-title-text", /Papierkorb/);
   await app.waitText(".trash-item-title", new RegExp(PAGE.replace(/\./g, "\\.")));
   await app.shot("trash");
@@ -59,7 +56,7 @@ test("deleted page appears in the trash and is restored from there", async () =>
 
 test("purging from the trash deletes the page for good", async () => {
   await deleteFromTree(PAGE);
-  await app.click('.side-toolbar [aria-label="Papierkorb"]');
+  await app.click('.sidebar-foot [aria-label^="Papierkorb"]');
   await app.waitFor(".trash-item");
   await app.click('.trash-item [aria-label="Endgültig löschen"]');
   await app.waitFor(".dialog");

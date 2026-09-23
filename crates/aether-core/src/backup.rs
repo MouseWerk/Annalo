@@ -1,10 +1,11 @@
 //! Database backups: consistent snapshots written with `VACUUM INTO` as
-//! `aether-YYYYMMDD-HHMMSS.db` (local time), pruned to the newest `keep`.
+//! `aether-YYYYMMDD-HHMMSS.db` (UTC, so names sort chronologically across DST
+//! changes), pruned to the newest `keep`. Times are shown in local time.
 
 use std::fs;
 use std::path::Path;
 
-use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
+use chrono::{DateTime, Local, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::db::Database;
@@ -20,11 +21,21 @@ pub struct BackupInfo {
     pub size_bytes: u64,
 }
 
-/// Parses `aether-YYYYMMDD-HHMMSS.db`; other files in the folder are ignored.
+/// Parses `aether-YYYYMMDD-HHMMSS.db` (UTC) into local time; other files in the folder are ignored.
 fn backup_time(file_name: &str) -> Option<DateTime<Local>> {
     let stamp = file_name.strip_prefix("aether-")?.strip_suffix(".db")?;
     let naive = NaiveDateTime::parse_from_str(stamp, STAMP).ok()?;
-    Local.from_local_datetime(&naive).earliest()
+    Some(naive.and_utc().with_timezone(&Local))
+}
+
+fn info(path: &Path, file_name: &str) -> Option<BackupInfo> {
+    let meta = fs::metadata(path).ok().filter(|m| m.is_file())?;
+    Some(BackupInfo {
+        path: path.display().to_string(),
+        file_name: file_name.to_owned(),
+        created_at: backup_time(file_name)?,
+        size_bytes: meta.len(),
+    })
 }
 
 /// Backups in `dir`, newest first. A missing folder has none.
@@ -34,25 +45,20 @@ pub fn list_backups(dir: &Path) -> Result<Vec<BackupInfo>> {
         .filter_map(|e| e.ok())
         .filter_map(|e| {
             let name = e.file_name().to_str()?.to_owned();
-            let created_at = backup_time(&name)?;
-            let meta = e.metadata().ok().filter(|m| m.is_file())?;
-            Some(BackupInfo {
-                path: e.path().display().to_string(),
-                file_name: name,
-                created_at,
-                size_bytes: meta.len(),
-            })
+            info(&e.path(), &name)
         })
         .collect();
+    // UTC stamps: the name order is the creation order.
     out.sort_by(|a, b| b.file_name.cmp(&a.file_name));
     Ok(out)
 }
 
 /// Writes a snapshot of `db` into `dir` and deletes all but the newest `keep` (at least 1) backups.
 pub fn backup_to(db: &Database, dir: &Path, keep: usize) -> Result<BackupInfo> {
-    backup_at(db, dir, keep, Local::now().naive_local())
+    backup_at(db, dir, keep, Utc::now().naive_utc())
 }
 
+/// `now` is UTC.
 fn backup_at(db: &Database, dir: &Path, keep: usize, now: NaiveDateTime) -> Result<BackupInfo> {
     fs::create_dir_all(dir)?;
     let name = format!("aether-{}.db", now.format(STAMP));
@@ -63,11 +69,13 @@ fn backup_at(db: &Database, dir: &Path, keep: usize, now: NaiveDateTime) -> Resu
     }
     let target = path.to_str().ok_or_else(|| Error::State(format!("Ungültiger Pfad: {}", path.display())))?;
     db.conn().execute("VACUUM INTO ?1", [target])?;
-    let all = list_backups(dir)?;
-    for old in all.iter().skip(keep.max(1)) {
+    let fresh = info(&path, &name).ok_or_else(|| Error::not_found("backup", name.clone()))?;
+    // The new backup always counts as one of the kept ones, even if the clock went backwards.
+    let others = list_backups(dir)?.into_iter().filter(|b| b.file_name != name);
+    for old in others.skip(keep.max(1) - 1) {
         fs::remove_file(&old.path)?;
     }
-    all.into_iter().find(|b| b.file_name == name).ok_or_else(|| Error::not_found("backup", name))
+    Ok(fresh)
 }
 
 #[cfg(test)]
@@ -102,6 +110,11 @@ mod tests {
 
         let fresh = backup_at(&db, &dir, 1, at(5)).unwrap();
         assert_eq!(list_backups(&dir).unwrap(), vec![fresh]);
+
+        // A clock that went backwards never costs the new backup.
+        let earlier = backup_at(&db, &dir, 1, at(2)).unwrap();
+        assert_eq!(list_backups(&dir).unwrap(), vec![earlier.clone()]);
+        assert_eq!(earlier.created_at, at(2).and_utc().with_timezone(&Local), "UTC name, local display");
         let _ = fs::remove_dir_all(&dir);
     }
 }

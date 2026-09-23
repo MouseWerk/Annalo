@@ -487,7 +487,11 @@ impl Database {
         self.move_page(page.id, Some(journal.id), 0)?;
         self.conn().execute("UPDATE pages SET daily_date = ?2 WHERE id = ?1", params![page.id, key])?;
         // The UI shows the weekday and date under the title, so the body starts with the sections.
-        let template = self.load_settings()?.daily_template.filter(|&id| id != page.id && self.page(id).is_ok());
+        // A trashed, deleted or moved template falls back to the built-in sections.
+        let template = match self.load_settings()?.daily_template {
+            Some(id) if id != page.id && self.is_template(id)? => Some(id),
+            _ => None,
+        };
         let content = match template {
             Some(id) => {
                 let time = chrono::Local::now().time();
@@ -622,10 +626,15 @@ mod tests {
         db.save_settings(&s).unwrap();
         let p = db.daily_note(NaiveDate::from_ymd_opt(2026, 9, 23).unwrap()).unwrap();
         assert_eq!(db.page_doc(p.id).unwrap().content, "# Mittwoch, 23.09.2026\n\nKW 39 · 2026-09-23\n");
-        // A deleted template falls back to the built-in sections.
-        db.delete_page(t.id).unwrap();
+        // A trashed template falls back to the built-in sections.
+        db.trash_page(t.id).unwrap();
         let q = db.daily_note(NaiveDate::from_ymd_opt(2026, 9, 24).unwrap()).unwrap();
         assert!(db.page_doc(q.id).unwrap().content.starts_with("## Fokus"));
+        // So does a deleted one.
+        db.restore_page(t.id).unwrap();
+        db.delete_page(t.id).unwrap();
+        let r = db.daily_note(NaiveDate::from_ymd_opt(2026, 9, 25).unwrap()).unwrap();
+        assert!(db.page_doc(r.id).unwrap().content.starts_with("## Fokus"));
     }
 
     #[test]

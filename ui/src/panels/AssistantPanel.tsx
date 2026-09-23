@@ -9,7 +9,7 @@ import { api, errorText, on } from "../lib/api";
 import { renderMarkdown } from "../lib/markdown";
 import { useApp } from "../store/app";
 import { Button, IconButton, useMenu } from "../components/ui";
-import { h1 } from "../lib/format";
+import { h1, usd } from "../lib/format";
 import type { ChatMessage, ContextChunk, RouteDecision, StreamEvent, Tier, ToolCall } from "../lib/types";
 
 type Turn =
@@ -462,7 +462,7 @@ function TurnView({ turn }: { turn: Turn }) {
             <span>
               {m.tokens.toLocaleString("de-DE")} Tokens{m.exact ? "" : " (geschätzt)"}
             </span>
-            {m.cost > 0 && <span>${m.cost.toFixed(4)}</span>}
+            {m.cost > 0 && <span>{usd(m.cost)}</span>}
           </span>
           <span className="msg-actions">
           <IconButton

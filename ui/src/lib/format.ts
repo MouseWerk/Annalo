@@ -5,6 +5,8 @@ const nf0 = new Intl.NumberFormat("de-DE", { maximumFractionDigits: 0 });
 export const h1 = (x: number) => nf1.format(x);
 export const h2 = (x: number) => nf2.format(x);
 export const int = (x: number) => nf0.format(x);
+/** USD cost in German notation: 0,0024 $ */
+export const usd = (x: number) => x.toLocaleString("de-DE", { style: "currency", currency: "USD", minimumFractionDigits: x < 0.1 ? 4 : 2, maximumFractionDigits: x < 0.1 ? 4 : 2 });
 export const hoursFromMinutes = (m: number | null | undefined) => nf2.format((m ?? 0) / 60);
 
 /** "1:30" style duration for timers. */

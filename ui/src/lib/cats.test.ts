@@ -22,7 +22,7 @@ const row = (id: number, day: number, minutes: number, vg: string | null, la: st
 
 describe("catsGrid", () => {
   it("groups per Vorgang/LA with one column per weekday", () => {
-    const { text, ids } = catsGrid([row(1, 0, 90, "1020", "DEV"), row(2, 2, 60, "1020", "DEV"), row(3, 0, 30, null, null), row(4, 1, 60, "1020", "DEV", "running")], week);
+    const { text, ids } = catsGrid([row(1, 0, 90, "1020", "DEV"), row(2, 2, 60, "1020", "DEV"), row(3, 0, 30, null, null), row(4, 1, 60, "1020", "DEV", "running"), row(5, 3, 60, "1020", "DEV", "exported")], week);
     expect(text).toBe("NP-1\t\t\t0,50\t\t\t\t\t\t\r\nNP-1\t1020\tDEV\t1,50\t\t1,00\t\t\t\t\r\n");
     expect(ids).toEqual([1, 2, 3]);
   });

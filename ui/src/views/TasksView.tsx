@@ -2,7 +2,7 @@
 // checkbox in the page's Markdown; open editors of that page reload via data://tasks.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronUp, ChevronsUp, ListChecks } from "lucide-react";
+import { CalendarClock, ChevronUp, ChevronsUp, ListChecks } from "lucide-react";
 import { api } from "../lib/api";
 import { useApp } from "../store/app";
 import { Badge, EmptyState, Segmented, Select, Spinner } from "../components/ui";
@@ -67,7 +67,7 @@ export function TasksView() {
     try {
       // Pending edits first, so the ordinal matches what is stored.
       await flushAllEditors();
-      await api.setTaskDone(t.page_id, t.ordinal, !t.done);
+      await api.setTaskDone(t.page_id, t.ordinal, !t.done, t.text);
     } catch (e) {
       s().error("Aufgabe konnte nicht geändert werden", e);
     } finally {
@@ -139,8 +139,8 @@ export function TasksView() {
                         type="checkbox"
                         className="task-check"
                         checked={t.done}
-                        disabled={busy.has(key(t))}
-                        onChange={() => toggle(t)}
+                        aria-disabled={busy.has(key(t))}
+                        onChange={() => !busy.has(key(t)) && toggle(t)}
                         aria-label={t.done ? `„${t.text}“ wieder öffnen` : `„${t.text}“ erledigen`}
                       />
                       <div className="task-main">
@@ -162,15 +162,15 @@ export function TasksView() {
                           )}
                         </span>
                         <span className="task-meta">
+                          {t.due && (
+                            <Badge tone={overdue ? "danger" : g.id === "today" && !t.done ? "warning" : "neutral"} title={overdue ? "Überfällig" : "Fällig"}>
+                              <CalendarClock size={12} /> {dueLabel(t.due, now)}
+                            </Badge>
+                          )}
                           <button type="button" className="task-page" onClick={(e) => s().openPage(t.page_id, { newTab: e.ctrlKey || e.metaKey })} title={`${t.page_title} öffnen`}>
                             <PageIcon name={t.page_icon} size={13} />
                             {t.page_title}
                           </button>
-                          {t.due && (
-                            <Badge tone={overdue ? "danger" : g.id === "today" && !t.done ? "warning" : "neutral"} title={overdue ? "Überfällig" : "Fällig"}>
-                              📅 {dueLabel(t.due, now)}
-                            </Badge>
-                          )}
                         </span>
                       </div>
                     </li>

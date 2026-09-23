@@ -29,7 +29,8 @@ export const api = {
   tags: () => call<[string, number][]>("tags_list"),
   tagPages: (tag: string) => call<T.Page[]>("tag_pages", { tag }),
   tasks: (filter: T.TaskFilter = {}) => call<T.Task[]>("tasks_list", { filter }),
-  setTaskDone: (pageId: number, ordinal: number, done: boolean) => call<void>("task_set_done", { pageId, ordinal, done }),
+  setTaskDone: (pageId: number, ordinal: number, done: boolean, expectedText?: string) =>
+    call<void>("task_set_done", { pageId, ordinal, done, expectedText: expectedText ?? null }),
   search: (query: string, limit = 30) => call<T.SearchHit[]>("search_workspace", { query, limit }),
   importVault: (path: string) => call<T.ImportReport>("vault_import", { path }),
   exportVault: (path: string) => call<number>("vault_export", { path }),
@@ -128,4 +129,28 @@ export async function uploadAttachment(file: File): Promise<T.SavedAttachment> {
 }
 
 /** Errors from Rust arrive as plain strings. */
-export const errorText = (e: unknown) => (typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e));
+const KINDS: Record<string, string> = {
+  netzplan: "Netzplan",
+  vorgang: "Vorgang",
+  leistungsart: "Leistungsart",
+  page: "Seite",
+  project: "Projekt",
+  task: "Aufgabe",
+  tool: "Werkzeug",
+  entry: "Eintrag",
+  backup: "Sicherung",
+};
+
+/** Backend errors in German: `netzplan 'NP-1' not found` → `Netzplan „NP-1“ nicht gefunden`. */
+export const errorText = (e: unknown) => {
+  const raw = typeof e === "string" ? e : e instanceof Error ? e.message : JSON.stringify(e);
+  const nf = /^(\w+) '(.+)' not found$/.exec(raw);
+  if (nf) return `${KINDS[nf[1]] ?? nf[1]} „${nf[2]}“ nicht gefunden`;
+  return raw
+    .replace(/^invalid state: /, "")
+    .replace(/^could not parse command: /, "Eingabe nicht verstanden: ")
+    .replace(/^i\/o error: /, "Dateifehler: ")
+    .replace(/^database error: /, "Datenbankfehler: ")
+    .replace(/^http error: /, "Verbindungsfehler: ")
+    .replace(/^AI provider error \((\d+)\): /, "KI-Server meldet Fehler $1: ");
+};

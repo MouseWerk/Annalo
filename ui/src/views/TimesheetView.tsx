@@ -1,6 +1,6 @@
 // Weekly timesheet with timer, week grid, entry list, editing and export.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import {
   AlertTriangle, CalendarDays, Check, ChevronLeft, ChevronRight, Clipboard, Download, MoreHorizontal, Pencil, Play, Plus, RotateCcw, Send, Square, Timer, Trash2, X,
@@ -32,7 +32,15 @@ export function TimesheetView() {
   const { wbs, las } = useWbs();
   const s = useApp.getState;
 
-  const load = () => api.entries(week.toISOString(), addDays(week, 7).toISOString()).then(setRows).catch((e) => s().error("Einträge nicht geladen", e));
+  // Only the latest request may update the list (fast week switching).
+  const seq = useRef(0);
+  const load = () => {
+    const n = ++seq.current;
+    api
+      .entries(week.toISOString(), addDays(week, 7).toISOString())
+      .then((r) => n === seq.current && setRows(r))
+      .catch((e) => s().error("Einträge nicht geladen", e));
+  };
   useEffect(() => {
     load();
     setSelected(new Set());

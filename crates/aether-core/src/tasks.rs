@@ -201,10 +201,18 @@ impl Database {
             TaskStatus::All => None,
         };
         let tag = f.tag.as_deref().map(|t| t.trim().trim_start_matches('#').to_lowercase()).filter(|t| !t.is_empty());
+        // Checkboxes in templates („Vorlagen“ and everything below it) are blueprints, not tasks.
         let mut st = self.conn().prepare_cached(
-            "SELECT t.page_id, p.title, p.icon, t.ordinal, t.line, t.text, t.done, t.due, t.priority, t.tags
+            "WITH RECURSIVE tpl(id) AS (
+                 SELECT id FROM (SELECT id FROM pages
+                                 WHERE parent_id IS NULL AND deleted_at IS NULL AND title = ?5 COLLATE NOCASE
+                                 ORDER BY id LIMIT 1)
+                 UNION ALL
+                 SELECT p.id FROM pages p JOIN tpl ON p.parent_id = tpl.id)
+             SELECT t.page_id, p.title, p.icon, t.ordinal, t.line, t.text, t.done, t.due, t.priority, t.tags
              FROM tasks t JOIN pages p ON p.id = t.page_id
              WHERE p.deleted_at IS NULL
+               AND t.page_id NOT IN tpl
                AND (?1 IS NULL OR t.done = ?1)
                AND (?2 IS NULL OR t.due <= ?2)
                AND (?3 IS NULL OR instr(' ' || t.tags || ' ', ' ' || ?3 || ' ') > 0)
@@ -212,7 +220,7 @@ impl Database {
              ORDER BY t.done, t.due IS NULL, t.due, t.priority DESC, p.title COLLATE NOCASE, t.page_id, t.ordinal",
         )?;
         let rows = st
-            .query_map(params![done, f.due_before, tag, f.page_id], |r| {
+            .query_map(params![done, f.due_before, tag, f.page_id, crate::templates::TEMPLATES_TITLE], |r| {
                 let tags: String = r.get(9)?;
                 Ok(Task {
                     page_id: r.get(0)?,
@@ -233,15 +241,28 @@ impl Database {
 
     /// Checks or unchecks task `ordinal` of a page by rewriting exactly its
     /// checkbox, then saves the page so links, tags and the index stay consistent.
-    pub fn set_task_done(&self, page_id: i64, ordinal: i64, done: bool) -> Result<()> {
+    ///
+    /// `expected_text` is the task text the caller saw. If the page changed in the meantime
+    /// and task `ordinal` has another text, the task with that text is used when it is unique;
+    /// otherwise the call fails so the caller reloads its list.
+    pub fn set_task_done(&self, page_id: i64, ordinal: i64, done: bool, expected_text: Option<&str>) -> Result<()> {
         let content: String = self
             .conn()
             .query_row("SELECT content FROM pages WHERE id = ?1", [page_id], |r| r.get(0))
             .map_err(|_| Error::not_found("page", page_id.to_string()))?;
-        let updated = usize::try_from(ordinal)
-            .ok()
-            .and_then(|o| set_task_state(&content, o, done))
-            .ok_or_else(|| Error::not_found("task", format!("{page_id}/{ordinal}")))?;
+        let missing = || Error::not_found("task", format!("{page_id}/{ordinal}"));
+        let mut ordinal = usize::try_from(ordinal).map_err(|_| missing())?;
+        if let Some(expected) = expected_text {
+            let tasks = parse_tasks(&content);
+            if tasks.get(ordinal).is_none_or(|t| t.text != expected) {
+                let mut same = tasks.iter().filter(|t| t.text == expected);
+                match (same.next(), same.next()) {
+                    (Some(t), None) => ordinal = t.ordinal,
+                    _ => return Err(Error::State("Die Aufgabe wurde inzwischen geändert – Liste neu geladen".into())),
+                }
+            }
+        }
+        let updated = set_task_state(&content, ordinal, done).ok_or_else(missing)?;
         if updated != content {
             self.save_page_content(page_id, &updated)?;
         }
@@ -306,15 +327,15 @@ mod tests {
         let all = db.list_tasks(&TaskFilter { status: TaskStatus::All, page_id: Some(a.id), ..Default::default() });
         assert_eq!(all.unwrap().len(), 3);
 
-        db.set_task_done(a.id, 0, true).unwrap();
+        db.set_task_done(a.id, 0, true, None).unwrap();
         assert_eq!(
             db.page_doc(a.id).unwrap().content,
             "#kunde\n\n- [x] Später\n- [ ] Bald 📅 2026-09-20 !\n- [x] Fertig 📅 2026-09-01"
         );
         let done = db.list_tasks(&TaskFilter { status: TaskStatus::Done, ..Default::default() }).unwrap();
         assert_eq!(done.len(), 2);
-        assert!(db.set_task_done(a.id, 9, true).is_err());
-        assert!(db.set_task_done(999, 0, true).is_err());
+        assert!(db.set_task_done(a.id, 9, true, None).is_err());
+        assert!(db.set_task_done(999, 0, true, None).is_err());
 
         db.delete_page(b.id).unwrap();
         assert_eq!(db.list_tasks(&TaskFilter::default()).unwrap().len(), 1);
@@ -329,5 +350,45 @@ mod tests {
         assert_eq!(db.list_tasks(&all).unwrap().len(), 1);
         db.trash_page(p.id).unwrap();
         assert!(db.list_tasks(&all).unwrap().is_empty());
+    }
+
+    #[test]
+    fn set_task_done_follows_moved_tasks() {
+        let db = Database::open_in_memory().unwrap();
+        let p = db.create_page(None, "Liste", None).unwrap();
+        db.save_page_content(p.id, "- [ ] eins\n- [ ] zwei\n").unwrap();
+        // The list showed „zwei“ at ordinal 1; meanwhile a task was inserted above it.
+        db.save_page_content(p.id, "- [ ] neu\n- [ ] eins\n- [ ] zwei\n").unwrap();
+        db.set_task_done(p.id, 1, true, Some("zwei")).unwrap();
+        assert_eq!(db.page_doc(p.id).unwrap().content, "- [ ] neu\n- [ ] eins\n- [x] zwei\n");
+        // Matching ordinal: used as is.
+        db.set_task_done(p.id, 0, true, Some("neu")).unwrap();
+        assert!(db.page_doc(p.id).unwrap().content.starts_with("- [x] neu"));
+
+        db.save_page_content(p.id, "- [ ] doppelt\n- [ ] x\n- [ ] doppelt\n").unwrap();
+        let e = db.set_task_done(p.id, 1, true, Some("doppelt")).unwrap_err();
+        assert!(matches!(e, Error::State(_)), "ambiguous");
+        assert!(matches!(db.set_task_done(p.id, 1, true, Some("weg")).unwrap_err(), Error::State(_)), "gone");
+        assert_eq!(db.page_doc(p.id).unwrap().content, "- [ ] doppelt\n- [ ] x\n- [ ] doppelt\n");
+    }
+
+    #[test]
+    fn template_tasks_are_not_listed() {
+        let db = Database::open_in_memory().unwrap();
+        let root = db.templates_root().unwrap();
+        let t = db.create_page(Some(root.id), "Besprechung", None).unwrap();
+        let nested = db.create_page(Some(t.id), "Variante", None).unwrap();
+        db.save_page_content(root.id, "- [ ] Wurzel\n").unwrap();
+        db.save_page_content(t.id, "- [ ] Protokoll senden\n").unwrap();
+        db.save_page_content(nested.id, "- [ ] Agenda\n").unwrap();
+        let p = db.create_page(None, "Echt", None).unwrap();
+        db.save_page_content(p.id, "- [ ] Echte Aufgabe\n").unwrap();
+        let texts: Vec<_> = db.list_tasks(&TaskFilter::default()).unwrap().into_iter().map(|t| t.text).collect();
+        assert_eq!(texts, ["Echte Aufgabe"]);
+        // Only the live „Vorlagen“ page is the templates root: a new one (any case) takes over.
+        db.trash_page(root.id).unwrap();
+        let other = db.create_page(None, "vorlagen", None).unwrap();
+        db.save_page_content(other.id, "- [ ] Neu\n").unwrap();
+        assert_eq!(db.list_tasks(&TaskFilter::default()).unwrap().len(), 1);
     }
 }

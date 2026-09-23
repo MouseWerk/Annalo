@@ -137,9 +137,6 @@ test("new page via Ctrl+N, then delete with confirmation", async () => {
   await app.waitFor(".menu");
   await app.shot("tree-context-menu");
   await app.click(".menu-item.danger");
-  await app.waitFor(".dialog");
-  await app.shot("confirm-delete");
-  await app.click(".dialog .btn-danger");
   await app.waitText(".toast-title", /Seite gelöscht/);
   assert.equal(await app.invoke("page_resolve", { title: "Wegwerfseite", create: false }), null);
 });

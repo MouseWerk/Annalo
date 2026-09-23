@@ -8,7 +8,7 @@ import { api } from "../lib/api";
 import { useApp, type Tab } from "../store/app";
 import { PageIcon } from "./icons";
 import { Button, Dialog, IconButton } from "./ui";
-import { clock, h1, relative } from "../lib/format";
+import { clock, h1, relative, usd } from "../lib/format";
 import { useTimerSeconds, stopTimer } from "./Sidebar";
 import { createSubpage } from "../views/PageView";
 import type { Page } from "../lib/types";
@@ -104,7 +104,7 @@ export function StatusBar() {
           <>
             <span className="num">{meter.last_tokens_per_second != null ? `${h1(meter.last_tokens_per_second)} t/s` : "–"}</span>
             <span className="faint num">{(meter.prompt_tokens + meter.completion_tokens).toLocaleString("de-DE")} Tokens</span>
-            <span className="faint num">${meter.cost_usd.toFixed(meter.cost_usd < 0.1 ? 4 : 2)}</span>
+            <span className="faint num">{usd(meter.cost_usd)}</span>
           </>
         ) : (
           <span className="faint">{configured ? settings?.settings.router.standard_model : "KI einrichten"}</span>
@@ -126,9 +126,10 @@ export function Home() {
     s().openPage(p.id);
   };
   const actions = [
-    { icon: CalendarCheck2, label: "Heute", hint: "Tagesnotiz öffnen", run: openToday },
+    { icon: CalendarCheck2, label: "Heute", hint: "Ctrl Shift D", run: openToday },
     { icon: FilePlus2, label: "Neue Seite", hint: "Ctrl N", run: () => createSubpage(null) },
     { icon: Search, label: "Suchen", hint: "Ctrl K", run: () => s().set({ paletteOpen: true, paletteMode: "all", paletteQuery: "" }) },
+    { icon: ListChecks, label: "Aufgaben", hint: "Ctrl Shift A", run: () => s().openTab({ kind: "tasks" }) },
     { icon: Timer, label: "Zeiterfassung", hint: "Woche und Timer", run: () => s().openTab({ kind: "timesheet" }) },
   ];
   const hour = new Date().getHours();

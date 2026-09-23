@@ -26,9 +26,9 @@ export interface NoteEditorHandle {
 // Flush handles of all mounted editors (rename, window close).
 const flushers = new Set<() => Promise<void>>();
 
-/** Saves pending edits of every open editor. */
+/** Saves pending edits of every open editor; rejects if one of them could not be saved. */
 export async function flushAllEditors() {
-  await Promise.all([...flushers].map((f) => f().catch(() => {})));
+  await Promise.all([...flushers].map((f) => f()));
 }
 
 /** Editors showing one of `ids` (all when omitted) refetch their page, unless they hold unsaved edits. */
@@ -109,6 +109,9 @@ export function NoteEditor({
         dirty.current = true;
         setStatus("dirty");
         useApp.getState().error("Speichern fehlgeschlagen", e);
+        // Try again later; the edits stay in the editor meanwhile.
+        window.clearTimeout(saveTimer.current);
+        saveTimer.current = window.setTimeout(() => save(editor), 5000);
       })
       .finally(() => {
         if (saving.current !== p) return;
@@ -224,6 +227,7 @@ export function NoteEditor({
       window.clearTimeout(saveTimer.current);
       await save(editor);
       await saving.current;
+      if (dirty.current) throw new Error("Änderungen konnten nicht gespeichert werden");
     };
     handleRef?.({ editor, flush: flushNow });
     flushers.add(flushNow);
@@ -328,7 +332,8 @@ export function NoteEditor({
   return (
     <div className="editor-wrap" data-save-status={status}>
       {find !== null && (
-        <div className="find-bar" role="search">
+        <div className="find-anchor">
+          <div className="find-bar" role="search">
           <Search size={14} className="faint" />
           <input
             ref={findInput}
@@ -351,9 +356,10 @@ export function NoteEditor({
           <IconButton icon={ChevronDown} label="Nächster Treffer" size={24} iconSize={14} onClick={() => editor?.commands.findStep(1)} />
           <IconButton icon={X} label="Schließen" size={24} iconSize={14} onClick={closeFind} />
         </div>
+        </div>
       )}
       {editor && (
-        <BubbleMenu editor={editor} className="bubble" shouldShow={({ editor: e, state }) => !state.selection.empty && !e.isActive("codeBlock") && !e.isActive("wikiLink") && !e.isActive("timeEntry") && !e.isActive("imageEmbed") && !e.isActive("image")}>
+        <BubbleMenu editor={editor} className="bubble" shouldShow={({ editor: e, state }) => find === null && !state.selection.empty && !e.isActive("codeBlock") && !e.isActive("wikiLink") && !e.isActive("timeEntry") && !e.isActive("imageEmbed") && !e.isActive("image")}>
           <IconButton icon={Bold} label="Fett (Ctrl B)" active={ui?.bold} onClick={() => editor.chain().focus().toggleBold().run()} tooltipSide="top" />
           <IconButton icon={Italic} label="Kursiv (Ctrl I)" active={ui?.italic} onClick={() => editor.chain().focus().toggleItalic().run()} tooltipSide="top" />
           <IconButton icon={Strikethrough} label="Durchgestrichen" active={ui?.strike} onClick={() => editor.chain().focus().toggleStrike().run()} tooltipSide="top" />

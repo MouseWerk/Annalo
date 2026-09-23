@@ -69,7 +69,6 @@ export function Sidebar() {
               iconSize={15}
               onClick={() => saveCollapsed(allCollapsed ? new Set() : new Set(withChildren))}
             />
-            <IconButton icon={Trash2} label="Papierkorb" size={26} iconSize={15} active={active?.kind === "trash"} onClick={() => useApp.getState().openTab({ kind: "trash" })} />
           </div>
           <div className="sidebar-scroll">
             {tree.length === 0 ? (
@@ -97,6 +96,12 @@ export function Sidebar() {
 
 function SidebarFooter() {
   const s = useApp.getState;
+  const pages = useApp((st) => st.pages);
+  const [trashed, setTrashed] = useState(0);
+  // The tree reloads after every delete/restore, so its identity is a good refresh signal.
+  useEffect(() => {
+    api.trash().then((t) => setTrashed(t.length)).catch(() => {});
+  }, [pages]);
   return (
     <div className="sidebar-foot">
       <button type="button" className="side-foot-btn" onClick={() => s().openTab({ kind: "timesheet" })} title="Zeiterfassung öffnen">
@@ -104,6 +109,14 @@ function SidebarFooter() {
         <span>Heute</span>
         <TodayHours />
       </button>
+      <IconButton
+        icon={Trash2}
+        label={trashed ? `Papierkorb (${trashed})` : "Papierkorb"}
+        tooltipSide="top"
+        size={24}
+        iconSize={14}
+        onClick={() => s().openTab({ kind: "trash" })}
+      />
     </div>
   );
 }
@@ -393,7 +406,8 @@ function PageTree({
           draggable
           onDragStart={(e: DragEvent) => {
             e.dataTransfer.effectAllowed = "move";
-            e.dataTransfer.setData("text/plain", String(n.id));
+            // Own type, so dropping into the editor does not paste the id as text.
+            e.dataTransfer.setData("application/x-aether-page", String(n.id));
             setDrag({ id: n.id });
           }}
           onDragEnd={() => setDrag(null)}

@@ -101,19 +101,18 @@ impl Database {
                 )?;
                 conn.execute("UPDATE pages SET deleted_at = NULL WHERE id = ?1", [pid])?;
                 let title = self.page(*pid)?.title;
-                let taken = |t: &str| -> Result<bool> {
-                    Ok(conn
-                        .query_row(
-                            "SELECT 1 FROM pages WHERE title = ?1 COLLATE NOCASE AND deleted_at IS NULL AND id <> ?2",
-                            params![t, pid],
-                            |_| Ok(()),
-                        )
-                        .optional()?
-                        .is_some())
+                // Same semantics as `page_by_title`: case-insensitive beyond ASCII („Übersicht“ = „übersicht“).
+                let others: std::collections::HashSet<String> = {
+                    let mut st =
+                        conn.prepare_cached("SELECT title FROM pages WHERE deleted_at IS NULL AND id <> ?1")?;
+                    st.query_map([pid], |r| r.get::<_, String>(0))?
+                        .map(|t| t.map(|t| t.trim().to_lowercase()))
+                        .collect::<rusqlite::Result<_>>()?
                 };
-                if taken(&title)? {
+                let taken = |t: &str| others.contains(&t.trim().to_lowercase());
+                if taken(&title) {
                     let mut n = 2;
-                    while taken(&format!("{title} {n}"))? {
+                    while taken(&format!("{title} {n}")) {
                         n += 1;
                     }
                     self.rename_page(*pid, &format!("{title} {n}"))?;
@@ -246,6 +245,12 @@ mod tests {
         db.create_page(None, "Kind", None).unwrap();
         let back = db.restore_page(c.id).unwrap();
         assert_eq!((back.parent_id, back.title.as_str()), (None, "Kind 2"));
+
+        // Clashes are found beyond ASCII case folding.
+        let u = db.create_page(None, "Übersicht", None).unwrap();
+        db.trash_page_at(u.id, t(4)).unwrap();
+        db.create_page(None, "ÜBERSICHT", None).unwrap();
+        assert_eq!(db.restore_page(u.id).unwrap().title, "Übersicht 2");
     }
 
     #[test]

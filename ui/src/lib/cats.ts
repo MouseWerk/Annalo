@@ -40,7 +40,8 @@ export function catsGrid(rows: TimeEntryRow[], week: Date): { text: string; ids:
   const lines = new Map<string, { np: string; vg: string; la: string; perDay: number[] }>();
   const ids: number[] = [];
   for (const r of rows) {
-    if (r.status_flag === "running" || !r.duration_minutes) continue;
+    // Exported entries are already in SAP; pasting them again would book them twice.
+    if (r.status_flag === "running" || r.status_flag === "exported" || !r.duration_minutes) continue;
     const d = keys.indexOf(isoDay(new Date(r.start_time)));
     if (d < 0) continue;
     const k = `${r.netzplan_nr}\u0000${r.vorgang_nr ?? ""}\u0000${r.leistungsart ?? ""}`;

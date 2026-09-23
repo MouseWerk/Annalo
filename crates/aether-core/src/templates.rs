@@ -5,7 +5,7 @@ use chrono::{Datelike, NaiveDate, NaiveTime, Timelike};
 use rusqlite::OptionalExtension;
 
 use crate::db::Database;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::model::{Page, PageNode};
 
 /// Parent page that holds the templates.
@@ -42,7 +42,9 @@ pub fn apply_template(content: &str, vars: &TemplateVars) -> String {
     while let Some(start) = rest.find("{{") {
         out.push_str(&rest[..start]);
         let after = &rest[start + 2..];
-        let Some(end) = after.find("}}").filter(|&e| !after[..e].contains('\n')) else {
+        // A stray `{{` (unclosed, or followed by another `{{` before its `}}`) stays literal,
+        // so it cannot swallow a real placeholder behind it.
+        let Some(end) = after.find("}}").filter(|&e| !after[..e].contains('\n') && !after[..e].contains("{{")) else {
             out.push_str("{{");
             rest = after;
             continue;
@@ -96,9 +98,18 @@ impl Database {
         Ok(out)
     }
 
-    /// Content of template page `id` with its placeholders filled in.
+    /// Whether `id` is a live page below „Vorlagen“.
+    pub fn is_template(&self, id: i64) -> Result<bool> {
+        Ok(self.list_templates()?.iter().any(|p| p.id == id))
+    }
+
+    /// Content of template page `id` with its placeholders filled in. Only pages listed by
+    /// [`Database::list_templates`] qualify (not trashed ones, not arbitrary pages).
     /// Frontmatter of the template is dropped: it describes the template, not the new page.
     pub fn render_template(&self, id: i64, vars: &TemplateVars) -> Result<String> {
+        if !self.is_template(id)? {
+            return Err(Error::State("Diese Seite ist keine Vorlage (mehr)".into()));
+        }
         let content = self.page_doc(id)?.content;
         Ok(apply_template(strip_frontmatter(&content), vars))
     }
@@ -136,6 +147,8 @@ mod tests {
         assert_eq!(apply_template("{{ Datum }} {{foo}} {{ offen", &vars()), "23.09.2026 {{foo}} {{ offen");
         assert_eq!(apply_template("{{\n}} {{kw}}", &vars()), "{{\n}} 39");
         assert_eq!(apply_template("ohne", &vars()), "ohne");
+        assert_eq!(apply_template("a {{ b {{kw}} c", &vars()), "a {{ b 39 c", "stray braces keep the placeholder");
+        assert_eq!(apply_template("{{{{kw}}}}", &vars()), "{{39}}");
         // ISO week: 1 Jan 2027 is a Friday in week 53 of 2026.
         let v = TemplateVars { date: NaiveDate::from_ymd_opt(2027, 1, 1).unwrap(), ..vars() };
         assert_eq!(apply_template("{{kw}} {{wochentag}}", &v), "53 Freitag");
@@ -155,5 +168,10 @@ mod tests {
         assert_eq!(titles, ["Besprechung", "Variante"]);
         db.save_page_content(t.id, "---\ntags: [vorlage]\n---\n# {{titel}} am {{datum}}\n").unwrap();
         assert_eq!(db.render_template(t.id, &vars()).unwrap(), "# Jour fixe am 23.09.2026\n");
+        let other = db.page_by_title("Andere").unwrap().unwrap();
+        assert!(db.render_template(other.id, &vars()).is_err(), "not a template");
+        assert!(db.render_template(root.id, &vars()).is_err(), "the root itself is no template");
+        db.trash_page(t.id).unwrap();
+        assert!(db.render_template(t.id, &vars()).is_err(), "trashed template");
     }
 }
