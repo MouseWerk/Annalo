@@ -106,6 +106,9 @@ pub struct TimeEntry {
     pub description: String,
     pub status_flag: StatusFlag,
     pub source: EntrySource,
+    /// The page the entry was booked from (`/zeit` in a note).
+    #[serde(default)]
+    pub page_id: Option<i64>,
 }
 
 /// A time entry joined with its full WBS context, as needed by exporters.
@@ -127,6 +130,8 @@ pub struct NewTimeEntry {
     pub duration_minutes: i64,
     pub description: String,
     pub source: EntrySource,
+    #[serde(default)]
+    pub page_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -63,7 +63,8 @@ export const api = {
   deleteLeistungsart: (code: string) => call<void>("leistungsart_delete", { code }),
 
   // time
-  logTime: (line: string) => call<T.LogOutcome>("log_time", { line }),
+  logTime: (line: string, pageId: number | null = null) => call<T.LogOutcome>("log_time", { line, pageId }),
+  pageWork: (pageId: number) => call<T.PageWork | null>("page_work", { pageId }),
   timerStatus: () => call<T.TimerStatus | null>("timer_status"),
   timerStart: (netzplanId: number, vorgangNr: string | null, leistungsart: string | null, description: string) =>
     call<T.TimeEntry>("timer_start", { netzplanId, vorgangNr, leistungsart, description }),

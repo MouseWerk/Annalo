@@ -165,6 +165,7 @@ mod tests {
             duration_minutes: 30,
             description: "Systemintegration Tests".into(),
             source: EntrySource::Manual,
+            page_id: None,
         })
         .unwrap();
 

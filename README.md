@@ -22,6 +22,7 @@ assistant that runs against **your own LiteLLM server**.
 **Time tracking**
 - Type `/zeit NP-8801/1020 2.5h #DEV Systemintegration` in any note and press Enter. It books the time and leaves a chip in the note
 - `/zeit` autocompletes: Netzplan/Vorgang (recently booked first, with the remaining plan hours) and, after `#`, the Leistungsart
+- Link a note to a Vorgang with the property `vorgang: NP-8801/1020` (or `netzplan: NP-8801`): the page shows a work card with budget, ETC, the latest bookings and a timer button, and `/zeit 1.5h Abstimmung` there books on that Vorgang
 - Timer with idle detection (inactive time can be subtracted), quick booking, manual entries
 - Weekly timesheet with a grid per Netzplan/Vorgang, release workflow, and export to SAP CATS, Jira worklogs, CSV or JSON
 - Projects view: budget, booked hours, remaining effort (ETC), forecast (EAC), critical path and float, as tables

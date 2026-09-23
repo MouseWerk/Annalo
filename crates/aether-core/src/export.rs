@@ -216,6 +216,7 @@ mod tests {
                 description: desc.into(),
                 status_flag: if minutes.is_some() { StatusFlag::Draft } else { StatusFlag::Running },
                 source: EntrySource::Slash,
+                page_id: None,
             },
             project_code: "PRJ-2026-X".into(),
             netzplan_nr: "NP-8801".into(),

@@ -75,7 +75,46 @@
   font-weight: 500;
 }
 .tag-chip:hover { background: color-mix(in srgb, var(--accent-soft) 70%, var(--accent)); }
-.frontmatter { width: 100%; margin: 4px 0 0; padding: 10px 12px; border-radius: var(--r-md); background: var(--bg-hover); font: var(--fs-sm) / 1.6 var(--font-mono); color: var(--text-2); user-select: text; }
+
+/* Properties (frontmatter) */
+.properties { display: grid; gap: 1px; margin: -10px 0 22px; font-size: var(--fs-md); }
+.properties-head, .work-toggle { display: inline-flex; align-items: center; gap: 4px; justify-self: start; margin-bottom: 4px; padding: 2px 4px 2px 0; border: 0; background: none; color: var(--text-3); font-size: var(--fs-sm); font-weight: 500; }
+.properties-head:hover, .work-toggle:hover { color: var(--text-2); }
+.prop-row { position: relative; display: grid; grid-template-columns: 20px minmax(90px, 150px) minmax(0, 1fr) 22px; align-items: start; gap: 6px; min-height: 30px; padding: 2px 4px; border-radius: var(--r-sm); }
+.prop-row:hover, .prop-row:focus-within { background: var(--bg-hover); }
+.prop-icon { display: grid; place-items: center; height: 26px; color: var(--text-3); }
+.prop-key, .prop-value-input { width: 100%; min-width: 0; height: 26px; padding: 0 6px; border: 0; border-radius: var(--r-xs); background: transparent; color: var(--text); font: inherit; outline: none; }
+.prop-key { color: var(--text-2); }
+.prop-key-static { display: flex; align-items: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prop-key:focus, .prop-value-input:focus { background: var(--bg-input); box-shadow: 0 0 0 1px var(--border-focus); }
+.prop-value-input::placeholder { color: var(--text-3); }
+.prop-value { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-width: 0; }
+.prop-value > .prop-value-input:first-child:not(.prop-raw) { flex: 1; }
+input.prop-value-input[type="date"] { width: auto; color-scheme: light dark; }
+.prop-raw { height: auto; min-height: 26px; padding: 4px 6px; resize: none; font: var(--fs-sm) / 1.55 var(--font-mono); color: var(--text-2); white-space: pre; overflow-x: auto; }
+.prop-remove { opacity: 0; margin-top: 2px; }
+.prop-row:hover .prop-remove, .prop-row:focus-within .prop-remove { opacity: 1; }
+.prop-list { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; width: 100%; min-height: 26px; }
+.prop-chip { display: inline-flex; align-items: center; gap: 2px; height: 22px; padding: 0 3px 0 8px; border-radius: var(--r-xs); background: var(--accent-soft); color: var(--accent-text); font-size: var(--fs-sm); }
+.prop-chip button { display: grid; place-items: center; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 3px; background: none; color: inherit; opacity: 0.7; }
+.prop-chip button:hover { opacity: 1; background: var(--bg-hover); }
+.prop-list-input { flex: 1; width: auto; min-width: 80px; }
+.prop-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; width: 100%; padding: 4px 0 2px; }
+.prop-picker .select { width: auto; max-width: 100%; min-width: 0; flex: 1 1 180px; }
+.prop-add { display: inline-flex; align-items: center; gap: 6px; justify-self: start; height: 28px; padding: 0 8px 0 7px; border: 0; border-radius: var(--r-sm); background: none; color: var(--text-3); font-size: var(--fs-sm); }
+.prop-add:hover { background: var(--bg-hover); color: var(--text-2); }
+
+/* Work card: the Vorgang a page is linked to */
+.work-card { display: grid; gap: 8px; margin: -8px 0 24px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-raised); font-size: var(--fs-md); }
+.work-error { display: flex; align-items: center; gap: 8px; color: var(--warning); }
+.work-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.work-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.work-stats { display: flex; flex-wrap: wrap; gap: 4px 16px; color: var(--text-2); font-size: var(--fs-sm); }
+.work-toggle { margin: 0; }
+.work-entries { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; font-size: var(--fs-sm); }
+.work-entries li { display: grid; grid-template-columns: 76px 56px minmax(0, 1fr); gap: 8px; padding: 3px 0; border-top: 1px solid var(--border); }
+.work-entries li.own .work-entry-desc { color: var(--accent-text); }
+.work-entry-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ------------------------------------------------------------------ prose */
 

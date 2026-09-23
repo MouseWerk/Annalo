@@ -19,6 +19,17 @@ pub struct LogOutcome {
     pub entry: TimeEntry,
     /// Budget alerts for the Netzplan / Vorgang the entry was booked on.
     pub alerts: Vec<BudgetStatus>,
+    /// Canonical reference the entry was booked on (`NP-8801/1020`).
+    #[serde(default)]
+    pub reference: String,
+}
+
+/// Where a `/zeit` line was typed: the page it books from and that page's linked reference.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SlashContext<'a> {
+    /// Used when the line has no reference (`/zeit 1.5h Abstimmung`).
+    pub default_ref: Option<&'a str>,
+    pub page_id: Option<i64>,
 }
 
 /// Parses a `/zeit` line, validates it against the WBS and books it.
@@ -31,8 +42,20 @@ pub fn log_slash_command<Tz: TimeZone>(
     offset: &Tz,
     thresholds: &Thresholds,
 ) -> Result<LogOutcome> {
+    log_slash_command_in(db, line, now, offset, thresholds, SlashContext::default())
+}
+
+/// [`log_slash_command`] for a line typed on a page.
+pub fn log_slash_command_in<Tz: TimeZone>(
+    db: &Database,
+    line: &str,
+    now: DateTime<Utc>,
+    offset: &Tz,
+    thresholds: &Thresholds,
+    ctx: SlashContext,
+) -> Result<LogOutcome> {
     let local_now = now.with_timezone(offset);
-    let cmd = zeit::parse(line, local_now.date_naive())?;
+    let cmd = zeit::parse_with_default(line, local_now.date_naive(), ctx.default_ref)?;
 
     let np = db.netzplan_by_ref(&cmd.netzplan_ref)?;
     let mut vorgang_nr = cmd.vorgang_nr.clone();
@@ -72,10 +95,15 @@ pub fn log_slash_command<Tz: TimeZone>(
         duration_minutes: cmd.duration_minutes,
         description: cmd.description,
         source: EntrySource::Slash,
+        page_id: ctx.page_id,
     })?;
 
     let alerts = alerts_for(db, np.id, vorgang_nr.as_deref(), thresholds)?;
-    Ok(LogOutcome { entry, alerts })
+    let reference = match &vorgang_nr {
+        Some(v) => format!("{}/{v}", np.netzplan_nr),
+        None => np.netzplan_nr.clone(),
+    };
+    Ok(LogOutcome { entry, alerts, reference })
 }
 
 /// Resolves a local wall-clock time in the given zone (per date, so DST is honoured).
@@ -271,6 +299,24 @@ mod tests {
         assert_eq!(out.entry.end_time, Some(now()));
         assert_eq!(out.entry.source, EntrySource::Slash);
         assert!(out.alerts.is_empty(), "2.5h of 6h is fine: {:?}", out.alerts);
+    }
+
+    #[test]
+    fn page_context_supplies_reference_and_page() {
+        let (db, _) = setup();
+        let page = db.create_page(None, "Integration", None).unwrap();
+        let ctx = SlashContext { default_ref: Some("np-8801/1020"), page_id: Some(page.id) };
+        let t = Thresholds::default();
+        let out = log_slash_command_in(&db, "/zeit 0.5h Abstimmung", now(), &cet(), &t, ctx).unwrap();
+        assert_eq!(out.reference, "NP-8801/1020");
+        assert_eq!((out.entry.vorgang_nr.as_deref(), out.entry.page_id), (Some("1020"), Some(page.id)));
+        assert_eq!(out.entry.description, "Abstimmung");
+        // An explicit reference still wins; the page is recorded either way.
+        let out = log_slash_command_in(&db, "/zeit NP-8801/1010 1h x", now(), &cet(), &t, ctx).unwrap();
+        assert_eq!((out.reference.as_str(), out.entry.page_id), ("NP-8801/1010", Some(page.id)));
+        // Purging the page keeps the entry, only the link goes.
+        db.delete_page(page.id).unwrap();
+        assert_eq!(db.time_entry(out.entry.id).unwrap().page_id, None);
     }
 
     #[test]

@@ -12,6 +12,8 @@
 //!
 //! Durations accept `2.5h`, `2,5h`, `2.5std`, `90m`, `90min`, `1h30m` and `1:30`.
 //! Unquoted trailing words become the description. `/time` is an alias.
+//! With a default reference (a page linked to a Vorgang) the reference may be left
+//! out: `/zeit 1.5h Abstimmung`. A first token that is a duration means "no reference".
 
 use chrono::{Datelike, NaiveDate, NaiveTime};
 use serde::{Deserialize, Serialize};
@@ -56,6 +58,11 @@ pub fn is_zeit_command(line: &str) -> bool {
 
 /// Parses a `/zeit` command. `today` is only used to complete `@dd.mm.` dates.
 pub fn parse(line: &str, today: NaiveDate) -> Result<ZeitCommand> {
+    parse_with_default(line, today, None)
+}
+
+/// Like [`parse`]; a command without reference books on `default_ref` (`NP-8801` or `NP-8801/1020`).
+pub fn parse_with_default(line: &str, today: NaiveDate, default_ref: Option<&str>) -> Result<ZeitCommand> {
     let tokens = tokenize(line)?;
     let mut it = tokens.into_iter().peekable();
 
@@ -64,8 +71,14 @@ pub fn parse(line: &str, today: NaiveDate) -> Result<ZeitCommand> {
         _ => return Err(Error::Parse("command must start with /zeit".into())),
     }
 
-    let target = match it.next() {
-        Some(Token::Word(w)) => w,
+    let default_ref = default_ref.map(str::trim).filter(|r| !r.is_empty());
+    let target = match (it.peek(), default_ref) {
+        (Some(Token::Word(w)), Some(d)) if parse_duration(w).is_ok() => d.to_owned(),
+        (Some(Token::Word(w)), _) => {
+            let w = w.clone();
+            it.next();
+            w
+        }
         _ => return Err(Error::Parse("missing Netzplan reference, e.g. NP-8801/1020".into())),
     };
     let (netzplan_ref, vorgang_nr) = match target.split_once('/') {
@@ -318,6 +331,23 @@ mod tests {
         for bad in ["", "h", "2x", "1:75", "25h", "0m", "-1h", "2.5"] {
             assert!(parse_duration(bad).is_err(), "{bad} should fail");
         }
+    }
+
+    #[test]
+    fn default_reference_when_the_first_token_is_a_duration() {
+        let c = parse_with_default("/zeit 1.5h Abstimmung mit Kunde", today(), Some("NP-8801/1020")).unwrap();
+        assert_eq!((c.netzplan_ref.as_str(), c.vorgang_nr.as_deref()), ("NP-8801", Some("1020")));
+        assert_eq!((c.duration_minutes, c.description.as_str()), (90, "Abstimmung mit Kunde"));
+        let c = parse_with_default("/zeit 90m #DEV", today(), Some("NP-8801")).unwrap();
+        assert_eq!((c.netzplan_ref.as_str(), c.vorgang_nr), ("NP-8801", None));
+        assert_eq!(c.leistungsart.as_deref(), Some("DEV"));
+        // An explicit reference wins over the default.
+        let c = parse_with_default("/zeit NP-7700/10 1h x", today(), Some("NP-8801/1020")).unwrap();
+        assert_eq!((c.netzplan_ref.as_str(), c.vorgang_nr.as_deref()), ("NP-7700", Some("10")));
+        // Without a default a leading duration is still an error, as is a blank default.
+        assert!(parse("/zeit 1h x", today()).is_err());
+        assert!(parse_with_default("/zeit 1h x", today(), Some("  ")).is_err());
+        assert!(parse_with_default("/zeit", today(), Some("NP-8801")).is_err());
     }
 
     #[test]
