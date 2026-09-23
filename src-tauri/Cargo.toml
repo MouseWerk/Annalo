@@ -1,0 +1,21 @@
+[package]
+name = "aether-os"
+description = "AETHER OS desktop shell (Tauri v2)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "aether_os_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+aether-core = { path = "../crates/aether-core" }
+chrono = { version = "0.4.45", features = ["serde"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tauri = { version = "2", features = [] }
+tauri-plugin-global-shortcut = "2"

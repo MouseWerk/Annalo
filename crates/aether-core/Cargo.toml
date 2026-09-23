@@ -1,0 +1,27 @@
+[package]
+name = "aether-core"
+description = "Local-first core of AETHER OS: storage, WBS time tracking, Netzplan scheduling and the LiteLLM engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+chrono = { version = "0.4.45", features = ["serde"] }
+futures-util = "0.3.34"
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "stream", "rustls"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.20"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_SystemInformation",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Threading",
+] }
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["rt", "macros", "time", "net", "io-util"] }

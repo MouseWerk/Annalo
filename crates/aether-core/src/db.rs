@@ -1,0 +1,652 @@
+//! Embedded SQLite store.
+//!
+//! One file per workspace, WAL mode, foreign keys on. Schema changes are
+//! numbered migrations tracked through `PRAGMA user_version`.
+
+use std::path::Path;
+
+use chrono::{DateTime, SecondsFormat, Utc};
+use rusqlite::{Connection, OptionalExtension, Row, params};
+
+use crate::error::{Error, Result};
+use crate::model::*;
+
+const MIGRATIONS: &[&str] = &[include_str!("../migrations/0001_init.sql")];
+
+pub struct Database {
+    conn: Connection,
+}
+
+pub(crate) fn ts(t: DateTime<Utc>) -> String {
+    t.to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
+pub(crate) fn parse_ts(s: &str) -> rusqlite::Result<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(s)
+        .map(|t| t.with_timezone(&Utc))
+        .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))
+}
+
+/// Filter for [`Database::list_time_entries`]. `None` fields do not filter.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct EntryFilter {
+    pub from: Option<DateTime<Utc>>,
+    pub to: Option<DateTime<Utc>>,
+    pub netzplan_id: Option<i64>,
+    pub status: Option<StatusFlag>,
+}
+
+impl Database {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        Self::init(Connection::open(path)?)
+    }
+
+    pub fn open_in_memory() -> Result<Self> {
+        Self::init(Connection::open_in_memory()?)
+    }
+
+    fn init(conn: Connection) -> Result<Self> {
+        conn.execute_batch(
+            "PRAGMA journal_mode = WAL;
+             PRAGMA synchronous = NORMAL;
+             PRAGMA foreign_keys = ON;
+             PRAGMA temp_store = MEMORY;",
+        )?;
+        let mut db = Database { conn };
+        db.migrate()?;
+        Ok(db)
+    }
+
+    fn migrate(&mut self) -> Result<()> {
+        let current = self.schema_version()?;
+        if current > MIGRATIONS.len() {
+            return Err(Error::State(format!(
+                "database schema v{current} is newer than this build (v{})",
+                MIGRATIONS.len()
+            )));
+        }
+        for (i, sql) in MIGRATIONS.iter().enumerate().skip(current) {
+            let tx = self.conn.transaction()?;
+            tx.execute_batch(sql)?;
+            tx.pragma_update(None, "user_version", (i + 1) as i64)?;
+            tx.commit()?;
+        }
+        Ok(())
+    }
+
+    pub fn schema_version(&self) -> Result<usize> {
+        let v: i64 = self.conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
+        Ok(v.max(0) as usize)
+    }
+
+    /// Escape hatch for modules that run their own queries (search, RAG).
+    pub fn conn(&self) -> &Connection {
+        &self.conn
+    }
+
+    // ---------------------------------------------------------------- projects
+
+    pub fn create_project(&self, project_code: &str, name: &str) -> Result<Project> {
+        self.conn.execute("INSERT INTO projects (project_code, name) VALUES (?1, ?2)", params![project_code, name])?;
+        self.project_by_id(self.conn.last_insert_rowid())
+    }
+
+    fn map_project(r: &Row) -> rusqlite::Result<Project> {
+        Ok(Project { id: r.get(0)?, project_code: r.get(1)?, name: r.get(2)?, created_at: r.get(3)? })
+    }
+
+    pub fn project_by_id(&self, id: i64) -> Result<Project> {
+        self.conn
+            .query_row("SELECT id, project_code, name, created_at FROM projects WHERE id = ?1", [id], Self::map_project)
+            .optional()?
+            .ok_or_else(|| Error::not_found("project", id.to_string()))
+    }
+
+    pub fn project_by_code(&self, code: &str) -> Result<Project> {
+        self.conn
+            .query_row(
+                "SELECT id, project_code, name, created_at FROM projects WHERE project_code = ?1 COLLATE NOCASE",
+                [code],
+                Self::map_project,
+            )
+            .optional()?
+            .ok_or_else(|| Error::not_found("project", code))
+    }
+
+    pub fn list_projects(&self) -> Result<Vec<Project>> {
+        let mut st = self
+            .conn
+            .prepare_cached("SELECT id, project_code, name, created_at FROM projects ORDER BY project_code")?;
+        let rows = st.query_map([], Self::map_project)?.collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
+    }
+
+    // -------------------------------------------------------------- netzpläne
+
+    pub fn create_netzplan(
+        &self,
+        project_id: i64,
+        netzplan_nr: &str,
+        wbs_element: &str,
+        description: &str,
+        planned_hours: f64,
+    ) -> Result<Netzplan> {
+        self.conn.execute(
+            "INSERT INTO netzplaene (project_id, netzplan_nr, wbs_element, description, planned_hours)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![project_id, netzplan_nr, wbs_element, description, planned_hours],
+        )?;
+        self.netzplan_by_id(self.conn.last_insert_rowid())
+    }
+
+    const NETZPLAN_COLS: &'static str = "id, project_id, netzplan_nr, wbs_element, description, planned_hours";
+
+    fn map_netzplan(r: &Row) -> rusqlite::Result<Netzplan> {
+        Ok(Netzplan {
+            id: r.get(0)?,
+            project_id: r.get(1)?,
+            netzplan_nr: r.get(2)?,
+            wbs_element: r.get(3)?,
+            description: r.get(4)?,
+            planned_hours: r.get(5)?,
+        })
+    }
+
+    pub fn netzplan_by_id(&self, id: i64) -> Result<Netzplan> {
+        self.conn
+            .query_row(
+                &format!("SELECT {} FROM netzplaene WHERE id = ?1", Self::NETZPLAN_COLS),
+                [id],
+                Self::map_netzplan,
+            )
+            .optional()?
+            .ok_or_else(|| Error::not_found("netzplan", id.to_string()))
+    }
+
+    /// Resolves a Netzplan by its number or by its WBS (PSP) element.
+    pub fn netzplan_by_ref(&self, reference: &str) -> Result<Netzplan> {
+        self.conn
+            .query_row(
+                &format!(
+                    "SELECT {} FROM netzplaene
+                     WHERE netzplan_nr = ?1 COLLATE NOCASE OR wbs_element = ?1 COLLATE NOCASE
+                     ORDER BY netzplan_nr = ?1 COLLATE NOCASE DESC LIMIT 1",
+                    Self::NETZPLAN_COLS
+                ),
+                [reference],
+                Self::map_netzplan,
+            )
+            .optional()?
+            .ok_or_else(|| Error::not_found("netzplan", reference))
+    }
+
+    pub fn list_netzplaene(&self, project_id: Option<i64>) -> Result<Vec<Netzplan>> {
+        let mut st = self.conn.prepare_cached(&format!(
+            "SELECT {} FROM netzplaene WHERE ?1 IS NULL OR project_id = ?1 ORDER BY netzplan_nr",
+            Self::NETZPLAN_COLS
+        ))?;
+        let rows = st.query_map([project_id], Self::map_netzplan)?.collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
+    }
+
+    // --------------------------------------------------------------- vorgänge
+
+    pub fn create_vorgang(
+        &self,
+        netzplan_id: i64,
+        vorgang_nr: &str,
+        description: &str,
+        duration_days: f64,
+        planned_hours: f64,
+    ) -> Result<Vorgang> {
+        self.conn.execute(
+            "INSERT INTO vorgaenge (netzplan_id, vorgang_nr, description, duration_days, planned_hours)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![netzplan_id, vorgang_nr, description, duration_days, planned_hours],
+        )?;
+        let id = self.conn.last_insert_rowid();
+        Ok(Vorgang {
+            id,
+            netzplan_id,
+            vorgang_nr: vorgang_nr.to_owned(),
+            description: description.to_owned(),
+            duration_days,
+            planned_hours,
+            remaining_hours: None,
+            predecessors: vec![],
+        })
+    }
+
+    pub fn link_vorgaenge(&self, predecessor_id: i64, successor_id: i64) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO vorgang_links (predecessor_id, successor_id) VALUES (?1, ?2)",
+            params![predecessor_id, successor_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_remaining_hours(&self, vorgang_id: i64, remaining: Option<f64>) -> Result<()> {
+        let n = self
+            .conn
+            .execute("UPDATE vorgaenge SET remaining_hours = ?2 WHERE id = ?1", params![vorgang_id, remaining])?;
+        if n == 0 {
+            return Err(Error::not_found("vorgang", vorgang_id.to_string()));
+        }
+        Ok(())
+    }
+
+    pub fn list_vorgaenge(&self, netzplan_id: i64) -> Result<Vec<Vorgang>> {
+        let mut st = self.conn.prepare_cached(
+            "SELECT id, netzplan_id, vorgang_nr, description, duration_days, planned_hours, remaining_hours
+             FROM vorgaenge WHERE netzplan_id = ?1 ORDER BY vorgang_nr",
+        )?;
+        let mut rows: Vec<Vorgang> = st
+            .query_map([netzplan_id], |r| {
+                Ok(Vorgang {
+                    id: r.get(0)?,
+                    netzplan_id: r.get(1)?,
+                    vorgang_nr: r.get(2)?,
+                    description: r.get(3)?,
+                    duration_days: r.get(4)?,
+                    planned_hours: r.get(5)?,
+                    remaining_hours: r.get(6)?,
+                    predecessors: vec![],
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        let mut links = self.conn.prepare_cached(
+            "SELECT l.successor_id, l.predecessor_id FROM vorgang_links l
+             JOIN vorgaenge v ON v.id = l.successor_id WHERE v.netzplan_id = ?1
+             ORDER BY l.predecessor_id",
+        )?;
+        for link in links.query_map([netzplan_id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))? {
+            let (succ, pred) = link?;
+            if let Some(v) = rows.iter_mut().find(|v| v.id == succ) {
+                v.predecessors.push(pred);
+            }
+        }
+        Ok(rows)
+    }
+
+    pub fn leistungsart_exists(&self, code: &str) -> Result<bool> {
+        Ok(self
+            .conn
+            .query_row("SELECT 1 FROM leistungsarten WHERE code = ?1", [code], |_| Ok(()))
+            .optional()?
+            .is_some())
+    }
+
+    // ----------------------------------------------------------- time entries
+
+    const ENTRY_COLS: &'static str = "e.id, e.netzplan_id, e.vorgang_nr, e.leistungsart, e.start_time, e.end_time,
+         e.duration_minutes, e.description, e.status_flag, e.source";
+
+    fn map_entry(r: &Row) -> rusqlite::Result<TimeEntry> {
+        let status: String = r.get(8)?;
+        let source: String = r.get(9)?;
+        Ok(TimeEntry {
+            id: r.get(0)?,
+            netzplan_id: r.get(1)?,
+            vorgang_nr: r.get(2)?,
+            leistungsart: r.get(3)?,
+            start_time: parse_ts(&r.get::<_, String>(4)?)?,
+            end_time: r.get::<_, Option<String>>(5)?.as_deref().map(parse_ts).transpose()?,
+            duration_minutes: r.get(6)?,
+            description: r.get(7)?,
+            // The CHECK constraints guarantee these parse.
+            status_flag: StatusFlag::parse(&status).unwrap_or(StatusFlag::Draft),
+            source: EntrySource::parse(&source).unwrap_or(EntrySource::Manual),
+        })
+    }
+
+    pub fn time_entry(&self, id: i64) -> Result<TimeEntry> {
+        self.conn
+            .query_row(
+                &format!("SELECT {} FROM time_entries e WHERE e.id = ?1", Self::ENTRY_COLS),
+                [id],
+                Self::map_entry,
+            )
+            .optional()?
+            .ok_or_else(|| Error::not_found("time entry", id.to_string()))
+    }
+
+    pub fn insert_time_entry(&self, e: &NewTimeEntry) -> Result<TimeEntry> {
+        if e.duration_minutes < 0 {
+            return Err(Error::State("duration must not be negative".into()));
+        }
+        let end = e.start_time + chrono::Duration::minutes(e.duration_minutes);
+        self.conn.execute(
+            "INSERT INTO time_entries
+               (netzplan_id, vorgang_nr, leistungsart, start_time, end_time, duration_minutes, description, status_flag, source)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'draft', ?8)",
+            params![
+                e.netzplan_id,
+                e.vorgang_nr,
+                e.leistungsart,
+                ts(e.start_time),
+                ts(end),
+                e.duration_minutes,
+                e.description,
+                e.source.as_str()
+            ],
+        )?;
+        self.time_entry(self.conn.last_insert_rowid())
+    }
+
+    pub fn running_timer(&self) -> Result<Option<TimeEntry>> {
+        Ok(self
+            .conn
+            .query_row(
+                &format!("SELECT {} FROM time_entries e WHERE e.status_flag = 'running'", Self::ENTRY_COLS),
+                [],
+                Self::map_entry,
+            )
+            .optional()?)
+    }
+
+    pub fn start_timer(
+        &self,
+        netzplan_id: i64,
+        vorgang_nr: Option<&str>,
+        leistungsart: Option<&str>,
+        description: &str,
+        at: DateTime<Utc>,
+    ) -> Result<TimeEntry> {
+        if let Some(t) = self.running_timer()? {
+            return Err(Error::State(format!("timer #{} is already running", t.id)));
+        }
+        self.conn.execute(
+            "INSERT INTO time_entries (netzplan_id, vorgang_nr, leistungsart, start_time, description, status_flag, source)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'running', 'timer')",
+            params![netzplan_id, vorgang_nr, leistungsart, ts(at), description],
+        )?;
+        self.time_entry(self.conn.last_insert_rowid())
+    }
+
+    /// Stops the running timer. `idle_minutes` is subtracted from the booked
+    /// duration (idle detection); the wall-clock end time is kept.
+    pub fn stop_timer(&self, at: DateTime<Utc>, idle_minutes: i64) -> Result<TimeEntry> {
+        let running = self.running_timer()?.ok_or_else(|| Error::State("no timer is running".into()))?;
+        if at < running.start_time {
+            return Err(Error::State("stop time is before start time".into()));
+        }
+        let minutes = ((at - running.start_time).num_seconds() as f64 / 60.0).round() as i64;
+        let booked = (minutes - idle_minutes.max(0)).max(0);
+        self.conn.execute(
+            "UPDATE time_entries SET end_time = ?2, duration_minutes = ?3, status_flag = 'draft' WHERE id = ?1",
+            params![running.id, ts(at), booked],
+        )?;
+        self.time_entry(running.id)
+    }
+
+    pub fn discard_timer(&self) -> Result<()> {
+        self.conn.execute("DELETE FROM time_entries WHERE status_flag = 'running'", [])?;
+        Ok(())
+    }
+
+    pub fn delete_time_entry(&self, id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM time_entries WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    pub fn set_entry_status(&self, ids: &[i64], status: StatusFlag) -> Result<usize> {
+        if status == StatusFlag::Running {
+            return Err(Error::State("entries cannot be set to running".into()));
+        }
+        let tx = self.conn.unchecked_transaction()?;
+        let mut n = 0;
+        {
+            let mut st = tx.prepare_cached(
+                "UPDATE time_entries SET status_flag = ?2 WHERE id = ?1 AND status_flag <> 'running'",
+            )?;
+            for id in ids {
+                n += st.execute(params![id, status.as_str()])?;
+            }
+        }
+        tx.commit()?;
+        Ok(n)
+    }
+
+    pub fn list_time_entries(&self, f: &EntryFilter) -> Result<Vec<TimeEntryRow>> {
+        let mut st = self.conn.prepare_cached(&format!(
+            "SELECT {}, p.project_code, n.netzplan_nr, n.wbs_element
+             FROM time_entries e
+             JOIN netzplaene n ON n.id = e.netzplan_id
+             JOIN projects p ON p.id = n.project_id
+             WHERE (?1 IS NULL OR e.start_time >= ?1)
+               AND (?2 IS NULL OR e.start_time < ?2)
+               AND (?3 IS NULL OR e.netzplan_id = ?3)
+               AND (?4 IS NULL OR e.status_flag = ?4)
+             ORDER BY e.start_time, e.id",
+            Self::ENTRY_COLS
+        ))?;
+        let rows = st
+            .query_map(params![f.from.map(ts), f.to.map(ts), f.netzplan_id, f.status.map(StatusFlag::as_str)], |r| {
+                Ok(TimeEntryRow {
+                    entry: Self::map_entry(r)?,
+                    project_code: r.get(10)?,
+                    netzplan_nr: r.get(11)?,
+                    wbs_element: r.get(12)?,
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
+    }
+
+    /// Booked hours (finished entries only) on a Netzplan, optionally for one Vorgang.
+    pub fn booked_hours(&self, netzplan_id: i64, vorgang_nr: Option<&str>) -> Result<f64> {
+        let minutes: i64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(duration_minutes), 0) FROM time_entries
+             WHERE netzplan_id = ?1 AND status_flag <> 'running' AND (?2 IS NULL OR vorgang_nr = ?2)",
+            params![netzplan_id, vorgang_nr],
+            |r| r.get(0),
+        )?;
+        Ok(minutes as f64 / 60.0)
+    }
+
+    // ------------------------------------------------------------------ pages
+
+    pub fn create_page(&self, parent_id: Option<i64>, title: &str, icon: Option<&str>) -> Result<Page> {
+        let position: i64 = self.conn.query_row(
+            "SELECT COALESCE(MAX(position) + 1, 0) FROM pages WHERE parent_id IS ?1",
+            [parent_id],
+            |r| r.get(0),
+        )?;
+        self.conn.execute(
+            "INSERT INTO pages (parent_id, title, icon, position) VALUES (?1, ?2, ?3, ?4)",
+            params![parent_id, title, icon, position],
+        )?;
+        Ok(Page {
+            id: self.conn.last_insert_rowid(),
+            parent_id,
+            title: title.into(),
+            icon: icon.map(Into::into),
+            position,
+        })
+    }
+
+    pub fn rename_page(&self, id: i64, title: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE pages SET title = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?1",
+            params![id, title],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_page(&self, id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM pages WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    pub fn list_pages(&self) -> Result<Vec<Page>> {
+        let mut st =
+            self.conn.prepare_cached("SELECT id, parent_id, title, icon, position FROM pages ORDER BY position, id")?;
+        let rows = st
+            .query_map([], |r| {
+                Ok(Page { id: r.get(0)?, parent_id: r.get(1)?, title: r.get(2)?, icon: r.get(3)?, position: r.get(4)? })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
+    }
+
+    /// The whole page hierarchy, for the sidebar.
+    pub fn page_tree(&self) -> Result<Vec<PageNode>> {
+        fn build(parent: Option<i64>, pages: &[Page]) -> Vec<PageNode> {
+            pages
+                .iter()
+                .filter(|p| p.parent_id == parent)
+                .map(|p| PageNode { page: p.clone(), children: build(Some(p.id), pages) })
+                .collect()
+        }
+        Ok(build(None, &self.list_pages()?))
+    }
+
+    // ----------------------------------------------------------------- blocks
+
+    fn map_block(r: &Row) -> rusqlite::Result<Block> {
+        Ok(Block {
+            id: r.get(0)?,
+            page_id: r.get(1)?,
+            position: r.get(2)?,
+            block_type: r.get(3)?,
+            content_markdown: r.get(4)?,
+            has_embedding: r.get(5)?,
+        })
+    }
+
+    pub fn add_block(&self, page_id: i64, block_type: &str, content_markdown: &str) -> Result<Block> {
+        let position: i64 = self.conn.query_row(
+            "SELECT COALESCE(MAX(position) + 1, 0) FROM notes_blocks WHERE page_id = ?1",
+            [page_id],
+            |r| r.get(0),
+        )?;
+        self.conn.execute(
+            "INSERT INTO notes_blocks (page_id, position, block_type, content_markdown) VALUES (?1, ?2, ?3, ?4)",
+            params![page_id, position, block_type, content_markdown],
+        )?;
+        self.block(self.conn.last_insert_rowid())
+    }
+
+    pub fn block(&self, id: i64) -> Result<Block> {
+        self.conn
+            .query_row(
+                "SELECT id, page_id, position, block_type, content_markdown, vector_embedding IS NOT NULL
+                 FROM notes_blocks WHERE id = ?1",
+                [id],
+                Self::map_block,
+            )
+            .optional()?
+            .ok_or_else(|| Error::not_found("block", id.to_string()))
+    }
+
+    pub fn update_block(&self, id: i64, block_type: &str, content_markdown: &str) -> Result<Block> {
+        let n = self.conn.execute(
+            "UPDATE notes_blocks SET block_type = ?2, content_markdown = ?3 WHERE id = ?1",
+            params![id, block_type, content_markdown],
+        )?;
+        if n == 0 {
+            return Err(Error::not_found("block", id.to_string()));
+        }
+        self.block(id)
+    }
+
+    pub fn delete_block(&self, id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM notes_blocks WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    pub fn list_blocks(&self, page_id: i64) -> Result<Vec<Block>> {
+        let mut st = self.conn.prepare_cached(
+            "SELECT id, page_id, position, block_type, content_markdown, vector_embedding IS NOT NULL
+             FROM notes_blocks WHERE page_id = ?1 ORDER BY position, id",
+        )?;
+        let rows = st.query_map([page_id], Self::map_block)?.collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
+    }
+
+    // --------------------------------------------------------------- ai usage
+
+    pub fn record_ai_usage(&self, session_id: &str, u: &crate::ai::metrics::UsageRecord) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO ai_usage (session_id, model, prompt_tokens, completion_tokens, cost_usd, ttft_ms, tokens_per_second)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                session_id,
+                u.model,
+                u.prompt_tokens as i64,
+                u.completion_tokens as i64,
+                u.cost_usd,
+                u.ttft_ms,
+                u.tokens_per_second
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// (prompt tokens, completion tokens, cost in USD) for one AI session.
+    pub fn ai_session_totals(&self, session_id: &str) -> Result<(u64, u64, f64)> {
+        Ok(self.conn.query_row(
+            "SELECT COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0), COALESCE(SUM(cost_usd), 0)
+             FROM ai_usage WHERE session_id = ?1",
+            [session_id],
+            |r| Ok((r.get::<_, i64>(0)? as u64, r.get::<_, i64>(1)? as u64, r.get(2)?)),
+        )?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    pub(crate) fn seeded() -> (Database, Netzplan) {
+        let db = Database::open_in_memory().unwrap();
+        let p = db.create_project("PRJ-2026-X", "Aether Rollout").unwrap();
+        let np = db.create_netzplan(p.id, "NP-8801", "NP-8801-1020", "Systemintegration", 40.0).unwrap();
+        (db, np)
+    }
+
+    #[test]
+    fn migrates_and_resolves_references() {
+        let (db, np) = seeded();
+        assert_eq!(db.schema_version().unwrap(), MIGRATIONS.len());
+        assert_eq!(db.netzplan_by_ref("np-8801").unwrap().id, np.id);
+        assert_eq!(db.netzplan_by_ref("NP-8801-1020").unwrap().id, np.id);
+        assert!(matches!(db.netzplan_by_ref("NP-0000"), Err(Error::NotFound { .. })));
+    }
+
+    #[test]
+    fn timer_lifecycle_subtracts_idle_time() {
+        let (db, np) = seeded();
+        let t0 = Utc.with_ymd_and_hms(2026, 9, 1, 8, 0, 0).unwrap();
+        db.start_timer(np.id, Some("1020"), Some("DEV"), "Integration", t0).unwrap();
+        assert!(db.start_timer(np.id, None, None, "", t0).is_err(), "only one timer may run");
+        let e = db.stop_timer(t0 + chrono::Duration::minutes(95), 5).unwrap();
+        assert_eq!(e.duration_minutes, Some(90));
+        assert_eq!(e.status_flag, StatusFlag::Draft);
+        assert!(db.running_timer().unwrap().is_none());
+        assert!((db.booked_hours(np.id, Some("1020")).unwrap() - 1.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn page_tree_nests_children() {
+        let db = Database::open_in_memory().unwrap();
+        let root = db.create_page(None, "Workspace", None).unwrap();
+        let child = db.create_page(Some(root.id), "Meeting Notes", None).unwrap();
+        db.create_page(Some(child.id), "2026-09-23", None).unwrap();
+        let tree = db.page_tree().unwrap();
+        assert_eq!(tree.len(), 1);
+        assert_eq!(tree[0].children[0].children[0].page.title, "2026-09-23");
+    }
+
+    #[test]
+    fn editing_a_block_invalidates_its_embedding() {
+        let db = Database::open_in_memory().unwrap();
+        let page = db.create_page(None, "P", None).unwrap();
+        let b = db.add_block(page.id, "paragraph", "hello").unwrap();
+        crate::ai::rag::store_embedding(&db, b.id, &[0.1, 0.2]).unwrap();
+        assert!(db.block(b.id).unwrap().has_embedding);
+        db.update_block(b.id, "paragraph", "hello world").unwrap();
+        assert!(!db.block(b.id).unwrap().has_embedding);
+    }
+}

@@ -1,0 +1,295 @@
+//! High-level time tracking: slash-command logging and budget / ETC alerts.
+
+use chrono::{DateTime, FixedOffset, NaiveTime, TimeZone, Utc};
+use serde::{Deserialize, Serialize};
+
+use crate::db::Database;
+use crate::error::{Error, Result};
+use crate::model::{EntrySource, NewTimeEntry, TimeEntry};
+use crate::zeit::{self, DateSpec};
+
+/// Default start time for entries booked on a past day without `@hh:mm`.
+const DEFAULT_START: NaiveTime = match NaiveTime::from_hms_opt(8, 0, 0) {
+    Some(t) => t,
+    None => unreachable!(),
+};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogOutcome {
+    pub entry: TimeEntry,
+    /// Budget alerts for the Netzplan / Vorgang the entry was booked on.
+    pub alerts: Vec<BudgetStatus>,
+}
+
+/// Parses a `/zeit` line, validates it against the WBS and books it.
+///
+/// `offset` is the user's local UTC offset, used to interpret dates and `@hh:mm`.
+pub fn log_slash_command(
+    db: &Database,
+    line: &str,
+    now: DateTime<Utc>,
+    offset: FixedOffset,
+    thresholds: &Thresholds,
+) -> Result<LogOutcome> {
+    let local_now = now.with_timezone(&offset);
+    let cmd = zeit::parse(line, local_now.date_naive())?;
+
+    let np = db.netzplan_by_ref(&cmd.netzplan_ref)?;
+    if let Some(v) = &cmd.vorgang_nr {
+        let vorgaenge = db.list_vorgaenge(np.id)?;
+        // A Netzplan without modelled Vorgänge accepts free activity codes.
+        if !vorgaenge.is_empty() && !vorgaenge.iter().any(|x| x.vorgang_nr.eq_ignore_ascii_case(v)) {
+            return Err(Error::not_found("vorgang", format!("{}/{v}", np.netzplan_nr)));
+        }
+    }
+    if let Some(la) = &cmd.leistungsart
+        && !db.leistungsart_exists(la)?
+    {
+        return Err(Error::not_found("leistungsart", la.clone()));
+    }
+
+    let duration = chrono::Duration::minutes(cmd.duration_minutes);
+    let start = match (cmd.date, cmd.start) {
+        (_, Some(t)) => local_to_utc(offset, cmd.date.resolve(local_now.date_naive()).and_time(t))?,
+        // "Today" without a start time: the work just ended.
+        (DateSpec::Today, None) => now - duration,
+        (d, None) => local_to_utc(offset, d.resolve(local_now.date_naive()).and_time(DEFAULT_START))?,
+    };
+    if start + duration > now + chrono::Duration::minutes(1) {
+        return Err(Error::State("time entries cannot end in the future".into()));
+    }
+
+    let entry = db.insert_time_entry(&NewTimeEntry {
+        netzplan_id: np.id,
+        vorgang_nr: cmd.vorgang_nr.clone(),
+        leistungsart: cmd.leistungsart,
+        start_time: start,
+        duration_minutes: cmd.duration_minutes,
+        description: cmd.description,
+        source: EntrySource::Slash,
+    })?;
+
+    let alerts = alerts_for(db, np.id, cmd.vorgang_nr.as_deref(), thresholds)?;
+    Ok(LogOutcome { entry, alerts })
+}
+
+fn local_to_utc(offset: FixedOffset, dt: chrono::NaiveDateTime) -> Result<DateTime<Utc>> {
+    offset
+        .from_local_datetime(&dt)
+        .single()
+        .map(|t| t.with_timezone(&Utc))
+        .ok_or_else(|| Error::State(format!("ambiguous local time {dt}")))
+}
+
+// ------------------------------------------------------------------- budgets
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct Thresholds {
+    /// Consumed share of the plan that raises a warning (e.g. 0.75).
+    pub warning: f64,
+    /// Consumed share of the plan that raises a critical alert (e.g. 0.9).
+    pub critical: f64,
+}
+
+impl Default for Thresholds {
+    fn default() -> Self {
+        Thresholds { warning: 0.75, critical: 0.9 }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AlertLevel {
+    Ok,
+    Warning,
+    /// Consumption above the critical threshold, or the forecast (EAC) exceeds the plan.
+    Critical,
+    /// More hours booked than planned.
+    Exceeded,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BudgetStatus {
+    /// `NP-8801` for a Netzplan, `NP-8801/1020` for a Vorgang.
+    pub label: String,
+    pub netzplan_id: i64,
+    pub vorgang_nr: Option<String>,
+    pub planned_hours: f64,
+    pub booked_hours: f64,
+    /// Estimate to complete.
+    pub etc_hours: f64,
+    /// Estimate at completion = booked + ETC.
+    pub eac_hours: f64,
+    /// booked / planned (0 when nothing is planned).
+    pub consumed: f64,
+    pub level: AlertLevel,
+}
+
+fn classify(planned: f64, booked: f64, eac: f64, t: &Thresholds) -> (f64, AlertLevel) {
+    if planned <= 0.0 {
+        let level = if booked > 0.0 { AlertLevel::Exceeded } else { AlertLevel::Ok };
+        return (0.0, level);
+    }
+    let consumed = booked / planned;
+    let eps = 1e-9;
+    let level = if booked > planned + eps {
+        AlertLevel::Exceeded
+    } else if consumed >= t.critical || eac > planned + eps {
+        AlertLevel::Critical
+    } else if consumed >= t.warning {
+        AlertLevel::Warning
+    } else {
+        AlertLevel::Ok
+    };
+    (consumed, level)
+}
+
+/// Budget status of a Netzplan followed by each of its Vorgänge.
+pub fn budget_status(db: &Database, netzplan_id: i64, t: &Thresholds) -> Result<Vec<BudgetStatus>> {
+    let np = db.netzplan_by_id(netzplan_id)?;
+    let vorgaenge = db.list_vorgaenge(netzplan_id)?;
+    let mut out = Vec::with_capacity(vorgaenge.len() + 1);
+
+    let mut etc_sum = 0.0;
+    for v in &vorgaenge {
+        let booked = db.booked_hours(netzplan_id, Some(&v.vorgang_nr))?;
+        let etc = v.remaining_hours.unwrap_or((v.planned_hours - booked).max(0.0)).max(0.0);
+        etc_sum += etc;
+        let eac = booked + etc;
+        let (consumed, level) = classify(v.planned_hours, booked, eac, t);
+        out.push(BudgetStatus {
+            label: format!("{}/{}", np.netzplan_nr, v.vorgang_nr),
+            netzplan_id,
+            vorgang_nr: Some(v.vorgang_nr.clone()),
+            planned_hours: v.planned_hours,
+            booked_hours: booked,
+            etc_hours: etc,
+            eac_hours: eac,
+            consumed,
+            level,
+        });
+    }
+
+    let booked = db.booked_hours(netzplan_id, None)?;
+    let etc = if vorgaenge.is_empty() { (np.planned_hours - booked).max(0.0) } else { etc_sum };
+    let eac = booked + etc;
+    let (consumed, level) = classify(np.planned_hours, booked, eac, t);
+    out.insert(
+        0,
+        BudgetStatus {
+            label: np.netzplan_nr.clone(),
+            netzplan_id,
+            vorgang_nr: None,
+            planned_hours: np.planned_hours,
+            booked_hours: booked,
+            etc_hours: etc,
+            eac_hours: eac,
+            consumed,
+            level,
+        },
+    );
+    Ok(out)
+}
+
+/// Non-OK budget states relevant to a booking on `netzplan_id` / `vorgang_nr`.
+pub fn alerts_for(
+    db: &Database,
+    netzplan_id: i64,
+    vorgang_nr: Option<&str>,
+    t: &Thresholds,
+) -> Result<Vec<BudgetStatus>> {
+    Ok(budget_status(db, netzplan_id, t)?
+        .into_iter()
+        .filter(|s| {
+            s.vorgang_nr.is_none()
+                || matches!((s.vorgang_nr.as_deref(), vorgang_nr), (Some(a), Some(b)) if a.eq_ignore_ascii_case(b))
+        })
+        .filter(|s| s.level != AlertLevel::Ok)
+        .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    fn setup() -> (Database, i64) {
+        let db = Database::open_in_memory().unwrap();
+        let p = db.create_project("PRJ-2026-X", "Rollout").unwrap();
+        let np = db.create_netzplan(p.id, "NP-8801", "NP-8801-1020", "Integration", 10.0).unwrap();
+        db.create_vorgang(np.id, "1010", "Konzept", 2.0, 4.0).unwrap();
+        db.create_vorgang(np.id, "1020", "Systemintegration", 3.0, 6.0).unwrap();
+        (db, np.id)
+    }
+
+    fn now() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 9, 23, 15, 0, 0).unwrap()
+    }
+
+    fn cet() -> FixedOffset {
+        FixedOffset::east_opt(2 * 3600).unwrap()
+    }
+
+    #[test]
+    fn logs_canonical_command_ending_now() {
+        let (db, _) = setup();
+        let out =
+            log_slash_command(&db, "/zeit NP-8801/1020 2.5h 'Systemintegration'", now(), cet(), &Thresholds::default())
+                .unwrap();
+        assert_eq!(out.entry.duration_minutes, Some(150));
+        assert_eq!(out.entry.end_time, Some(now()));
+        assert_eq!(out.entry.source, EntrySource::Slash);
+        assert!(out.alerts.is_empty(), "2.5h of 6h is fine: {:?}", out.alerts);
+    }
+
+    #[test]
+    fn explicit_local_start_time_is_converted_to_utc() {
+        let (db, _) = setup();
+        let out = log_slash_command(
+            &db,
+            "/zeit NP-8801/1010 1h #DEV Konzept @gestern @08:30",
+            now(),
+            cet(),
+            &Thresholds::default(),
+        )
+        .unwrap();
+        assert_eq!(out.entry.start_time, Utc.with_ymd_and_hms(2026, 9, 22, 6, 30, 0).unwrap());
+        assert_eq!(out.entry.leistungsart.as_deref(), Some("DEV"));
+    }
+
+    #[test]
+    fn rejects_unknown_wbs_elements() {
+        let (db, _) = setup();
+        let t = Thresholds::default();
+        assert!(log_slash_command(&db, "/zeit NP-9999 1h x", now(), cet(), &t).is_err());
+        assert!(log_slash_command(&db, "/zeit NP-8801/7777 1h x", now(), cet(), &t).is_err());
+        assert!(log_slash_command(&db, "/zeit NP-8801/1020 1h #NOPE x", now(), cet(), &t).is_err());
+        assert!(log_slash_command(&db, "/zeit NP-8801/1020 1h x @23:00", now(), cet(), &t).is_err(), "future");
+    }
+
+    #[test]
+    fn budget_levels_and_etc() {
+        let (db, np) = setup();
+        let t = Thresholds::default();
+        // 5h on a 6h Vorgang: 83% consumed → warning.
+        log_slash_command(&db, "/zeit NP-8801/1020 5h a @22.09. @08:00", now(), cet(), &t).unwrap();
+        let s = budget_status(&db, np, &t).unwrap();
+        let v = s.iter().find(|s| s.vorgang_nr.as_deref() == Some("1020")).unwrap();
+        assert_eq!(v.level, AlertLevel::Warning);
+        assert!((v.etc_hours - 1.0).abs() < 1e-9);
+
+        // A manual remaining estimate that pushes EAC over plan → critical.
+        let id = db.list_vorgaenge(np).unwrap().into_iter().find(|v| v.vorgang_nr == "1020").unwrap().id;
+        db.set_remaining_hours(id, Some(3.0)).unwrap();
+        let v = budget_status(&db, np, &t).unwrap().remove(2);
+        assert_eq!((v.level, v.eac_hours), (AlertLevel::Critical, 8.0));
+
+        // Booking beyond plan → exceeded; alert is reported with the booking.
+        let out = log_slash_command(&db, "/zeit NP-8801/1020 2h b @21.09. @08:00", now(), cet(), &t).unwrap();
+        assert!(out.alerts.iter().any(|a| a.label == "NP-8801/1020" && a.level == AlertLevel::Exceeded));
+        let total = &budget_status(&db, np, &t).unwrap()[0];
+        // Netzplan: 7h booked of 10h, ETC = 4h (1010) + 3h (1020 manual) → EAC 14h > 10h.
+        assert_eq!(total.level, AlertLevel::Critical);
+        assert!((total.eac_hours - 14.0).abs() < 1e-9);
+    }
+}

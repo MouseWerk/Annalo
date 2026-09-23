@@ -1,0 +1,7 @@
+/target/
+/src-tauri/target/
+/src-tauri/gen/schemas/
+*.db
+*.db-wal
+*.db-shm
+.DS_Store

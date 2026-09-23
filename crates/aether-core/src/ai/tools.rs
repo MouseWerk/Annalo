@@ -1,0 +1,251 @@
+//! Function calling: tool definitions offered to the model and a guarded executor.
+//!
+//! Workspace tools (logging time, searching, budget lookups) run directly.
+//! System tools (PowerShell, Git, REST) never run on the model's say-so alone:
+//! [`classify`] marks them [`Risk::RequiresApproval`] and the shell must show
+//! the exact command to the user before calling [`execute_system_tool`].
+
+use std::process::Command;
+use std::time::Duration;
+
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+
+use crate::error::{Error, Result};
+
+/// HTTP client used by [`execute_system_tool`] (re-exported so shells need no reqwest dependency).
+pub type HttpClient = reqwest::Client;
+
+/// Output longer than this is truncated before it is sent back to the model.
+const MAX_OUTPUT: usize = 16 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Risk {
+    /// Reads or writes only the local workspace; runs without confirmation.
+    Workspace,
+    /// Touches the system or network; needs explicit user approval.
+    RequiresApproval,
+}
+
+/// Read-only git subcommands the model may request.
+const GIT_ALLOWED: &[&str] = &["status", "log", "diff", "show", "branch", "blame", "shortlog", "rev-parse"];
+
+pub fn definitions() -> Vec<Value> {
+    let f = |name: &str, description: &str, parameters: Value| json!({ "type": "function", "function": { "name": name, "description": description, "parameters": parameters } });
+    vec![
+        f(
+            "log_time",
+            "Bucht Zeit auf ein Netzplan-Element. Nutzt die /zeit-Syntax, z. B. \"/zeit NP-8801/1020 2.5h #DEV 'Systemintegration'\".",
+            json!({ "type": "object", "properties": { "command": { "type": "string" } }, "required": ["command"] }),
+        ),
+        f(
+            "search_workspace",
+            "Volltextsuche über Notizen und Zeiteinträge.",
+            json!({ "type": "object", "properties": { "query": { "type": "string" } }, "required": ["query"] }),
+        ),
+        f(
+            "budget_status",
+            "Budget, gebuchte Stunden und ETC eines Netzplans.",
+            json!({ "type": "object", "properties": { "netzplan": { "type": "string" } }, "required": ["netzplan"] }),
+        ),
+        f(
+            "run_powershell",
+            "Führt ein PowerShell-Skript aus. Der Nutzer muss jede Ausführung bestätigen.",
+            json!({ "type": "object", "properties": { "script": { "type": "string" }, "cwd": { "type": "string" } }, "required": ["script"] }),
+        ),
+        f(
+            "git",
+            &format!("Führt einen lesenden git-Befehl aus ({}).", GIT_ALLOWED.join(", ")),
+            json!({ "type": "object", "properties": {
+                "args": { "type": "array", "items": { "type": "string" } },
+                "repo": { "type": "string" } }, "required": ["args", "repo"] }),
+        ),
+        f(
+            "http_request",
+            "Ruft eine REST-API auf.",
+            json!({ "type": "object", "properties": {
+                "method": { "type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"] },
+                "url": { "type": "string" },
+                "body": {} }, "required": ["method", "url"] }),
+        ),
+    ]
+}
+
+pub fn classify(tool: &str) -> Risk {
+    match tool {
+        "log_time" | "search_workspace" | "budget_status" => Risk::Workspace,
+        _ => Risk::RequiresApproval,
+    }
+}
+
+/// A system tool call, validated and ready to show to the user for approval.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "tool")]
+pub enum SystemCall {
+    RunPowershell { script: String, cwd: Option<String> },
+    Git { args: Vec<String>, repo: String },
+    HttpRequest { method: String, url: String, body: Option<Value> },
+}
+
+impl SystemCall {
+    /// Parses and validates a model tool call. Rejects anything outside policy.
+    pub fn from_tool_call(name: &str, arguments: &str) -> Result<Self> {
+        let args: Value = serde_json::from_str(arguments).map_err(|e| Error::Parse(format!("tool arguments: {e}")))?;
+        let s = |k: &str| args[k].as_str().map(str::to_owned);
+        let call = match name {
+            "run_powershell" => SystemCall::RunPowershell {
+                script: s("script").ok_or_else(|| Error::Parse("script missing".into()))?,
+                cwd: s("cwd"),
+            },
+            "git" => {
+                let list: Vec<String> = args["args"]
+                    .as_array()
+                    .ok_or_else(|| Error::Parse("args missing".into()))?
+                    .iter()
+                    .map(|a| {
+                        a.as_str().map(str::to_owned).ok_or_else(|| Error::Parse("git args must be strings".into()))
+                    })
+                    .collect::<Result<_>>()?;
+                let sub = list.first().map(String::as_str).unwrap_or("");
+                if !GIT_ALLOWED.contains(&sub) {
+                    return Err(Error::State(format!("git subcommand '{sub}' is not allowed")));
+                }
+                // Options that can execute programs or write files.
+                if list.iter().any(|a| {
+                    a.starts_with("--output")
+                        || a.starts_with("--ext-diff")
+                        || a.starts_with("-c")
+                        || a.starts_with("--exec")
+                }) {
+                    return Err(Error::State("git option not allowed".into()));
+                }
+                SystemCall::Git { args: list, repo: s("repo").ok_or_else(|| Error::Parse("repo missing".into()))? }
+            }
+            "http_request" => {
+                let method = s("method").unwrap_or_else(|| "GET".into()).to_uppercase();
+                if !["GET", "POST", "PUT", "PATCH", "DELETE"].contains(&method.as_str()) {
+                    return Err(Error::State(format!("HTTP method {method} not allowed")));
+                }
+                let url = s("url").ok_or_else(|| Error::Parse("url missing".into()))?;
+                if !(url.starts_with("https://") || url.starts_with("http://")) {
+                    return Err(Error::State("only http(s) URLs are allowed".into()));
+                }
+                SystemCall::HttpRequest { method, url, body: args.get("body").filter(|b| !b.is_null()).cloned() }
+            }
+            other => return Err(Error::not_found("tool", other)),
+        };
+        Ok(call)
+    }
+
+    /// Human-readable summary for the approval dialog.
+    pub fn describe(&self) -> String {
+        match self {
+            SystemCall::RunPowershell { script, cwd } => {
+                format!("PowerShell{}:\n{script}", cwd.as_ref().map(|c| format!(" in {c}")).unwrap_or_default())
+            }
+            SystemCall::Git { args, repo } => format!("git {} (in {repo})", args.join(" ")),
+            SystemCall::HttpRequest { method, url, .. } => format!("{method} {url}"),
+        }
+    }
+}
+
+fn truncate(mut s: String) -> String {
+    if s.len() > MAX_OUTPUT {
+        let mut cut = MAX_OUTPUT;
+        while !s.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        s.truncate(cut);
+        s.push_str("\n… [gekürzt]");
+    }
+    s
+}
+
+fn run(mut cmd: Command) -> Result<String> {
+    let out = cmd.output()?;
+    let mut s = String::from_utf8_lossy(&out.stdout).into_owned();
+    if !out.stderr.is_empty() {
+        s.push_str("\n[stderr]\n");
+        s.push_str(&String::from_utf8_lossy(&out.stderr));
+    }
+    s.push_str(&format!("\n[exit code: {}]", out.status.code().map_or("signal".into(), |c| c.to_string())));
+    Ok(truncate(s))
+}
+
+/// Runs an approved system call. Only call this after the user confirmed
+/// exactly the call returned by [`SystemCall::describe`].
+pub async fn execute_system_tool(call: &SystemCall, http: &reqwest::Client) -> Result<String> {
+    match call {
+        SystemCall::RunPowershell { script, cwd } => {
+            let exe = if cfg!(windows) { "powershell.exe" } else { "pwsh" };
+            let mut cmd = Command::new(exe);
+            cmd.args(["-NoProfile", "-NonInteractive", "-Command", script]);
+            if let Some(dir) = cwd {
+                cmd.current_dir(dir);
+            }
+            run(cmd)
+        }
+        SystemCall::Git { args, repo } => {
+            let mut cmd = Command::new("git");
+            // No pager, no external diff drivers or textconv filters.
+            cmd.arg("-C")
+                .arg(repo)
+                .args(["--no-pager", "-c", "diff.external=", "-c", "core.fsmonitor=false"])
+                .args(args);
+            run(cmd)
+        }
+        SystemCall::HttpRequest { method, url, body } => {
+            let method = reqwest::Method::from_bytes(method.as_bytes()).map_err(|e| Error::Parse(e.to_string()))?;
+            let mut req = http.request(method, url).timeout(Duration::from_secs(30));
+            if let Some(b) = body {
+                req = req.json(b);
+            }
+            let resp = req.send().await?;
+            let status = resp.status();
+            let text = resp.text().await?;
+            Ok(truncate(format!("HTTP {status}\n{text}")))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_definition_is_classified() {
+        for d in definitions() {
+            let name = d["function"]["name"].as_str().unwrap();
+            match classify(name) {
+                Risk::Workspace => assert!(SystemCall::from_tool_call(name, "{}").is_err()),
+                Risk::RequiresApproval => {}
+            }
+        }
+    }
+
+    #[test]
+    fn git_policy() {
+        let ok = SystemCall::from_tool_call("git", r#"{"args":["log","--oneline","-5"],"repo":"C:/src/app"}"#).unwrap();
+        assert_eq!(ok.describe(), "git log --oneline -5 (in C:/src/app)");
+        assert!(SystemCall::from_tool_call("git", r#"{"args":["push","--force"],"repo":"."}"#).is_err());
+        assert!(SystemCall::from_tool_call("git", r#"{"args":["diff","--ext-diff"],"repo":"."}"#).is_err());
+        assert!(SystemCall::from_tool_call("git", r#"{"args":["log","-c","core.pager=evil"],"repo":"."}"#).is_err());
+    }
+
+    #[test]
+    fn http_policy() {
+        assert!(
+            SystemCall::from_tool_call("http_request", r#"{"method":"get","url":"https://api.example.com"}"#).is_ok()
+        );
+        assert!(SystemCall::from_tool_call("http_request", r#"{"method":"GET","url":"file:///etc/passwd"}"#).is_err());
+        assert!(SystemCall::from_tool_call("http_request", r#"{"method":"TRACE","url":"https://x"}"#).is_err());
+        assert!(SystemCall::from_tool_call("rm_rf", "{}").is_err());
+    }
+
+    #[test]
+    fn truncation_respects_char_boundaries() {
+        let s = truncate("ä".repeat(MAX_OUTPUT));
+        assert!(s.ends_with("[gekürzt]"));
+    }
+}

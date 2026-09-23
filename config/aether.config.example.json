@@ -1,0 +1,21 @@
+{
+  "litellm_base_url": "http://localhost:4000",
+  "litellm_api_key_env": "LITELLM_API_KEY",
+  "embedding_model": "ollama/nomic-embed-text",
+  "router": {
+    "local_model": "ollama/llama3.2",
+    "standard_model": "cloud-standard",
+    "reasoning_model": "cloud-reasoning",
+    "standard_threshold": 30,
+    "reasoning_threshold": 60,
+    "private_markers": ["#privat", "#private", "#vertraulich", "#confidential"]
+  },
+  "prices": {
+    "rules": [
+      ["ollama/*", { "input_per_mtok": 0.0, "output_per_mtok": 0.0 }],
+      ["hosted_vllm/*", { "input_per_mtok": 0.0, "output_per_mtok": 0.0 }]
+    ]
+  },
+  "thresholds": { "warning": 0.75, "critical": 0.9 },
+  "idle_threshold_minutes": 5
+}

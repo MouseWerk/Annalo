@@ -1,0 +1,124 @@
+//! Sample workspace used by `aether demo` and the first launch of the app.
+
+use chrono::{DateTime, Duration, Utc};
+
+use crate::db::Database;
+use crate::error::Result;
+use crate::model::{EntrySource, NewTimeEntry};
+
+/// Seeds a project with a Netzplan, Vorgänge, time entries and pages.
+/// Does nothing if the workspace already has projects.
+pub fn seed(db: &Database, now: DateTime<Utc>) -> Result<bool> {
+    if !db.list_projects()?.is_empty() {
+        return Ok(false);
+    }
+    let p = db.create_project("PRJ-2026-X", "Aether Rollout")?;
+    let np = db.create_netzplan(p.id, "NP-8801", "NP-8801-1020", "Systemintegration ERP", 120.0)?;
+    let np2 = db.create_netzplan(p.id, "NP-8802", "NP-8802-2010", "Schulung & Go-Live", 40.0)?;
+
+    let spec = [
+        ("1010", "Anforderungsanalyse", 3.0, 16.0, &[][..]),
+        ("1020", "Systemintegration", 5.0, 40.0, &["1010"][..]),
+        ("1030", "Schnittstellen-Design", 4.0, 24.0, &["1010"][..]),
+        ("1040", "Integrationstest", 3.0, 24.0, &["1020", "1030"][..]),
+        ("1050", "Dokumentation", 2.0, 8.0, &["1030"][..]),
+        ("1060", "Abnahme", 1.0, 8.0, &["1040", "1050"][..]),
+    ];
+    let mut ids = std::collections::HashMap::new();
+    for (nr, desc, days, hours, preds) in spec {
+        let v = db.create_vorgang(np.id, nr, desc, days, hours)?;
+        for p in preds {
+            db.link_vorgaenge(ids[p], v.id)?;
+        }
+        ids.insert(nr, v.id);
+    }
+    db.create_vorgang(np2.id, "2010", "Key-User-Schulung", 2.0, 16.0)?;
+
+    let day = |d: i64, h: i64| now - Duration::days(d) - Duration::hours(h);
+    let entries = [
+        (np.id, "1010", "CONSULTING", 9, 6, 240, "Workshop Anforderungen mit Fachbereich"),
+        (np.id, "1010", "CONSULTING", 8, 6, 330, "Lastenheft finalisiert"),
+        (np.id, "1010", "PM", 7, 7, 150, "Abstimmung Scope & Budget"),
+        (np.id, "1020", "DEV", 6, 6, 420, "Systemintegration Middleware"),
+        (np.id, "1020", "DEV", 5, 6, 450, "IDoc-Mapping Materialstamm"),
+        (np.id, "1030", "DEV", 4, 6, 300, "REST-Schnittstelle Auftragsdaten"),
+        (np.id, "1020", "DEV", 3, 6, 480, "Fehleranalyse Queue-Verarbeitung"),
+        (np.id, "1030", "DEV", 2, 6, 360, "OpenAPI Spezifikation"),
+        (np.id, "1020", "DEV", 1, 6, 390, "Systemintegration Delta-Load"),
+        (np2.id, "2010", "CONSULTING", 1, 2, 90, "Schulungsunterlagen Entwurf"),
+    ];
+    for (npid, v, la, d, h, minutes, desc) in entries {
+        db.insert_time_entry(&NewTimeEntry {
+            netzplan_id: npid,
+            vorgang_nr: Some(v.into()),
+            leistungsart: Some(la.into()),
+            start_time: day(d, h),
+            duration_minutes: minutes,
+            description: desc.into(),
+            source: EntrySource::Manual,
+        })?;
+    }
+
+    let ws = db.create_page(None, "Workspace", Some("🏠"))?;
+    let proj = db.create_page(Some(ws.id), "PRJ-2026-X Rollout", Some("📁"))?;
+    let arch = db.create_page(Some(proj.id), "Architektur", Some("🧩"))?;
+    let meet = db.create_page(Some(proj.id), "Meeting Notes", Some("🗒️"))?;
+    db.create_page(Some(ws.id), "Wissensbasis", Some("📚"))?;
+
+    db.add_block(arch.id, "heading", "# Architektur der Systemintegration")?;
+    db.add_block(
+        arch.id,
+        "paragraph",
+        "Die Middleware verbindet das ERP über IDocs mit dem Auftragsportal. Siehe [[Meeting Notes]].",
+    )?;
+    db.add_block(
+        arch.id,
+        "callout",
+        "> **Risiko:** Vorgang 1020 liegt auf dem kritischen Pfad. Verzug verschiebt die Abnahme.",
+    )?;
+    db.add_block(arch.id, "code", "```powershell\nGet-Service -Name 'Aether*' | Restart-Service\n```")?;
+    db.add_block(arch.id, "view", "netzplan")?;
+    db.add_block(meet.id, "heading", "# Jour fixe 22.09.")?;
+    db.add_block(
+        meet.id,
+        "todo",
+        "- [x] Budget NP-8801 prüfen\n- [ ] Testdaten für 1040 bereitstellen\n- [ ] Schulungstermine 2010 fixieren",
+    )?;
+    db.add_block(
+        meet.id,
+        "paragraph",
+        "Delta-Load läuft stabil; nächster Schritt ist der Integrationstest. Zurück zur [[Architektur]].",
+    )?;
+
+    db.add_block(ws.id, "heading", "# Willkommen in AETHER OS")?;
+    db.add_block(
+        ws.id,
+        "paragraph",
+        "Lokaler Workspace mit **Notizen**, **Zeiterfassung auf Netzplan-Elementen** und einem integrierten \
+         KI-Assistenten. Drücke `Alt+Space` für die Befehlspalette.",
+    )?;
+    db.add_block(
+        ws.id,
+        "paragraph",
+        "Zeit direkt im Text buchen: tippe `/zeit NP-8801/1020 1.5h 'Review'` in einen Block und drücke Enter.",
+    )?;
+    db.add_block(ws.id, "view", "kanban")?;
+    Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn seed_is_consistent_and_idempotent() {
+        let db = Database::open_in_memory().unwrap();
+        assert!(seed(&db, Utc::now()).unwrap());
+        assert!(!seed(&db, Utc::now()).unwrap(), "second run must not duplicate data");
+        let np = db.netzplan_by_ref("NP-8801").unwrap();
+        let s = crate::netzplan::schedule(&db.list_vorgaenge(np.id).unwrap()).unwrap();
+        assert_eq!(s.duration, 12.0);
+        assert_eq!(db.list_time_entries(&Default::default()).unwrap().len(), 10);
+        assert!(!crate::graph::page_graph(&db).unwrap().edges.is_empty());
+    }
+}
