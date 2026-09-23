@@ -3,10 +3,11 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowRight, Briefcase, CalendarCheck2, Download, FilePlus2, FolderInput, Hash, Moon, PanelLeft, PanelRight, RefreshCw, Search, Settings, Sparkles, Square, Timer, Play, Focus,
+  ArrowLeft, ArrowRight, Columns2, Plus, Briefcase, CalendarCheck2, Download, FilePlus2, FolderInput, Hash, Moon, PanelLeft, PanelRight, RefreshCw, Search, Settings, Sparkles, Square, Timer, Play, Focus,
 } from "lucide-react";
 import { api } from "../lib/api";
 import { useApp, savePref } from "../store/app";
+import { openAssistant, openToday } from "./Ribbon";
 import { PageIcon } from "./icons";
 import { createSubpage } from "../views/PageView";
 import { stopTimer } from "./Sidebar";
@@ -155,18 +156,19 @@ export function CommandPalette() {
         title: "Heutige Tagesnotiz",
         icon: ic(CalendarCheck2),
         hint: "Ctrl Shift D",
-        run: async () => {
-          const p = await api.dailyNote();
-          await s().refreshTree();
-          s().openPage(p.id);
-        },
+        run: () => openToday(),
       },
+      { id: "newtab", title: "Neuer Tab", icon: ic(Plus), hint: "Ctrl T", run: () => s().openTab({ kind: "home" }, { newTab: true }) },
+      { id: "split", title: "Rechts teilen", icon: ic(Columns2), run: () => s().activeTabId && s().splitTab(s().activeTabId) },
+      { id: "search", title: "In allen Notizen suchen", icon: ic(Search), hint: "Ctrl Shift F", run: () => { if (!s().sidebarOpen) { s().set({ sidebarOpen: true }); savePref("aether.sidebar", true); } setTimeout(() => window.dispatchEvent(new Event("aether:sidebar-search")), 30); } },
+      { id: "back", title: "Zurück", icon: ic(ArrowLeft), hint: "Alt ←", run: () => s().goBack() },
+      { id: "forward", title: "Vorwärts", icon: ic(ArrowRight), hint: "Alt →", run: () => s().goForward() },
       timer
         ? { id: "timer", title: "Timer stoppen", icon: ic(Square), hint: "Ctrl Shift T", run: () => stopTimer() }
         : { id: "timer", title: "Timer starten", icon: ic(Play), hint: "Ctrl Shift T", run: () => s().openTab({ kind: "timesheet" }) },
       { id: "timesheet", title: "Zeiterfassung öffnen", icon: ic(Timer), run: () => s().openTab({ kind: "timesheet" }) },
       { id: "projects", title: "Projekte öffnen", icon: ic(Briefcase), run: () => s().openTab({ kind: "projects" }) },
-      { id: "assistant", title: "Assistent fragen", icon: ic(Sparkles), hint: "Ctrl J", run: () => { s().set({ panelOpen: true, panelTab: "assistant" }); setTimeout(() => document.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus(), 50); } },
+      { id: "assistant", title: "Assistent fragen", icon: ic(Sparkles), hint: "Ctrl J", run: () => openAssistant() },
       { id: "settings", title: "Einstellungen", icon: ic(Settings), hint: "Ctrl ,", run: () => s().openTab({ kind: "settings" }) },
       { id: "sidebar", title: "Seitenleiste umschalten", icon: ic(PanelLeft), hint: "Ctrl \\", run: () => { const v = !s().sidebarOpen; s().set({ sidebarOpen: v }); savePref("aether.sidebar", v); } },
       { id: "panel", title: "Seitenpanel umschalten", icon: ic(PanelRight), hint: "Ctrl Shift \\", run: () => { const v = !s().panelOpen; s().set({ panelOpen: v }); savePref("aether.panel", v); } },
@@ -300,5 +302,5 @@ export function CommandPalette() {
 }
 
 const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-/** FTS snippets mark hits as [term]. */
-const snippetHtml = (sn: string) => esc(sn).replace(/\[([^\]]*)\]/g, "<mark>$1</mark>");
+/** FTS snippets wrap hits in STX/ETX control characters. */
+const snippetHtml = (sn: string) => esc(sn).replace(/\u0002([^\u0003]*)\u0003/g, "<mark>$1</mark>");

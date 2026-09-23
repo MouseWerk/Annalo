@@ -1,9 +1,10 @@
 // A note: title, icon, properties, editor and backlinks.
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, CornerDownRight, FileText, Hash, Link2, MoreHorizontal, PencilLine, SmilePlus, Star, Trash2 } from "lucide-react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { ChevronLeft, ChevronRight, Columns2, CornerDownRight, FileText, Hash, Link2, MoreHorizontal, PencilLine, SmilePlus, Star, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
-import { useApp } from "../store/app";
+import { useApp, type Tab } from "../store/app";
+import { ViewHeader } from "../components/ViewHeader";
 import { NoteEditor, type NoteEditorHandle } from "../editor/NoteEditor";
 import { splitFrontmatter } from "../editor/extensions";
 import { PAGE_ICONS, PageIcon } from "../components/icons";
@@ -12,11 +13,14 @@ import { addDays, dateLong, isoDay, relative } from "../lib/format";
 import { linkContext } from "../components/linkContext";
 import type { PageDoc } from "../lib/types";
 
-export function PageView({ pageId }: { pageId: number }) {
+export function PageView({ pageId, tab, active }: { pageId: number; tab: Tab; active: boolean }) {
   const [doc, setDoc] = useState<PageDoc | null>(null);
   const [missing, setMissing] = useState(false);
   const pages = useApp((s) => s.pages);
   const handle = useRef<NoteEditorHandle | null>(null);
+  const root = useRef<HTMLDivElement>(null);
+  const activeRef = useRef(active);
+  activeRef.current = active;
 
   useEffect(() => {
     let alive = true;
@@ -27,7 +31,7 @@ export function PageView({ pageId }: { pageId: number }) {
       .then((d) => {
         if (!alive) return;
         setDoc(d);
-        useApp.getState().set({ activeDoc: d });
+        if (activeRef.current) useApp.getState().set({ activeDoc: d });
       })
       .catch(() => alive && setMissing(true));
     return () => {
@@ -36,33 +40,68 @@ export function PageView({ pageId }: { pageId: number }) {
     };
   }, [pageId]);
 
+  // The focused pane drives the outline, links panel and assistant context.
+  useEffect(() => {
+    if (active && doc) useApp.getState().set({ activeDoc: doc });
+  }, [active, doc]);
+
+  // Another pane changed this page: refresh tags and backlinks.
+  useEffect(() => {
+    const onSaved = (e: Event) => {
+      const d = (e as CustomEvent<{ id: number }>).detail;
+      if (d.id !== pageId) return;
+      api.page(pageId).then((fresh) => setDoc((cur) => (cur ? { ...cur, tags: fresh.tags, backlinks: fresh.backlinks, unresolved_links: fresh.unresolved_links, content: fresh.content, updated_at: fresh.updated_at } : cur))).catch(() => {});
+    };
+    window.addEventListener("aether:page-saved", onSaved);
+    return () => window.removeEventListener("aether:page-saved", onSaved);
+  }, [pageId]);
+
   const openLink = useCallback(async (target: string, newTab: boolean) => {
     try {
       await handle.current?.flush();
       const page = await api.resolvePage(target, true);
       if (!page) return;
       if (!useApp.getState().pages.has(page.id)) await useApp.getState().refreshTree();
-      useApp.getState().openPage(page.id, { newTab });
+      useApp.getState().openPage(page.id, { newTab: newTab && !altKey.current, split: altKey.current });
     } catch (e) {
       useApp.getState().error("Link konnte nicht geöffnet werden", e);
     }
   }, []);
   const openTag = useCallback((tag: string) => useApp.getState().openTab({ kind: "tag", tag }, { newTab: true }), []);
+  // Alt+click on a link opens it in the pane to the right.
+  const altKey = useRef(false);
+  useEffect(() => {
+    const track = (e: MouseEvent) => (altKey.current = e.altKey);
+    window.addEventListener("mousedown", track, true);
+    return () => window.removeEventListener("mousedown", track, true);
+  }, []);
 
-  if (missing) return <EmptyState icon={FileText} title="Seite nicht gefunden">Sie wurde vermutlich gelöscht.</EmptyState>;
-  if (!doc) return <div className="center-fill"><Spinner /></div>;
+  if (missing)
+    return (
+      <>
+        <ViewHeader tab={tab} title="Seite nicht gefunden" />
+        <EmptyState icon={FileText} title="Seite nicht gefunden">Sie wurde vermutlich gelöscht.</EmptyState>
+      </>
+    );
+  if (!doc)
+    return (
+      <>
+        <ViewHeader tab={tab} title={pages.get(pageId)?.title ?? ""} />
+        <div className="center-fill"><Spinner /></div>
+      </>
+    );
 
   const node = pages.get(doc.id);
   const crumbs: { id: number; title: string }[] = [];
   for (let p = node?.parent_id != null ? pages.get(node.parent_id) : undefined; p; p = p.parent_id != null ? pages.get(p.parent_id) : undefined) crumbs.unshift(p);
 
   return (
-    <div className="page-scroll">
-      <div className="page">
-        <PageHeader doc={doc} crumbs={crumbs} onChange={(d) => setDoc({ ...doc, ...d })} flush={() => handle.current?.flush() ?? Promise.resolve()} />
-        <Properties doc={doc} onChange={setDoc} />
+    <div className="page-view" ref={root}>
+      <PageHeader tab={tab} root={root} doc={doc} crumbs={crumbs} onChange={(d) => setDoc({ ...doc, ...d })} flush={() => handle.current?.flush() ?? Promise.resolve()}>
+        <Properties doc={doc} />
         <NoteEditor
           key={doc.id}
+          active={active}
           doc={doc}
           onSaved={(d) => {
             setDoc((cur) => (cur ? { ...cur, tags: d.tags, backlinks: d.backlinks, unresolved_links: d.unresolved_links, updated_at: d.updated_at } : d));
@@ -73,12 +112,28 @@ export function PageView({ pageId }: { pageId: number }) {
           handleRef={(h) => (handle.current = h)}
         />
         <Backlinks doc={doc} />
-      </div>
+      </PageHeader>
     </div>
   );
 }
 
-function PageHeader({ doc, crumbs, onChange, flush }: { doc: PageDoc; crumbs: { id: number; title: string }[]; onChange: (d: Partial<PageDoc>) => void; flush: () => Promise<void> }) {
+function PageHeader({
+  tab,
+  root,
+  doc,
+  crumbs,
+  onChange,
+  flush,
+  children,
+}: {
+  tab: Tab;
+  root: React.RefObject<HTMLDivElement | null>;
+  doc: PageDoc;
+  crumbs: { id: number; title: string }[];
+  onChange: (d: Partial<PageDoc>) => void;
+  flush: () => Promise<void>;
+  children: React.ReactNode;
+}) {
   const [title, setTitle] = useState(doc.title);
   const [iconOpen, setIconOpen] = useState(false);
   const [menu, openMenu] = useMenu();
@@ -107,105 +162,138 @@ function PageHeader({ doc, crumbs, onChange, flush }: { doc: PageDoc; crumbs: { 
     s().openPage(p.id);
   };
 
-  return (
-    <header className="page-header">
-      <div className="page-topline">
-        <nav className="crumbs" aria-label="Pfad">
-          {crumbs.map((c) => (
-            <span key={c.id} className="crumb">
-              <button type="button" onClick={() => s().openPage(c.id)}>{c.title}</button>
-              <ChevronRight size={12} className="faint" />
-            </span>
-          ))}
-        </nav>
-        <div className="page-actions">
-          {daily && (
-            <>
-              <IconButton icon={ChevronLeft} label="Vorheriger Tag" onClick={() => goDay(-1)} />
-              <IconButton icon={ChevronRight} label="Nächster Tag" onClick={() => goDay(1)} />
-            </>
-          )}
-          <IconButton
-            icon={Star}
-            label={doc.favorite ? "Aus Favoriten entfernen" : "Zu Favoriten"}
-            active={doc.favorite}
-            className={doc.favorite ? "star-on" : ""}
-            onClick={async () => {
-              await api.setFavorite(doc.id, !doc.favorite);
-              onChange({ favorite: !doc.favorite });
-              s().refreshTree();
-            }}
-          />
-          <IconButton
-            icon={MoreHorizontal}
-            label="Weitere Aktionen"
-            onClick={(e) =>
-              openMenu(e, [
-                { label: "Umbenennen", icon: PencilLine, onSelect: () => document.querySelector<HTMLInputElement>(".page-title")?.select() },
-                { label: "Symbol ändern", icon: SmilePlus, onSelect: () => setIconOpen(true) },
-                { label: "Link kopieren", icon: Link2, onSelect: () => navigator.clipboard.writeText(`[[${doc.title}]]`) },
-                { label: "Unterseite anlegen", icon: CornerDownRight, onSelect: () => createSubpage(doc.id) },
-                "separator",
-                { label: "Seite löschen", icon: Trash2, danger: true, onSelect: () => deletePage(doc) },
-              ])
-            }
-          />
-        </div>
-      </div>
-      <div className="page-title-row">
-        <button type="button" className="page-icon-btn" aria-label="Symbol ändern" onClick={() => setIconOpen((v) => !v)}>
-          <PageIcon name={doc.icon} size={26} />
-        </button>
-        <input
-          className="page-title"
-          value={title}
-          aria-label="Seitentitel"
-          onChange={(e) => setTitle(e.target.value)}
-          onBlur={commitTitle}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              (e.target as HTMLInputElement).blur();
-              document.querySelector<HTMLElement>(".ProseMirror")?.focus();
-            }
-            if (e.key === "Escape") setTitle(doc.title);
-          }}
-        />
-      </div>
-      {daily && <div className="page-subtitle">{dateLong(daily.toISOString())}</div>}
-      {iconOpen && (
-        <div className="icon-picker" role="listbox" aria-label="Symbol wählen">
-          {Object.entries(PAGE_ICONS).map(([name, Icon]) => (
-            <button
-              key={name}
-              type="button"
-              aria-label={name}
-              className={doc.icon === name ? "on" : ""}
-              onClick={async () => {
-                await api.setIcon(doc.id, name);
-                onChange({ icon: name });
-                setIconOpen(false);
-                s().refreshTree();
-              }}
-            >
-              <Icon size={18} strokeWidth={1.75} />
-            </button>
-          ))}
-        </div>
+  const titleInput = useRef<HTMLTextAreaElement>(null);
+  // The title wraps like a heading instead of scrolling sideways.
+  const fitTitle = () => {
+    const el = titleInput.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  };
+  useEffect(fitTitle, [title]);
+  useEffect(() => {
+    const el = titleInput.current;
+    if (!el) return;
+    const ro = new ResizeObserver(fitTitle);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const actions = (
+    <>
+      {daily && (
+        <>
+          <IconButton icon={ChevronLeft} label="Vorheriger Tag" size={26} iconSize={15} onClick={() => goDay(-1)} />
+          <IconButton icon={ChevronRight} label="Nächster Tag" size={26} iconSize={15} onClick={() => goDay(1)} />
+        </>
       )}
-      {menu}
-    </header>
+      <IconButton
+        icon={Star}
+        label={doc.favorite ? "Lesezeichen entfernen" : "Lesezeichen setzen"}
+        active={doc.favorite}
+        className={doc.favorite ? "star-on" : ""}
+        size={26}
+        iconSize={15}
+        onClick={async () => {
+          await api.setFavorite(doc.id, !doc.favorite);
+          onChange({ favorite: !doc.favorite });
+          s().refreshTree();
+        }}
+      />
+      <IconButton
+        icon={MoreHorizontal}
+        label="Weitere Aktionen"
+        size={26}
+        iconSize={15}
+        onClick={(e) =>
+          openMenu(e, [
+            { label: "Umbenennen", icon: PencilLine, onSelect: () => titleInput.current?.select() },
+            { label: "Symbol ändern", icon: SmilePlus, onSelect: () => setIconOpen(true) },
+            { label: "Rechts daneben öffnen", icon: Columns2, onSelect: () => s().splitTab(tab.id) },
+            { label: "Link kopieren", icon: Link2, onSelect: () => navigator.clipboard.writeText(`[[${doc.title}]]`) },
+            { label: "Unterseite anlegen", icon: CornerDownRight, onSelect: () => createSubpage(doc.id) },
+            "separator",
+            { label: "Seite löschen", icon: Trash2, danger: true, onSelect: () => deletePage(doc) },
+          ])
+        }
+      />
+    </>
+  );
+
+  return (
+    <>
+      <ViewHeader
+        tab={tab}
+        crumbs={crumbs.map((c) => (
+          <span key={c.id} className="crumb">
+            <button type="button" onClick={(e) => s().openPage(c.id, { newTab: e.ctrlKey || e.metaKey })}>{c.title}</button>
+            <span className="crumb-sep">/</span>
+          </span>
+        ))}
+        title={doc.title}
+        actions={actions}
+      />
+      <div className="page-scroll">
+        <div className="page">
+          <header className="page-header">
+            <div className="page-title-row">
+              <button type="button" className="page-icon-btn" aria-label="Symbol ändern" onClick={() => setIconOpen((v) => !v)}>
+                <PageIcon name={doc.icon} size={26} />
+              </button>
+              <textarea
+                ref={titleInput}
+                className="page-title"
+                rows={1}
+                value={title}
+                spellCheck={false}
+                aria-label="Seitentitel"
+                onChange={(e) => setTitle(e.target.value.replace(/\n/g, " "))}
+                onBlur={commitTitle}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    (e.target as HTMLTextAreaElement).blur();
+                    root.current?.querySelector<HTMLElement>(".ProseMirror")?.focus();
+                  }
+                  if (e.key === "Escape") setTitle(doc.title);
+                }}
+              />
+            </div>
+            {daily && <div className="page-subtitle">{dateLong(daily.toISOString())}</div>}
+            {iconOpen && (
+              <div className="icon-picker" role="listbox" aria-label="Symbol wählen">
+                {Object.entries(PAGE_ICONS).map(([name, Icon]) => (
+                  <button
+                    key={name}
+                    type="button"
+                    aria-label={name}
+                    className={doc.icon === name ? "on" : ""}
+                    onClick={async () => {
+                      await api.setIcon(doc.id, name);
+                      onChange({ icon: name });
+                      setIconOpen(false);
+                      s().refreshTree();
+                    }}
+                  >
+                    <Icon size={18} strokeWidth={1.75} />
+                  </button>
+                ))}
+              </div>
+            )}
+            {menu}
+          </header>
+          {children}
+        </div>
+      </div>
+    </>
   );
 }
 
-function Properties({ doc, onChange }: { doc: PageDoc; onChange: (d: PageDoc) => void }) {
+function Properties({ doc }: { doc: PageDoc }) {
   const fm = splitFrontmatter(doc.content).frontmatter;
   const [open, setOpen] = useState(false);
-  const words = splitFrontmatter(doc.content).body.split(/\s+/).filter(Boolean).length;
   return (
     <div className="props">
       <span className="prop faint">Bearbeitet {relative(doc.updated_at)}</span>
-      <span className="prop faint">{words.toLocaleString("de-DE")} Wörter</span>
       {doc.backlinks.length > 0 && (
         <span className="prop faint">
           <Link2 size={12} /> {doc.backlinks.length} {doc.backlinks.length === 1 ? "Rückverweis" : "Rückverweise"}
@@ -223,7 +311,6 @@ function Properties({ doc, onChange }: { doc: PageDoc; onChange: (d: PageDoc) =>
         </button>
       )}
       {open && fm && <pre className="frontmatter">{fm.trim()}</pre>}
-      {void onChange}
     </div>
   );
 }
@@ -253,7 +340,7 @@ export async function createSubpage(parentId: number | null, title = "Unbenannt"
     const p = await api.createPage(title, parentId);
     await s.refreshTree();
     s.openPage(p.id);
-    setTimeout(() => document.querySelector<HTMLInputElement>(".page-title")?.select(), 120);
+    setTimeout(() => document.querySelector<HTMLTextAreaElement>(".pane.active .page-title")?.select(), 120);
   } catch (e) {
     s.error("Seite konnte nicht angelegt werden", e);
   }

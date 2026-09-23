@@ -4,12 +4,24 @@ import { create } from "zustand";
 import { api, errorText } from "../lib/api";
 import type { BudgetStatus, PageDoc, PageNode, SessionMeter, SettingsView, TimerStatus } from "../lib/types";
 
-export type TabKind = "page" | "timesheet" | "projects" | "settings" | "tag";
-export interface Tab {
-  id: string;
+export type TabKind = "home" | "page" | "timesheet" | "projects" | "settings" | "tag";
+/** A place a tab can show. */
+export interface Loc {
   kind: TabKind;
   pageId?: number;
   tag?: string;
+}
+export interface Tab extends Loc {
+  id: string;
+  /** Navigation history of this tab (Obsidian-style back/forward). */
+  back: Loc[];
+  forward: Loc[];
+}
+/** A group of tabs shown side by side with other panes (split view). */
+export interface Pane {
+  id: string;
+  tabs: Tab[];
+  activeTabId: string;
 }
 export type PanelTab = "assistant" | "outline" | "links";
 
@@ -32,8 +44,13 @@ export interface ConfirmRequest {
 interface State {
   confirmRequest: ConfirmRequest | null;
   confirm: (opts: { title: string; message: string; confirmLabel?: string; danger?: boolean }) => Promise<boolean>;
+  /** Tabs and active tab of the focused pane (mirrors `panes`). */
   tabs: Tab[];
   activeTabId: string;
+  panes: Pane[];
+  activePaneId: string;
+  /** Relative widths of the panes (sum 1). */
+  paneSizes: number[];
   tree: PageNode[];
   pages: Map<number, PageNode>;
   sidebarOpen: boolean;
@@ -54,13 +71,22 @@ interface State {
   /** Headings of the active editor for the outline panel. */
   outline: { level: number; text: string; pos: number }[];
   scrollToPos: ((pos: number) => void) | null;
+  /** Word and character count of the focused editor. */
+  editorStats: { words: number; chars: number } | null;
   toasts: Toast[];
   focusMode: boolean;
 
-  openTab: (tab: Omit<Tab, "id">, opts?: { newTab?: boolean }) => void;
-  openPage: (pageId: number, opts?: { newTab?: boolean }) => void;
+  openTab: (loc: Loc, opts?: OpenOpts) => void;
+  openPage: (pageId: number, opts?: OpenOpts) => void;
   closeTab: (id: string) => void;
   activateTab: (id: string) => void;
+  focusPane: (paneId: string) => void;
+  goBack: () => void;
+  goForward: () => void;
+  splitTab: (tabId: string) => void;
+  moveTab: (tabId: string, toPaneId: string, index: number) => void;
+  closeOthers: (tabId: string) => void;
+  setPaneSizes: (sizes: number[]) => void;
   refreshTree: () => Promise<void>;
   refreshTimer: () => Promise<void>;
   refreshSettings: () => Promise<void>;
@@ -73,23 +99,71 @@ interface State {
   alerts: (alerts: BudgetStatus[]) => void;
 }
 
-const uid = () => Math.random().toString(36).slice(2, 10);
-
-function loadTabs(): { tabs: Tab[]; active: string } {
-  try {
-    const raw = JSON.parse(localStorage.getItem("aether.tabs") ?? "null");
-    if (raw?.tabs?.length) return { tabs: raw.tabs, active: raw.active ?? raw.tabs[0].id };
-  } catch {
-    /* ignore */
-  }
-  return { tabs: [], active: "" };
+export interface OpenOpts {
+  /** Open in a new tab instead of navigating the current one (Ctrl+click). */
+  newTab?: boolean;
+  /** Open in the pane to the right, creating it if needed (Ctrl+Alt+click). */
+  split?: boolean;
 }
-function saveTabs(tabs: Tab[], active: string) {
+
+const uid = () => Math.random().toString(36).slice(2, 10);
+const MAX_PANES = 3;
+const sameLoc = (a: Loc, b: Loc) => a.kind === b.kind && a.pageId === b.pageId && a.tag === b.tag;
+const locOf = (t: Tab): Loc => ({ kind: t.kind, pageId: t.pageId, tag: t.tag });
+const newTab = (loc: Loc): Tab => ({ ...loc, id: uid(), back: [], forward: [] });
+
+interface Layout {
+  panes: Pane[];
+  activePaneId: string;
+  paneSizes: number[];
+}
+
+function loadLayout(): Layout {
   try {
-    localStorage.setItem("aether.tabs", JSON.stringify({ tabs, active }));
+    const raw = JSON.parse(localStorage.getItem("aether.layout") ?? "null");
+    if (raw?.panes?.length) {
+      const panes: Pane[] = raw.panes.map((p: Pane) => ({ ...p, tabs: p.tabs.map((t) => ({ ...t, back: t.back ?? [], forward: t.forward ?? [] })) }));
+      return { panes, activePaneId: raw.activePaneId ?? panes[0].id, paneSizes: raw.paneSizes?.length === panes.length ? raw.paneSizes : panes.map(() => 1 / panes.length) };
+    }
+    // Older single-pane format.
+    const old = JSON.parse(localStorage.getItem("aether.tabs") ?? "null");
+    if (old?.tabs?.length) {
+      const pane = { id: uid(), tabs: old.tabs.map((t: Tab) => ({ ...t, back: [], forward: [] })), activeTabId: old.active ?? old.tabs[0].id };
+      return { panes: [pane], activePaneId: pane.id, paneSizes: [1] };
+    }
   } catch {
     /* ignore */
   }
+  const pane = { id: uid(), tabs: [], activeTabId: "" };
+  return { panes: [pane], activePaneId: pane.id, paneSizes: [1] };
+}
+function saveLayout(l: Layout) {
+  try {
+    localStorage.setItem("aether.layout", JSON.stringify(l));
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Applies a new pane layout and mirrors the focused pane into `tabs`/`activeTabId`. */
+function layoutPatch(panes: Pane[], activePaneId: string, paneSizes: number[]) {
+  // Remove empty panes, but always keep one.
+  const kept = panes.filter((p) => p.tabs.length > 0);
+  let sizes = paneSizes;
+  if (kept.length !== panes.length) {
+    const keptIdx = panes.map((p, i) => (p.tabs.length > 0 ? i : -1)).filter((i) => i >= 0);
+    sizes = keptIdx.map((i) => paneSizes[i] ?? 1);
+    if (!kept.length) {
+      kept.push(panes.find((p) => p.id === activePaneId) ?? panes[0]);
+      sizes = [1];
+    }
+  }
+  const total = sizes.reduce((a, b) => a + b, 0) || 1;
+  sizes = sizes.map((x) => x / total);
+  const active = kept.find((p) => p.id === activePaneId) ?? kept[kept.length - 1];
+  const layout = { panes: kept, activePaneId: active.id, paneSizes: sizes };
+  saveLayout(layout);
+  return { ...layout, tabs: active.tabs, activeTabId: active.activeTabId };
 }
 function pref(key: string, fallback: boolean) {
   try {
@@ -107,7 +181,8 @@ export function savePref(key: string, v: boolean) {
   }
 }
 
-const initial = loadTabs();
+const initial = loadLayout();
+const initialPane = initial.panes.find((p) => p.id === initial.activePaneId) ?? initial.panes[0];
 let toastSeq = 0;
 
 export const useApp = create<State>((set, get) => ({
@@ -127,8 +202,11 @@ export const useApp = create<State>((set, get) => ({
         },
       }),
     ),
-  tabs: initial.tabs,
-  activeTabId: initial.active,
+  tabs: initialPane.tabs,
+  activeTabId: initialPane.activeTabId,
+  panes: initial.panes,
+  activePaneId: initialPane.id,
+  paneSizes: initial.paneSizes,
   tree: [],
   pages: new Map(),
   sidebarOpen: pref("aether.sidebar", true),
@@ -145,49 +223,148 @@ export const useApp = create<State>((set, get) => ({
   activeDoc: null,
   outline: [],
   scrollToPos: null,
+  editorStats: null,
   toasts: [],
   focusMode: false,
 
-  openTab: (spec, opts) => {
-    const { tabs, activeTabId } = get();
-    const same = (t: Tab) => t.kind === spec.kind && t.pageId === spec.pageId && t.tag === spec.tag;
-    const existing = tabs.find(same);
-    if (existing) {
-      set({ activeTabId: existing.id });
-      saveTabs(tabs, existing.id);
+  openTab: (loc, opts) => {
+    const { panes, activePaneId, paneSizes } = get();
+    // Already open somewhere? Focus it (unless a split was requested).
+    if (!opts?.split) {
+      for (const p of panes) {
+        const t = p.tabs.find((x) => sameLoc(x, loc));
+        if (t && (p.id === activePaneId || !opts?.newTab)) {
+          const next = panes.map((q) => (q.id === p.id ? { ...q, activeTabId: t.id } : q));
+          set(layoutPatch(next, p.id, paneSizes));
+          return;
+        }
+      }
+    }
+    if (opts?.split) {
+      const idx = panes.findIndex((p) => p.id === activePaneId);
+      const target = panes[idx + 1];
+      if (target) {
+        const tab = newTab(loc);
+        const next = panes.map((p) => (p.id === target.id ? { ...p, tabs: [...p.tabs, tab], activeTabId: tab.id } : p));
+        set(layoutPatch(next, target.id, paneSizes));
+      } else if (panes.length < MAX_PANES) {
+        const tab = newTab(loc);
+        const pane: Pane = { id: uid(), tabs: [tab], activeTabId: tab.id };
+        const next = [...panes.slice(0, idx + 1), pane, ...panes.slice(idx + 1)];
+        const sizes = next.map(() => 1 / next.length);
+        set(layoutPatch(next, pane.id, sizes));
+      } else {
+        get().openTab(loc, { newTab: true });
+      }
       return;
     }
-    const tab: Tab = { ...spec, id: uid() };
-    let next: Tab[];
-    const idx = tabs.findIndex((t) => t.id === activeTabId);
-    if (opts?.newTab || idx < 0) next = [...tabs.slice(0, idx + 1), tab, ...tabs.slice(idx + 1)];
-    else next = tabs.map((t, i) => (i === idx ? tab : t));
-    set({ tabs: next, activeTabId: tab.id });
-    saveTabs(next, tab.id);
+    const pane = panes.find((p) => p.id === activePaneId)!;
+    const current = pane.tabs.find((t) => t.id === pane.activeTabId);
+    let tabs: Tab[];
+    let activeId: string;
+    if (opts?.newTab || !current) {
+      const tab = newTab(loc);
+      const idx = pane.tabs.findIndex((t) => t.id === pane.activeTabId);
+      tabs = [...pane.tabs.slice(0, idx + 1), tab, ...pane.tabs.slice(idx + 1)];
+      activeId = tab.id;
+    } else {
+      // Navigate the current tab and remember where we came from.
+      const moved: Tab = { ...current, ...loc, pageId: loc.pageId, tag: loc.tag, back: [...current.back, locOf(current)].slice(-50), forward: [] };
+      tabs = pane.tabs.map((t) => (t.id === current.id ? moved : t));
+      activeId = current.id;
+    }
+    const next = panes.map((p) => (p.id === pane.id ? { ...p, tabs, activeTabId: activeId } : p));
+    set(layoutPatch(next, pane.id, paneSizes));
   },
   openPage: (pageId, opts) => get().openTab({ kind: "page", pageId }, opts),
   closeTab: (id) => {
-    const { tabs, activeTabId } = get();
-    const idx = tabs.findIndex((t) => t.id === id);
-    const next = tabs.filter((t) => t.id !== id);
-    const active = id === activeTabId ? (next[Math.min(idx, next.length - 1)]?.id ?? "") : activeTabId;
-    set({ tabs: next, activeTabId: active });
-    saveTabs(next, active);
+    const { panes, activePaneId, paneSizes } = get();
+    const pane = panes.find((p) => p.tabs.some((t) => t.id === id));
+    if (!pane) return;
+    const idx = pane.tabs.findIndex((t) => t.id === id);
+    const tabs = pane.tabs.filter((t) => t.id !== id);
+    const activeTabId = id === pane.activeTabId ? (tabs[Math.min(idx, tabs.length - 1)]?.id ?? "") : pane.activeTabId;
+    const next = panes.map((p) => (p.id === pane.id ? { ...p, tabs, activeTabId } : p));
+    set(layoutPatch(next, tabs.length ? pane.id : activePaneId === pane.id ? (panes.find((p) => p.id !== pane.id)?.id ?? pane.id) : activePaneId, paneSizes));
   },
   activateTab: (id) => {
-    set({ activeTabId: id });
-    saveTabs(get().tabs, id);
+    const { panes, paneSizes } = get();
+    const pane = panes.find((p) => p.tabs.some((t) => t.id === id));
+    if (!pane) return;
+    const next = panes.map((p) => (p.id === pane.id ? { ...p, activeTabId: id } : p));
+    set(layoutPatch(next, pane.id, paneSizes));
+  },
+  focusPane: (paneId) => {
+    const { panes, paneSizes, activePaneId } = get();
+    if (paneId !== activePaneId) set(layoutPatch(panes, paneId, paneSizes));
+  },
+  goBack: () => {
+    const { panes, activePaneId, paneSizes } = get();
+    const pane = panes.find((p) => p.id === activePaneId)!;
+    const t = pane.tabs.find((x) => x.id === pane.activeTabId);
+    if (!t?.back.length) return;
+    const to = t.back[t.back.length - 1];
+    const moved: Tab = { ...t, kind: to.kind, pageId: to.pageId, tag: to.tag, back: t.back.slice(0, -1), forward: [locOf(t), ...t.forward] };
+    set(layoutPatch(panes.map((p) => (p.id === pane.id ? { ...p, tabs: p.tabs.map((x) => (x.id === t.id ? moved : x)) } : p)), pane.id, paneSizes));
+  },
+  goForward: () => {
+    const { panes, activePaneId, paneSizes } = get();
+    const pane = panes.find((p) => p.id === activePaneId)!;
+    const t = pane.tabs.find((x) => x.id === pane.activeTabId);
+    if (!t?.forward.length) return;
+    const to = t.forward[0];
+    const moved: Tab = { ...t, kind: to.kind, pageId: to.pageId, tag: to.tag, back: [...t.back, locOf(t)], forward: t.forward.slice(1) };
+    set(layoutPatch(panes.map((p) => (p.id === pane.id ? { ...p, tabs: p.tabs.map((x) => (x.id === t.id ? moved : x)) } : p)), pane.id, paneSizes));
+  },
+  splitTab: (tabId) => {
+    const { panes } = get();
+    const pane = panes.find((p) => p.tabs.some((t) => t.id === tabId));
+    const t = pane?.tabs.find((x) => x.id === tabId);
+    if (!pane || !t) return;
+    get().focusPane(pane.id);
+    get().openTab(locOf(t), { split: true });
+  },
+  moveTab: (tabId, toPaneId, index) => {
+    const { panes, paneSizes } = get();
+    const from = panes.find((p) => p.tabs.some((t) => t.id === tabId));
+    const tab = from?.tabs.find((t) => t.id === tabId);
+    if (!from || !tab) return;
+    const next = panes.map((p) => {
+      let tabs = p.tabs.filter((t) => t.id !== tabId);
+      if (p.id === toPaneId) {
+        const at = Math.max(0, Math.min(index - (p.id === from.id && p.tabs.findIndex((t) => t.id === tabId) < index ? 1 : 0), tabs.length));
+        tabs = [...tabs.slice(0, at), tab, ...tabs.slice(at)];
+        return { ...p, tabs, activeTabId: tab.id };
+      }
+      const activeTabId = p.activeTabId === tabId ? (tabs[0]?.id ?? "") : p.activeTabId;
+      return { ...p, tabs, activeTabId };
+    });
+    set(layoutPatch(next, toPaneId, paneSizes));
+  },
+  closeOthers: (tabId) => {
+    const { panes, paneSizes } = get();
+    const pane = panes.find((p) => p.tabs.some((t) => t.id === tabId));
+    if (!pane) return;
+    const next = panes.map((p) => (p.id === pane.id ? { ...p, tabs: p.tabs.filter((t) => t.id === tabId), activeTabId: tabId } : p));
+    set(layoutPatch(next, pane.id, paneSizes));
+  },
+  setPaneSizes: (sizes) => {
+    const { panes, activePaneId } = get();
+    set(layoutPatch(panes, activePaneId, sizes));
   },
   refreshTree: async () => {
     const tree = await api.tree();
     const pages = new Map<number, PageNode>();
     const walk = (list: PageNode[]) => list.forEach((p) => (pages.set(p.id, p), walk(p.children)));
     walk(tree);
-    // Drop tabs of deleted pages.
-    const tabs = get().tabs.filter((t) => t.kind !== "page" || pages.has(t.pageId!));
-    const active = tabs.some((t) => t.id === get().activeTabId) ? get().activeTabId : (tabs[0]?.id ?? "");
-    set({ tree, pages, tabs, activeTabId: active });
-    saveTabs(tabs, active);
+    // Drop tabs of deleted pages and history entries pointing to them.
+    const alive = (l: Loc) => l.kind !== "page" || pages.has(l.pageId!);
+    const panes = get().panes.map((p) => {
+      const tabs = p.tabs.filter(alive).map((t) => ({ ...t, back: t.back.filter(alive), forward: t.forward.filter(alive) }));
+      const activeTabId = tabs.some((t) => t.id === p.activeTabId) ? p.activeTabId : (tabs[tabs.length - 1]?.id ?? "");
+      return { ...p, tabs, activeTabId };
+    });
+    set({ tree, pages, ...layoutPatch(panes, get().activePaneId, get().paneSizes) });
   },
   refreshTimer: async () => set({ timer: await api.timerStatus() }),
   refreshSettings: async () => set({ settings: await api.settings() }),

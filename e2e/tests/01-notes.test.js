@@ -145,7 +145,7 @@ test("new page via Ctrl+N, then delete with confirmation", async () => {
 });
 
 test("daily note opens from the sidebar with the template", async () => {
-  await app.click(".nav-item:first-child");
+  await app.click(".ribbon [aria-label^=\"Heutige\"]");
   await app.waitText(".page-subtitle", /\d{4}/);
   const html = await (await app.$(".ProseMirror")).getHTML();
   assert.match(html, /Fokus/);

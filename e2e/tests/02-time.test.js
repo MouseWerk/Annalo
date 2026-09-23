@@ -45,7 +45,7 @@ test("an invalid /zeit shows an error and keeps the text", async () => {
 });
 
 test("timesheet: start and stop the timer", async () => {
-  await app.click(".nav-item:nth-child(2)");
+  await app.click(".ribbon [aria-label=\"Zeiterfassung\"]");
   await app.waitText(".view-header h1", /Zeiterfassung/);
   await app.shot("timesheet");
   const desc = await app.$('input[aria-label="Beschreibung"]');

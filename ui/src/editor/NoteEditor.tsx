@@ -28,7 +28,9 @@ export function NoteEditor({
   onOpenLink,
   onOpenTag,
   handleRef,
+  active = true,
 }: {
+  active?: boolean;
   doc: PageDoc;
   onSaved: (doc: PageDoc) => void;
   onOpenLink: (target: string, newTab: boolean) => void;
@@ -43,6 +45,9 @@ export function NoteEditor({
   const [linkDraft, setLinkDraft] = useState<string | null>(null);
   const cb = useRef({ onSaved, onOpenLink, onOpenTag });
   cb.current = { onSaved, onOpenLink, onOpenTag };
+  const activeRef = useRef(active);
+  activeRef.current = active;
+  const instance = useRef(Math.random().toString(36).slice(2));
 
   const save = async (editor: Editor) => {
     if (!dirty.current) return;
@@ -53,6 +58,8 @@ export function NoteEditor({
       .savePage(doc.id, md)
       .then((saved) => {
         cb.current.onSaved(saved);
+        // Other panes showing the same page pick up the new content.
+        window.dispatchEvent(new CustomEvent("aether:page-saved", { detail: { id: doc.id, content: md, from: instance.current } }));
         setStatus(dirty.current ? "dirty" : "saved");
       })
       .catch((e) => {
@@ -125,9 +132,9 @@ export function NoteEditor({
         setStatus("dirty");
         window.clearTimeout(saveTimer.current);
         saveTimer.current = window.setTimeout(() => save(editor), SAVE_DELAY);
-        publishOutline(editor);
+        if (activeRef.current) publishOutline(editor);
       },
-      onCreate: ({ editor }) => publishOutline(editor),
+      onCreate: ({ editor }) => activeRef.current && publishOutline(editor),
     },
     [doc.id],
   );
@@ -142,13 +149,6 @@ export function NoteEditor({
         await saving.current;
       },
     });
-    useApp.getState().set({
-      scrollToPos: (pos) => {
-        editor.chain().focus().setTextSelection(pos + 1).run();
-        const dom = editor.view.domAtPos(pos + 1).node as HTMLElement;
-        (dom.nodeType === 1 ? dom : dom.parentElement)?.scrollIntoView({ behavior: "smooth", block: "center" });
-      },
-    });
     const flush = () => {
       window.clearTimeout(saveTimer.current);
       save(editor);
@@ -161,12 +161,43 @@ export function NoteEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editor]);
 
+  // The focused pane owns the outline panel.
+  useEffect(() => {
+    if (!editor || !active) return;
+    publishOutline(editor);
+    useApp.getState().set({
+      scrollToPos: (pos) => {
+        editor.chain().focus().setTextSelection(pos + 1).run();
+        const dom = editor.view.domAtPos(pos + 1).node as HTMLElement;
+        (dom.nodeType === 1 ? dom : dom.parentElement)?.scrollIntoView({ behavior: "smooth", block: "center" });
+      },
+    });
+  }, [editor, active]);
+
+  // Same page open in another pane: take over its saved content unless we have unsaved edits.
+  useEffect(() => {
+    if (!editor) return;
+    const onSaved = (e: Event) => {
+      const d = (e as CustomEvent<{ id: number; content: string; from: string }>).detail;
+      if (d.id !== doc.id || d.from === instance.current || dirty.current) return;
+      const { frontmatter: fm, body } = splitFrontmatter(d.content);
+      frontmatter.current = fm;
+      if (toMarkdown(editor) === body) return;
+      const { from, to } = editor.state.selection;
+      editor.commands.setContent(body, { contentType: "markdown", emitUpdate: false });
+      const max = editor.state.doc.content.size;
+      editor.commands.setTextSelection({ from: Math.min(from, max), to: Math.min(to, max) });
+    };
+    window.addEventListener("aether:page-saved", onSaved);
+    return () => window.removeEventListener("aether:page-saved", onSaved);
+  }, [editor, doc.id]);
+
   // Ctrl+F: find in this page.
   const [find, setFind] = useState<string | null>(null);
   const findInput = useRef<HTMLInputElement>(null);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "f" && activeRef.current) {
         e.preventDefault();
         const sel = editor?.state.doc.textBetween(editor.state.selection.from, editor.state.selection.to, " ").trim();
         setFind((f) => (sel && sel.length < 60 ? sel : (f ?? "")));
@@ -290,5 +321,7 @@ function publishOutline(editor: Editor) {
     if (node.type.name === "heading") outline.push({ level: node.attrs.level, text: node.textContent, pos });
     return node.type.name !== "heading";
   });
-  useApp.getState().set({ outline });
+  const text = editor.state.doc.textBetween(0, editor.state.doc.content.size, " ", " ");
+  const words = text.split(/\s+/).filter(Boolean).length;
+  useApp.getState().set({ outline, editorStats: { words, chars: text.replace(/\s/g, "").length } });
 }

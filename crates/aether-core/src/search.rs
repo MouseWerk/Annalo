@@ -21,6 +21,7 @@ pub enum SearchHit {
         page_id: i64,
         title: String,
         icon: Option<String>,
+        /// Matched terms are wrapped in `\u{2}` … `\u{3}`.
         snippet: String,
         score: f64,
     },
@@ -85,7 +86,7 @@ pub fn search(db: &Database, input: &str, limit: usize) -> Result<Vec<SearchHit>
 
     // Best passage per page (rows arrive best first; later ones of the same page are dropped).
     let mut st = conn.prepare_cached(
-        "SELECT b.page_id, p.title, p.icon, snippet(notes_blocks_fts, 0, '[', ']', '…', 14), bm25(notes_blocks_fts)
+        "SELECT b.page_id, p.title, p.icon, snippet(notes_blocks_fts, 0, char(2), char(3), '…', 14), bm25(notes_blocks_fts)
          FROM notes_blocks_fts
          JOIN notes_blocks b ON b.id = notes_blocks_fts.rowid
          JOIN pages p ON p.id = b.page_id
@@ -113,7 +114,7 @@ pub fn search(db: &Database, input: &str, limit: usize) -> Result<Vec<SearchHit>
 
     let mut st = conn.prepare_cached(
         "SELECT e.id, n.netzplan_nr, e.vorgang_nr,
-                snippet(time_entries_fts, 0, '[', ']', '…', 12), bm25(time_entries_fts)
+                snippet(time_entries_fts, 0, char(2), char(3), '…', 12), bm25(time_entries_fts)
          FROM time_entries_fts
          JOIN time_entries e ON e.id = time_entries_fts.rowid
          JOIN netzplaene n ON n.id = e.netzplan_id

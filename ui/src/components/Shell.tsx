@@ -2,10 +2,10 @@
 
 import { useEffect, useState } from "react";
 import {
-  AlertTriangle, Briefcase, Home as HomeIcon, CalendarCheck2, CheckCircle2, Cpu, FilePlus2, Hash, Info, PanelLeftOpen, PanelRight, Play, Search, Settings, Timer, X, XCircle,
+  AlertTriangle, Briefcase, Home as HomeIcon, CalendarCheck2, CheckCircle2, Cpu, FilePlus2, Hash, Info, Link2, Play, Search, Settings, Timer, X, XCircle,
 } from "lucide-react";
 import { api } from "../lib/api";
-import { useApp, savePref, type Tab } from "../store/app";
+import { useApp, type Tab } from "../store/app";
 import { PageIcon } from "./icons";
 import { Button, Dialog, IconButton } from "./ui";
 import { clock, h1, relative } from "../lib/format";
@@ -15,6 +15,8 @@ import type { Page } from "../lib/types";
 
 export function tabTitle(t: Tab, pages: Map<number, { title: string }>) {
   switch (t.kind) {
+    case "home":
+      return "Neuer Tab";
     case "page":
       return pages.get(t.pageId!)?.title ?? "Seite";
     case "timesheet":
@@ -28,9 +30,11 @@ export function tabTitle(t: Tab, pages: Map<number, { title: string }>) {
   }
 }
 
-function TabIcon({ t }: { t: Tab }) {
+export function TabIcon({ t }: { t: Tab }) {
   const pages = useApp((s) => s.pages);
   switch (t.kind) {
+    case "home":
+      return <HomeIcon size={14} strokeWidth={1.75} />;
     case "page":
       return <PageIcon name={pages.get(t.pageId!)?.icon} size={14} />;
     case "timesheet":
@@ -44,72 +48,6 @@ function TabIcon({ t }: { t: Tab }) {
   }
 }
 
-export function TabBar() {
-  const tabs = useApp((s) => s.tabs);
-  const active = useApp((s) => s.activeTabId);
-  const pages = useApp((s) => s.pages);
-  const sidebarOpen = useApp((s) => s.sidebarOpen);
-  const panelOpen = useApp((s) => s.panelOpen);
-  const s = useApp.getState;
-  return (
-    <div className="tabbar" role="tablist" data-tauri-drag-region>
-      {!sidebarOpen && (
-        <IconButton
-          icon={PanelLeftOpen}
-          label="Seitenleiste einblenden (Ctrl \)"
-          onClick={() => {
-            s().set({ sidebarOpen: true });
-            savePref("aether.sidebar", true);
-          }}
-        />
-      )}
-      <div className="tabs">
-        {tabs.length === 0 && (
-          <span className="tab-home">
-            <HomeIcon size={14} strokeWidth={1.75} /> Start
-          </span>
-        )}
-        {tabs.map((t) => (
-          <div
-            key={t.id}
-            role="tab"
-            aria-selected={t.id === active}
-            className={`tab ${t.id === active ? "active" : ""}`}
-            onMouseDown={(e) => e.button === 0 && s().activateTab(t.id)}
-            onAuxClick={(e) => e.button === 1 && s().closeTab(t.id)}
-            title={tabTitle(t, pages)}
-          >
-            <span className="tab-icon">
-              <TabIcon t={t} />
-            </span>
-            <span className="tab-title">{tabTitle(t, pages)}</span>
-            <button
-              type="button"
-              className="tab-close"
-              aria-label="Tab schließen"
-              onMouseDown={(e) => e.stopPropagation()}
-              onClick={() => s().closeTab(t.id)}
-            >
-              <X size={12} strokeWidth={2} />
-            </button>
-          </div>
-        ))}
-        <IconButton icon={FilePlus2} label="Neue Seite (Ctrl N)" size={26} iconSize={14} onClick={() => createSubpage(null)} />
-      </div>
-      <span className="tabbar-drag" data-tauri-drag-region />
-      <IconButton
-        icon={PanelRight}
-        label="Seitenpanel (Ctrl Shift \)"
-        active={panelOpen}
-        onClick={() => {
-          s().set({ panelOpen: !panelOpen });
-          savePref("aether.panel", !panelOpen);
-        }}
-      />
-    </div>
-  );
-}
-
 export function StatusBar() {
   const timer = useApp((s) => s.timer);
   const meter = useApp((s) => s.meter);
@@ -117,6 +55,9 @@ export function StatusBar() {
   const seconds = useTimerSeconds();
   const s = useApp.getState;
   const configured = !!settings?.api_key_set;
+  const onPage = useApp((st) => st.tabs.find((t) => t.id === st.activeTabId)?.kind === "page");
+  const stats = useApp((st) => st.editorStats);
+  const doc = useApp((st) => st.activeDoc);
   return (
     <footer className="statusbar">
       {timer ? (
@@ -132,6 +73,17 @@ export function StatusBar() {
         </button>
       )}
       <span className="sb-spacer" />
+      {onPage && doc && (
+        <button type="button" className="sb-item" onClick={() => s().set({ panelOpen: true, panelTab: "links" })} title="Rückverweise anzeigen">
+          <Link2 size={12} />
+          <span className="num">{doc.backlinks.length}</span>
+        </button>
+      )}
+      {onPage && stats && (
+        <span className="sb-item sb-static num" title={`${stats.chars.toLocaleString("de-DE")} Zeichen`}>
+          {stats.words.toLocaleString("de-DE")} {stats.words === 1 ? "Wort" : "Wörter"}
+        </span>
+      )}
       <button type="button" className="sb-item" onClick={() => s().set({ panelOpen: true, panelTab: "assistant" })} title="KI-Sitzung">
         <Cpu size={12} />
         {meter && meter.requests > 0 ? (

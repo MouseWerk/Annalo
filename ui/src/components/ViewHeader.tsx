@@ -1,0 +1,29 @@
+// The header bar on top of every view: history navigation, breadcrumb, actions.
+
+import type { ReactNode } from "react";
+import { ArrowLeft, ArrowRight } from "lucide-react";
+import { useApp, type Tab } from "../store/app";
+import { IconButton } from "./ui";
+
+export function NavButtons({ tab }: { tab: Tab }) {
+  const s = useApp.getState;
+  return (
+    <div className="vh-nav">
+      <IconButton icon={ArrowLeft} label="Zurück (Alt ←)" size={26} iconSize={15} disabled={!tab.back.length} onClick={() => s().goBack()} />
+      <IconButton icon={ArrowRight} label="Vorwärts (Alt →)" size={26} iconSize={15} disabled={!tab.forward.length} onClick={() => s().goForward()} />
+    </div>
+  );
+}
+
+export function ViewHeader({ tab, crumbs, title, actions }: { tab: Tab; crumbs?: ReactNode; title: ReactNode; actions?: ReactNode }) {
+  return (
+    <div className="vh">
+      <NavButtons tab={tab} />
+      <div className="vh-title">
+        {crumbs}
+        <span className="vh-title-text">{title}</span>
+      </div>
+      <div className="vh-actions">{actions}</div>
+    </div>
+  );
+}

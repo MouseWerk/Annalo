@@ -20,7 +20,7 @@ export function RightPanel() {
     <aside className="panel" aria-label="Seitenpanel">
       <div className="panel-tabs" role="tablist">
         {tabs.map((t) => (
-          <button key={t.id} type="button" role="tab" aria-selected={tab === t.id} className={`panel-tab ${tab === t.id ? "active" : ""}`} onClick={() => s().set({ panelTab: t.id })}>
+          <button key={t.id} type="button" role="tab" aria-selected={tab === t.id} className={`panel-tab ${tab === t.id ? "active" : ""}`} title={t.label} onClick={() => s().set({ panelTab: t.id })}>
             <t.icon size={14} strokeWidth={1.75} />
             <span>{t.label}</span>
           </button>

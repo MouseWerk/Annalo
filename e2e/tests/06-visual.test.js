@@ -60,11 +60,11 @@ for (const theme of ["dark", "light"]) {
     await app.shot(`${theme}-05-links`);
     await app.click('.panel-tab:nth-child(1)');
 
-    await app.click(".nav-item:nth-child(2)");
+    await app.click(".ribbon [aria-label=\"Zeiterfassung\"]");
     await app.waitFor(".week-grid");
     await app.shot(`${theme}-06-timesheet`);
 
-    await app.click(".nav-item:nth-child(3)");
+    await app.click(".ribbon [aria-label=\"Projekte\"]");
     await app.waitFor(".vorgaenge");
     await app.shot(`${theme}-07-projects`);
 
@@ -77,7 +77,7 @@ for (const theme of ["dark", "light"]) {
     await app.shot(`${theme}-09-palette`);
     await app.keys(["Escape"]);
 
-    await app.click(".nav-item:first-child");
+    await app.click(".ribbon [aria-label^=\"Heutige\"]");
     await app.waitFor(".page-subtitle");
     await app.shot(`${theme}-10-daily`);
 
@@ -92,7 +92,7 @@ test("narrow window keeps everything usable", async () => {
   await openTree("Architektur");
   await app.waitFor(".ProseMirror");
   await app.shot("narrow-page");
-  await app.click(".nav-item:nth-child(2)");
+  await app.click(".ribbon [aria-label=\"Zeiterfassung\"]");
   await app.waitFor(".timer-form");
   await app.shot("narrow-timesheet");
   await app.browser.setWindowSize(1480, 920);

@@ -800,7 +800,8 @@ fn ai_run_workspace_tool(app: AppHandle, state: State<AppState>, name: String, a
             let _ = app.emit("data://entries", ());
             res
         }
-        "search_workspace" => serde_json::to_string(&search::search(&db, &arg("query"), 10)?)?,
+        // Snippets mark hits with STX/ETX; the model does not need them.
+        "search_workspace" => serde_json::to_string(&search::search(&db, &arg("query"), 10)?)?.replace("\\u0002", "").replace("\\u0003", ""),
         "budget_status" => {
             let np = db.netzplan_by_ref(&arg("netzplan"))?;
             serde_json::to_string(&tracking::budget_status(&db, np.id, &t)?)?

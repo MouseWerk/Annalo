@@ -1,16 +1,15 @@
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, on } from "./lib/api";
 import { useApp, savePref } from "./store/app";
 import { applyTheme } from "./lib/actions";
 import { Sidebar, stopTimer } from "./components/Sidebar";
-import { ConfirmHost, Home, StatusBar, TabBar, Toasts } from "./components/Shell";
+import { ConfirmHost, StatusBar, Toasts } from "./components/Shell";
+import { Ribbon, openAssistant, openToday } from "./components/Ribbon";
+import { Workspace } from "./components/Workspace";
+import { Resizer, readSize } from "./components/Resizer";
 import { CommandPalette } from "./components/CommandPalette";
 import { RightPanel } from "./panels/RightPanel";
-import { PageView, createSubpage } from "./views/PageView";
-import { TimesheetView } from "./views/TimesheetView";
-import { ProjectsView } from "./views/ProjectsView";
-import { SettingsView } from "./views/SettingsView";
-import { TagView } from "./views/TagView";
+import { createSubpage } from "./views/PageView";
 import type { ActivityTick } from "./lib/types";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { tabTitle } from "./components/Shell";
@@ -71,19 +70,20 @@ export function App() {
       else if (e.altKey && e.code === "Space") run(() => st.set({ paletteOpen: !st.paletteOpen, paletteMode: "all", paletteQuery: "" }));
       else if (mod && !e.shiftKey && k === "o") run(() => st.set({ paletteOpen: true, paletteMode: "pages", paletteQuery: "" }));
       else if (mod && !e.shiftKey && k === "n") run(() => createSubpage(null));
-      else if (mod && e.shiftKey && k === "d")
-        run(async () => {
-          const p = await api.dailyNote();
-          await st.refreshTree();
-          st.openPage(p.id);
-        });
-      else if (mod && e.shiftKey && k === "t") run(() => (st.timer ? stopTimer() : st.openTab({ kind: "timesheet" })));
-      else if (mod && !e.shiftKey && k === "j")
+      else if (mod && e.shiftKey && k === "d") run(() => openToday());
+      else if (mod && e.shiftKey && k === "f")
         run(() => {
-          st.set({ panelOpen: true, panelTab: "assistant" });
-          savePref("aether.panel", true);
-          setTimeout(() => document.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus(), 30);
+          if (!st.sidebarOpen) {
+            st.set({ sidebarOpen: true });
+            savePref("aether.sidebar", true);
+          }
+          setTimeout(() => window.dispatchEvent(new Event("aether:sidebar-search")), 0);
         });
+      else if (mod && !e.shiftKey && k === "t") run(() => st.openTab({ kind: "home" }, { newTab: true }));
+      else if (e.altKey && !mod && e.key === "ArrowLeft") run(() => st.goBack());
+      else if (e.altKey && !mod && e.key === "ArrowRight") run(() => st.goForward());
+      else if (mod && e.shiftKey && k === "t") run(() => (st.timer ? stopTimer() : st.openTab({ kind: "timesheet" })));
+      else if (mod && !e.shiftKey && k === "j") run(() => openAssistant());
       else if (mod && k === "w") run(() => st.activeTabId && st.closeTab(st.activeTabId));
       else if (mod && e.key === "Tab")
         run(() => {
@@ -105,8 +105,17 @@ export function App() {
       else if (mod && e.key === ",") run(() => st.openTab({ kind: "settings" }));
       else if (e.key === "Escape" && st.focusMode && !st.paletteOpen) st.set({ focusMode: false });
     };
+    // Mouse back/forward buttons.
+    const onMouse = (e: MouseEvent) => {
+      if (e.button === 3) (e.preventDefault(), useApp.getState().goBack());
+      else if (e.button === 4) (e.preventDefault(), useApp.getState().goForward());
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("mouseup", onMouse);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("mouseup", onMouse);
+    };
   }, []);
 
   // Window title follows the active tab.
@@ -117,23 +126,64 @@ export function App() {
     getCurrentWindow().setTitle(title).catch(() => {});
   }, [active, pages]);
 
-  const cls = ["app", sidebarOpen && !focus ? "" : "no-sidebar", panelOpen && !focus ? "" : "no-panel", focus ? "focus" : ""].join(" ");
+  const [sideW, setSideW] = useState(() => readSize("aether.sidebar-w", 264));
+  const [panelW, setPanelW] = useState(() => readSize("aether.panel-w", 360));
+  const dragStart = useRef(0);
+  const clamp = (v: number, lo: number, hi: number) => Math.round(Math.max(lo, Math.min(hi, v)));
+  const persist = (key: string, v: number) => {
+    try {
+      localStorage.setItem(key, String(v));
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const showSidebar = sidebarOpen && !focus;
+  const showPanel = panelOpen && !focus;
+  const style = { "--sidebar-w": `${sideW}px`, "--panel-w": `${panelW}px` } as React.CSSProperties;
   return (
-    <div className={cls}>
-      {sidebarOpen && !focus && <Sidebar />}
+    <div className={`app ${focus ? "focus" : ""}`} style={style}>
+      {!focus && <Ribbon />}
+      {showSidebar && (
+        <>
+          <Sidebar />
+          <Resizer
+            label="Seitenleiste"
+            className="side-resizer"
+            onResize={(dx) => {
+              if (!dragStart.current) dragStart.current = sideW;
+              setSideW(clamp(dragStart.current + dx, 200, 480));
+            }}
+            onEnd={() => {
+              dragStart.current = 0;
+              persist("aether.sidebar-w", sideW);
+            }}
+            onReset={() => (setSideW(264), persist("aether.sidebar-w", 264))}
+          />
+        </>
+      )}
       <main className="main">
-        {!focus && <TabBar />}
-        <div className="content" key={active?.id ?? "home"}>
-          {!active && <Home />}
-          {active?.kind === "page" && <PageView pageId={active.pageId!} />}
-          {active?.kind === "timesheet" && <TimesheetView />}
-          {active?.kind === "projects" && <ProjectsView />}
-          {active?.kind === "settings" && <SettingsView />}
-          {active?.kind === "tag" && <TagView tag={active.tag!} />}
-        </div>
+        <Workspace />
         <StatusBar />
       </main>
-      {panelOpen && !focus && <RightPanel />}
+      {showPanel && (
+        <>
+          <Resizer
+            label="Seitenpanel"
+            className="panel-resizer"
+            onResize={(dx) => {
+              if (!dragStart.current) dragStart.current = panelW;
+              setPanelW(clamp(dragStart.current - dx, 280, 640));
+            }}
+            onEnd={() => {
+              dragStart.current = 0;
+              persist("aether.panel-w", panelW);
+            }}
+            onReset={() => (setPanelW(360), persist("aether.panel-w", 360))}
+          />
+          <RightPanel />
+        </>
+      )}
       <CommandPalette />
       <Toasts />
       <ConfirmHost />

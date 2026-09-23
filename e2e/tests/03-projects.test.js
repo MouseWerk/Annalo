@@ -13,7 +13,7 @@ const setField = async (placeholder, value) => {
 };
 
 test("projects view shows budget and schedule facts", async () => {
-  await app.click(".nav-item:nth-child(3)");
+  await app.click(".ribbon [aria-label=\"Projekte\"]");
   await app.waitText(".view-header h1", /Projekte/);
   await app.waitText(".vorgaenge td", /kritisch/);
   await app.waitText(".vorgaenge td", /Puffer 1 T/);

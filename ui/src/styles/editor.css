@@ -2,13 +2,21 @@
 
 .page { max-width: 800px; margin: 0 auto; padding: 28px 56px 160px; }
 .page-header { position: relative; }
-.page-topline { display: flex; align-items: center; justify-content: space-between; min-height: 28px; margin-bottom: 18px; }
-.crumbs { display: flex; align-items: center; flex-wrap: wrap; min-width: 0; font-size: var(--fs-sm); }
 .crumb { display: inline-flex; align-items: center; gap: 2px; }
 .crumb button { border: 0; background: none; color: var(--text-3); padding: 2px 4px; border-radius: 4px; }
 .crumb button:hover { color: var(--text); background: var(--bg-hover); }
-.page-actions { display: flex; gap: 2px; }
-.page-title-row { display: flex; align-items: center; gap: 10px; }
+/* Narrow panes (split view) get tighter margins and a smaller title. */
+.pane-content { container-type: inline-size; container-name: pane; }
+@container pane (max-width: 720px) {
+  .page { padding: 20px 28px 120px; }
+  .page-title { font-size: 26px; }
+}
+@container pane (max-width: 460px) {
+  .page { padding: 16px 18px 96px; }
+  .page-title { font-size: 22px; }
+}
+.page-title-row { display: flex; align-items: flex-start; gap: 10px; }
+.page-title-row .page-icon-btn { margin-top: 1px; }
 .page-icon-btn { width: 40px; height: 40px; display: grid; place-items: center; border: 0; border-radius: var(--r-md); background: transparent; color: var(--text-3); flex: none; margin-left: -6px; }
 .page-icon-btn:hover { background: var(--bg-hover); color: var(--text); }
 .page-title {
@@ -24,6 +32,10 @@
   line-height: 1.2;
   padding: 2px 0;
   user-select: text;
+  resize: none;
+  overflow: hidden;
+  font-family: inherit;
+  overflow-wrap: anywhere;
 }
 .page-subtitle { color: var(--text-3); margin: 2px 0 0 44px; }
 .icon-picker {
