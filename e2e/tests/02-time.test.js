@@ -1,7 +1,8 @@
-import { test, before, after } from "node:test";
+import { test as nodeTest, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { launch } from "../lib/harness.js";
+import { launch, guarded } from "../lib/harness.js";
 
+const test = guarded(nodeTest, () => app);
 let app;
 before(async () => (app = await launch()));
 after(async () => app?.close());
@@ -15,9 +16,7 @@ const openTree = async (title) => {
 test("/zeit in a note books time and leaves a chip", async () => {
   const before = (await entries()).length;
   await openTree("Jour fixe 22.09.");
-  const pm = await app.waitFor(".ProseMirror");
-  await pm.click();
-  await app.keys(["Control", "End"]);
+  await app.caretToEnd();
   await app.keys(["Enter"]);
   await app.type("/zeit NP-8801/1040 1.5h #TEST Testdaten vorbereitet");
   await app.keys(["Escape"]);

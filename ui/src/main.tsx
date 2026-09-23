@@ -22,7 +22,11 @@ console.error = (...args: unknown[]) => {
 
 // Follow the OS theme until settings are loaded.
 document.documentElement.dataset.theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-if (navigator.userAgent.includes("Windows")) document.documentElement.classList.add("os-windows");
+// Windows 11: the window has a Mica backdrop that the chrome lets show through.
+import("@tauri-apps/api/core")
+  .then(({ invoke }) => invoke<boolean>("window_backdrop"))
+  .then((mica) => mica && document.documentElement.classList.add("os-windows"))
+  .catch(() => {});
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

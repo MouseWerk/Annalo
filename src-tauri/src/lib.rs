@@ -889,6 +889,63 @@ fn demo_remove(app: AppHandle, state: State<AppState>) -> Result<usize> {
     Ok(n)
 }
 
+/// Windows 11 (build 22000+) supports the Mica backdrop.
+#[cfg(windows)]
+fn supports_mica() -> bool {
+    use windows_sys::Wdk::System::SystemServices::RtlGetVersion;
+    use windows_sys::Win32::System::SystemInformation::OSVERSIONINFOW;
+    let mut info: OSVERSIONINFOW = unsafe { std::mem::zeroed() };
+    info.dwOSVersionInfoSize = std::mem::size_of::<OSVERSIONINFOW>() as u32;
+    // SAFETY: `info` is a valid, correctly sized OSVERSIONINFOW.
+    unsafe { RtlGetVersion(&mut info) == 0 && info.dwBuildNumber >= 22000 }
+}
+
+#[cfg(not(windows))]
+fn supports_mica() -> bool {
+    false
+}
+
+fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
+    let mica = supports_mica();
+    let builder = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
+        .title("AETHER OS")
+        .inner_size(1480.0, 920.0)
+        .min_inner_size(900.0, 560.0)
+        .center();
+    #[cfg(windows)]
+    let builder = if mica {
+        builder.transparent(true).effects(tauri::utils::config::WindowEffectsConfig {
+            effects: vec![tauri::window::Effect::Mica],
+            ..Default::default()
+        })
+    } else {
+        builder
+    };
+    let _ = mica;
+    builder.build()?;
+    Ok(())
+}
+
+/// Whether the window has a Mica backdrop (the UI then lets it show through).
+#[tauri::command]
+fn window_backdrop() -> bool {
+    supports_mica()
+}
+
+/// Switches the Mica variant to match the app theme (Windows 11 only).
+#[tauri::command]
+fn window_set_theme(app: AppHandle, dark: bool) {
+    #[cfg(windows)]
+    if supports_mica()
+        && let Some(w) = app.get_webview_window("main")
+    {
+        let effect = if dark { tauri::window::Effect::MicaDark } else { tauri::window::Effect::MicaLight };
+        let _ =
+            w.set_effects(tauri::utils::config::WindowEffectsConfig { effects: vec![effect], ..Default::default() });
+    }
+    let _ = (app, dark);
+}
+
 #[derive(Serialize)]
 struct AppInfo {
     version: &'static str,
@@ -962,6 +1019,8 @@ pub fn run() {
                 cancels: Mutex::new(HashMap::new()),
             });
 
+            create_main_window(app)?;
+
             // Another instance may already own the shortcut; Ctrl+K still works in-app.
             if let Err(e) = app.global_shortcut().register(palette) {
                 eprintln!("Alt+Space not available: {e}");
@@ -1028,6 +1087,8 @@ pub fn run() {
             ai_index_pending,
             app_info,
             demo_remove,
+            window_backdrop,
+            window_set_theme,
         ])
         .run(tauri::generate_context!())
         .expect("error while running AETHER OS");

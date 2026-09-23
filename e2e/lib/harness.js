@@ -38,6 +38,23 @@ async function waitForPort(port, timeout = 15000) {
   throw new Error(`port ${port} did not open`);
 }
 
+/** Wraps node:test's `test` so a failing test leaves a screenshot and the editor DOM behind. */
+export function guarded(test, getApp) {
+  return (name, fn) =>
+    test(name, async (t) => {
+      try {
+        await fn(t);
+      } catch (e) {
+        const app = getApp();
+        const slug = name.replace(/[^a-z0-9]+/gi, "-").slice(0, 60);
+        await app?.browser.saveScreenshot(path.join(SHOTS, `FAIL-${slug}.png`)).catch(() => {});
+        const dom = await app?.browser.execute(() => document.querySelector(".ProseMirror")?.innerHTML ?? "").catch(() => "");
+        if (dom) fs.writeFileSync(path.join(SHOTS, `FAIL-${slug}.html`), dom);
+        throw e;
+      }
+    });
+}
+
 export async function launch({ demo = true, width = 1480, height = 920 } = {}) {
   ensureXvfb();
   fs.mkdirSync(SHOTS, { recursive: true });
@@ -111,6 +128,22 @@ export async function launch({ demo = true, width = 1480, height = 920 } = {}) {
         if (r.err) throw new Error(r.err);
         return r.ok;
       });
+    },
+    /** Puts the caret on a fresh empty line at the end of the open note. */
+    async caretToEnd() {
+      const pm = await app.waitFor(".ProseMirror");
+      await pm.click();
+      await browser.execute(() => {
+        const el = document.querySelector(".ProseMirror");
+        const sel = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(el.lastElementChild ?? el);
+        range.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      });
+      await browser.pause(60);
+      await browser.keys(["End"]);
     },
     /** Sets a <select> value and notifies React (native click on options is unreliable in WebKit). */
     async select(sel, value) {

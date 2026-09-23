@@ -1,7 +1,8 @@
-import { test, before, after } from "node:test";
+import { test as nodeTest, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { launch } from "../lib/harness.js";
+import { launch, guarded } from "../lib/harness.js";
 
+const test = guarded(nodeTest, () => app);
 let app;
 before(async () => (app = await launch()));
 after(async () => app?.close());

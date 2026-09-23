@@ -1,10 +1,11 @@
-import { test, before, after } from "node:test";
+import { test as nodeTest, before, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { launch } from "../lib/harness.js";
+import { launch, guarded } from "../lib/harness.js";
 
+const test = guarded(nodeTest, () => app);
 let app, vault, out;
 before(async () => {
   vault = fs.mkdtempSync(path.join(os.tmpdir(), "vault-"));
@@ -55,9 +56,7 @@ test("imported page keeps frontmatter, links and highlights", async () => {
 });
 
 test("editing an imported page keeps its frontmatter", async () => {
-  const pm = await app.$(".ProseMirror");
-  await pm.click();
-  await app.keys(["Control", "End"]);
+  await app.caretToEnd();
   await app.keys(["Enter"]);
   await app.type("Ergänzt in AETHER");
   await app.browser.pause(900);

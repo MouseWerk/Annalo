@@ -1,9 +1,10 @@
 // Captures every main screen in dark and light mode for visual review.
-import { test, before, after } from "node:test";
+import { test as nodeTest, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { launch } from "../lib/harness.js";
+import { launch, guarded } from "../lib/harness.js";
 import { startFakeLiteLLM } from "../lib/fake-litellm.js";
 
+const test = guarded(nodeTest, () => app);
 let app, llm;
 before(async () => {
   llm = await startFakeLiteLLM({ port: 4998 });

@@ -7,6 +7,7 @@ import { useApp } from "../store/app";
 export function applyTheme(theme: "system" | "light" | "dark") {
   const dark = theme === "dark" || (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
   document.documentElement.dataset.theme = dark ? "dark" : "light";
+  import("@tauri-apps/api/core").then(({ invoke }) => invoke("window_set_theme", { dark })).catch(() => {});
 }
 
 export async function toggleTheme() {
