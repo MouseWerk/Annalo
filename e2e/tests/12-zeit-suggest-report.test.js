@@ -63,6 +63,8 @@ test("/zeit suggests Netzplan/Vorgang, Enter picks it, then books", async () => 
   assert.equal(e.leistungsart, "TEST");
   assert.equal(e.duration_minutes, 60);
   await app.waitFor(".ProseMirror .time-chip");
+  // After booking the caret waits on the new line below the chip.
+  await app.browser.waitUntil(async () => (await caretLine()) === "", { timeoutMsg: "caret not below the chip" });
 });
 
 test("/zeit: the booked reference is suggested first; Escape closes the popup", async () => {

@@ -475,8 +475,10 @@ export const ZeitCommand = Extension.create<
               .chain()
               .insertContentAt({ from, to }, [{ type: "timeEntry", attrs: res }])
               .insertContentAt(from + 1, { type: "paragraph" })
-              .focus(from + 2)
               .run();
+            // Caret into the paragraph after the chip's line (not behind the chip).
+            const after = editor.state.doc.resolve(from).after();
+            editor.commands.focus(Math.min(after + 1, editor.state.doc.content.size));
           })
           .finally(() => pending.delete(text));
         return true;
