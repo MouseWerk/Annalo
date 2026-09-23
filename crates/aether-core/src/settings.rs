@@ -46,6 +46,12 @@ pub struct Settings {
     pub backup_keep: usize,
     /// Template page for new daily notes; `None` = built-in sections.
     pub daily_template: Option<i64>,
+    /// Closing the main window hides it to the tray instead of quitting.
+    pub close_to_tray: bool,
+    /// End-of-day reminder as `HH:MM` (local time); `None` = off.
+    pub reminder_time: Option<String>,
+    /// Global shortcut for the quick-capture window, e.g. `Ctrl+Shift+Space`.
+    pub capture_shortcut: String,
 }
 
 impl Default for Settings {
@@ -67,9 +73,15 @@ impl Default for Settings {
             backup_dir: None,
             backup_keep: 14,
             daily_template: None,
+            close_to_tray: cfg!(windows),
+            reminder_time: Some("17:30".into()),
+            capture_shortcut: DEFAULT_CAPTURE_SHORTCUT.into(),
         }
     }
 }
+
+/// Ctrl+Alt+… is AltGr on German keyboards, so the default avoids it.
+pub const DEFAULT_CAPTURE_SHORTCUT: &str = "Ctrl+Shift+Space";
 
 const KEY: &str = "app";
 
@@ -130,5 +142,10 @@ mod tests {
         assert_eq!(loaded.theme, "dark");
         assert_eq!(loaded.idle_threshold_minutes, 5);
         assert_eq!((loaded.backup_dir, loaded.backup_keep), (None, 14));
+        assert_eq!(loaded.reminder_time.as_deref(), Some("17:30"));
+        assert_eq!(loaded.capture_shortcut, DEFAULT_CAPTURE_SHORTCUT);
+        // An explicit null switches the reminder off.
+        db.conn().execute("UPDATE settings SET value = '{\"reminder_time\":null}'", []).unwrap();
+        assert_eq!(db.load_settings().unwrap().reminder_time, None);
     }
 }

@@ -184,6 +184,22 @@ export interface Settings {
   backup_keep: number;
   /** Template page for new daily notes. */
   daily_template: number | null;
+  /** Closing the main window hides it to the tray. */
+  close_to_tray: boolean;
+  /** End-of-day reminder `HH:MM`; null = off. */
+  reminder_time: string | null;
+  /** Global shortcut of the quick-capture window; "" = none. */
+  capture_shortcut: string;
+}
+export interface DesktopInfo {
+  autostart: boolean;
+  autostart_available: boolean;
+  tray: boolean;
+  capture_shortcut_active: boolean;
+}
+export interface CaptureOutcome {
+  appended: { page_id: number; tasks: number; notes: number } | null;
+  bookings: LogOutcome[];
 }
 export interface SettingsView {
   settings: Settings;

@@ -8,6 +8,10 @@ import "./styles/components.css";
 import "./styles/app.css";
 import "./styles/editor.css";
 import { App } from "./App";
+import { CaptureApp } from "./components/CaptureApp";
+
+// The quick-capture window loads the same bundle with `#capture` (or `?capture`).
+const captureMode = location.hash === "#capture" || new URLSearchParams(location.search).has("capture");
 
 // Collect runtime errors so end-to-end tests can assert a clean console.
 const w = window as unknown as { __aetherErrors: string[] };
@@ -25,11 +29,11 @@ document.documentElement.dataset.theme = window.matchMedia("(prefers-color-schem
 // Windows 11: the window has a Mica backdrop that the chrome lets show through.
 import("@tauri-apps/api/core")
   .then(({ invoke }) => invoke<boolean>("window_backdrop"))
-  .then((mica) => mica && document.documentElement.classList.add("os-windows"))
+  .then((mica) => mica && !captureMode && document.documentElement.classList.add("os-windows"))
   .catch(() => {});
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App />
+    {captureMode ? <CaptureApp /> : <App />}
   </StrictMode>,
 );

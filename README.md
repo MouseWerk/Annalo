@@ -28,6 +28,12 @@ assistant that runs against **your own LiteLLM server**.
 - Projects view: budget, booked hours, remaining effort (ETC), forecast (EAC), critical path and float, as tables
 - Budget warnings when a booking pushes a Netzplan or Vorgang over its thresholds
 
+**Desktop**
+- Tray icon: open, stop the timer or restart the last booking, quick capture, quit; the tooltip shows the running timer (`NP-8801/1020 · 01:23`)
+- Closing hides the window to the tray (Settings → Desktop), start with Windows (minimized), one instance per workspace
+- Quick capture (Ctrl Shift Space, global): one line into today's daily note, `todo …` / `- [ ] …` as a task, `/zeit …` books time
+- End-of-day reminder on workdays when less than the daily target is booked (default 17:30), and once when a timer is still running after 20:00
+
 **Assistant**
 - Streams answers from your LiteLLM server; knows the open page and searches notes and time logs (keyword + semantic)
 - Model routing: local, standard and reasoning models; `#privat` content always stays on the local model
@@ -77,7 +83,7 @@ and a fake LiteLLM server for the assistant tests. It also saves screenshots of 
 |---|---|
 | `crates/aether-core` | Rust core: SQLite + FTS5 store, documents/links/tags, `/zeit` parser, time tracking, budgets, CPM, exports, idle detection (Win32), LiteLLM client, router, RAG, tools, vault import/export |
 | `crates/aether-cli` | `aether` command line on the same database |
-| `src-tauri` | Tauri v2 desktop shell: IPC commands, credential storage, global Alt+Space, activity sampler |
+| `src-tauri` | Tauri v2 desktop shell: IPC commands, credential storage, global shortcuts, tray, quick capture, reminders, activity sampler |
 | `ui` | React + TypeScript + TipTap frontend (Vite), Lucide icons |
 | `e2e` | WebdriverIO end-to-end tests against the desktop app |
 | `docs/ARCHITECTURE.md` | Design notes |
@@ -87,6 +93,7 @@ and a fake LiteLLM server for the assistant tests. It also saves screenshots of 
 | Keys | Action |
 |---|---|
 | Ctrl K / Alt Space (global) | Command palette, search, `/zeit …`, `? question` |
+| Ctrl Shift Space (global) | Quick capture |
 | Ctrl O | Quick switcher |
 | Ctrl N | New page |
 | Ctrl Shift D | Today's daily note |

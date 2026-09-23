@@ -1,5 +1,6 @@
 //! AETHER OS desktop shell: exposes `aether-core` to the web UI over Tauri IPC.
 
+mod desktop;
 mod secrets;
 
 use std::collections::HashMap;
@@ -559,6 +560,7 @@ fn timer_start(
     )?;
     lock(&state.idle).reset();
     let _ = app.emit("data://entries", ());
+    desktop::refresh_tray(&app);
     Ok(e)
 }
 
@@ -581,6 +583,9 @@ fn timer_stop(app: AppHandle, state: State<AppState>, subtract_idle: bool) -> Re
     let entry = db.stop_timer(now, if subtract_idle { idle_minutes } else { 0 })?;
     lock(&state.idle).reset();
     let _ = app.emit("data://entries", ());
+    drop(db);
+    desktop::refresh_tray(&app);
+    let db = state.db();
     if entry.duration_minutes.unwrap_or(0) < 1 {
         db.delete_time_entry(entry.id)?;
         return Ok(StopOutcome { entry, idle_minutes, alerts: vec![], discarded: true });
@@ -593,6 +598,7 @@ fn timer_stop(app: AppHandle, state: State<AppState>, subtract_idle: bool) -> Re
 fn timer_discard(app: AppHandle, state: State<AppState>) -> Result<()> {
     state.db().discard_timer()?;
     let _ = app.emit("data://entries", ());
+    desktop::refresh_tray(&app);
     Ok(())
 }
 
@@ -808,7 +814,7 @@ fn settings_get(state: State<AppState>) -> SettingsView {
 
 /// Saves settings and applies them immediately (no restart needed).
 #[tauri::command]
-fn settings_save(state: State<AppState>, settings: Settings) -> Result<SettingsView> {
+fn settings_save(app: AppHandle, state: State<AppState>, settings: Settings) -> Result<SettingsView> {
     let url = settings.litellm_base_url.trim().to_owned();
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err(Error::State("Die Server-URL muss mit http:// oder https:// beginnen".into()));
@@ -817,7 +823,23 @@ fn settings_save(state: State<AppState>, settings: Settings) -> Result<SettingsV
     settings.litellm_base_url = url.trim_end_matches('/').to_owned();
     settings.backup_keep = settings.backup_keep.clamp(1, 365);
     settings.backup_dir = settings.backup_dir.map(|d| d.trim().to_owned()).filter(|d| !d.is_empty());
+    settings.reminder_time = settings.reminder_time.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty());
+    if let Some(t) = &settings.reminder_time {
+        let time = aether_core::desktop::parse_hhmm(t)
+            .ok_or_else(|| Error::State(format!("Erinnerungszeit „{t}“ ungültig, erwartet HH:MM")))?;
+        settings.reminder_time = Some(time.format("%H:%M").to_string());
+    }
+    settings.capture_shortcut = settings.capture_shortcut.trim().to_owned();
+    if !settings.capture_shortcut.is_empty() {
+        desktop::parse_shortcut(&settings.capture_shortcut).map_err(Error::State)?;
+    }
+    let old_shortcut = state.settings().capture_shortcut;
     state.db().save_settings(&settings)?;
+    if settings.capture_shortcut != old_shortcut
+        && let Err(e) = desktop::set_capture_shortcut(&app, &settings.capture_shortcut)
+    {
+        eprintln!("capture shortcut not available: {e}");
+    }
     lock(&state.idle).set_threshold(Duration::from_secs(settings.idle_threshold_minutes * 60));
     *state.ai.write().unwrap_or_else(|e| e.into_inner()) = AiRuntime::new(settings, state.secrets.get());
     Ok(settings_get(state))
@@ -1125,8 +1147,14 @@ fn spawn_activity_sampler(app: AppHandle) {
     const INTERVAL: Duration = Duration::from_secs(5);
     std::thread::spawn(move || {
         let probe = activity::system_probe();
+        let mut ticks = 0u32;
         loop {
             std::thread::sleep(INTERVAL);
+            // Tray tooltip and reminders every 30 s.
+            if ticks.is_multiple_of(6) {
+                desktop::periodic(&app);
+            }
+            ticks = ticks.wrapping_add(1);
             let state = app.state::<AppState>();
             let idle = probe.idle_duration();
             let window = probe.foreground_window();
@@ -1192,9 +1220,10 @@ fn supports_mica() -> bool {
     false
 }
 
-fn create_main_window(app: &tauri::App) -> tauri::Result<()> {
+fn create_main_window(app: &tauri::App, visible: bool) -> tauri::Result<()> {
     let mica = supports_mica();
-    let builder = tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
+    let builder = tauri::WebviewWindowBuilder::new(app, desktop::MAIN, tauri::WebviewUrl::default())
+        .visible(visible)
         .title("AETHER OS")
         .inner_size(1480.0, 920.0)
         .min_inner_size(900.0, 560.0)
@@ -1261,13 +1290,27 @@ struct StartupOptions {
 
 pub fn run() {
     let palette = Shortcut::new(Some(Modifiers::ALT), Code::Space);
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+    // Two processes on one SQLite workspace would overwrite each other's edits: a second
+    // launch only brings the running window to the front. Test runs (AETHER_DATA_DIR)
+    // use their own workspace each and may overlap.
+    if std::env::var_os("AETHER_DATA_DIR").is_none() {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| desktop::show_main(app)));
+    }
+    builder
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_autostart::Builder::new().arg(desktop::MINIMIZED_ARG).build())
         .plugin(tauri_plugin_opener::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
-                    if event.state() == ShortcutState::Pressed && shortcut == &palette {
+                    if event.state() != ShortcutState::Pressed {
+                        return;
+                    }
+                    if desktop::is_capture_shortcut(app, shortcut) {
+                        desktop::open_capture(app);
+                    } else if shortcut == &palette {
                         if let Some(w) = app.get_webview_window("main") {
                             let _ = w.unminimize();
                             let _ = w.show();
@@ -1279,6 +1322,7 @@ pub fn run() {
                 .build(),
         )
         .register_uri_scheme_protocol("aether-asset", |ctx, request| serve_attachment(ctx.app_handle(), &request))
+        .on_window_event(desktop::on_window_event)
         .setup(move |app| {
             // AETHER_DATA_DIR lets tests run against a throw-away workspace.
             let dir = match std::env::var_os("AETHER_DATA_DIR") {
@@ -1296,6 +1340,7 @@ pub fn run() {
                 eprintln!("trash cleanup failed: {e}");
             }
             let settings = db.load_settings()?;
+            let capture_shortcut = settings.capture_shortcut.clone();
             let secrets = SecretStore::new(&dir);
             let idle_threshold = Duration::from_secs(settings.idle_threshold_minutes * 60);
             let ai = AiRuntime::new(settings, secrets.get());
@@ -1312,11 +1357,22 @@ pub fn run() {
                 cancels: Mutex::new(HashMap::new()),
             });
 
-            create_main_window(app)?;
+            app.manage(desktop::Desktop::default());
+            // No tray (e.g. a Linux desktop without StatusNotifier): the app still works,
+            // closing then minimizes instead of hiding.
+            if let Err(e) = desktop::setup_tray(app.handle()) {
+                eprintln!("tray icon not available: {e}");
+            }
+            let tray = app.state::<desktop::Desktop>().has_tray();
+            let minimized = tray && std::env::args().any(|a| a == desktop::MINIMIZED_ARG);
+            create_main_window(app, !minimized)?;
 
             // Another instance may already own the shortcut; Ctrl+K still works in-app.
             if let Err(e) = app.global_shortcut().register(palette) {
                 eprintln!("Alt+Space not available: {e}");
+            }
+            if let Err(e) = desktop::set_capture_shortcut(app.handle(), &capture_shortcut) {
+                eprintln!("capture shortcut not available: {e}");
             }
             spawn_activity_sampler(app.handle().clone());
             spawn_backup_scheduler(app.handle().clone());
@@ -1399,6 +1455,12 @@ pub fn run() {
             onboarding_finish,
             window_backdrop,
             window_set_theme,
+            desktop::window_hide,
+            desktop::app_quit,
+            desktop::capture_submit,
+            desktop::capture_hide,
+            desktop::desktop_info,
+            desktop::autostart_set,
         ])
         .run(tauri::generate_context!())
         .expect("error while running AETHER OS");

@@ -94,6 +94,15 @@ export const api = {
   backups: () => call<T.BackupInfo[]>("backup_list"),
   appInfo: () => call<{ version: string; data_dir: string; platform: string }>("app_info"),
 
+  // desktop
+  desktopInfo: () => call<T.DesktopInfo>("desktop_info"),
+  setAutostart: (enabled: boolean) => call<T.DesktopInfo>("autostart_set", { enabled }),
+  /** Hides the main window to the tray. */
+  hideWindow: () => call<void>("window_hide"),
+  quit: () => call<void>("app_quit"),
+  captureSubmit: (text: string) => call<T.CaptureOutcome>("capture_submit", { text }),
+  captureHide: () => call<void>("capture_hide"),
+
   // AI
   routePreview: (prompt: string, useTools: boolean, tier: T.Tier | null) => call<T.RouteDecision>("ai_route_preview", { prompt, useTools, tier }),
   meter: () => call<T.SessionMeter>("ai_meter"),

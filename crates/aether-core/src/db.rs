@@ -480,6 +480,21 @@ impl Database {
         self.time_entry(self.conn.last_insert_rowid())
     }
 
+    /// The most recently started entry that is not running (for „Zuletzt verwendet starten“).
+    pub fn last_finished_entry(&self) -> Result<Option<TimeEntry>> {
+        Ok(self
+            .conn
+            .query_row(
+                &format!(
+                    "SELECT {} FROM time_entries e WHERE e.status_flag <> 'running' ORDER BY e.start_time DESC, e.id DESC LIMIT 1",
+                    Self::ENTRY_COLS
+                ),
+                [],
+                Self::map_entry,
+            )
+            .optional()?)
+    }
+
     pub fn running_timer(&self) -> Result<Option<TimeEntry>> {
         Ok(self
             .conn

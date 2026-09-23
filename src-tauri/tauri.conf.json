@@ -29,6 +29,12 @@
     "windows": {
       "webviewInstallMode": {
         "type": "downloadBootstrapper"
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "startMenuFolder": "AETHER OS",
+        "languages": ["German", "English"],
+        "displayLanguageSelector": false
       }
     }
   }
