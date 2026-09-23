@@ -743,6 +743,7 @@ button.side-section-title:hover { color: var(--text-2); }
 
 /* ---------------------------------------------------------------- backups */
 
+.backup-path { overflow-wrap: anywhere; }
 .backup-list { display: grid; padding: 4px 0; }
 .backup-row { display: flex; align-items: center; gap: 10px; min-height: 30px; }
 .backup-row .grow { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

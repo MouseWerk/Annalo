@@ -558,8 +558,15 @@ function BackupSection({ draft, update }: { draft: Settings; update: (p: Partial
         <p>Die Datenbank wird einmal täglich automatisch gesichert. Eine Sicherung ist eine vollständige Kopie von workspace.db. Zum Wiederherstellen die Datei bei geschlossener App in den Datenordner kopieren und in workspace.db umbenennen.</p>
       </header>
       <Group title="Automatische Sicherung" description="Wird beim Start und danach stündlich geprüft; gesichert wird, wenn die letzte Sicherung älter als 24 Stunden ist.">
-        <Row stack label="Ordner" description={draft.backup_dir ? "Eigener Ordner, z. B. auf einem Netzlaufwerk oder in einem synchronisierten Ordner." : "Standard: Unterordner „backups“ im Datenordner."}>
-          <span className="mono small selectable grow">{view.backup_dir}</span>
+        <Row
+          label="Ordner"
+          description={
+            <>
+              <span>{draft.backup_dir ? "Eigener Ordner, z. B. ein Netzlaufwerk:" : "Standard, im Datenordner:"}</span>
+              <span className="mono selectable backup-path">{view.backup_dir}</span>
+            </>
+          }
+        >
           <Button icon={FolderOpen} onClick={pick}>
             Ordner wählen …
           </Button>
