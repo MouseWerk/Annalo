@@ -50,7 +50,10 @@ test("imported page keeps frontmatter, links and highlights", async () => {
   assert.match(html, /<mark>Wichtig<\/mark>/);
   assert.match(html, /data-target="Kunden"/);
   assert.match(html, /callout callout-note/, "Obsidian callouts are rendered");
-  await app.waitFor(".prop-btn");
+  // Frontmatter shows up in the property editor.
+  await app.waitFor(".properties");
+  const keys = await app.browser.execute(() => [...document.querySelectorAll(".properties .prop-key")].map((k) => k.value ?? k.textContent));
+  assert.ok(keys.includes("status"), `property keys: ${keys}`);
   await app.waitText(".backlink-title", /Kunden/);
   await app.shot("imported-page");
 });
