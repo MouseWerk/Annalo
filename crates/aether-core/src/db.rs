@@ -15,7 +15,11 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0001_init.sql"),
     include_str!("../migrations/0002_documents.sql"),
     include_str!("../migrations/0003_trash.sql"),
+    include_str!("../migrations/0004_tasks.sql"),
 ];
+
+/// A migration with this marker adds a derived page index; every page is re-indexed after it ran.
+const REINDEX_MARKER: &str = "-- aether:reindex";
 
 pub(crate) const PAGE_COLS: &str = "id, parent_id, title, icon, position, updated_at, favorite, daily_date, deleted_at";
 
@@ -95,14 +99,16 @@ impl Database {
                 MIGRATIONS.len()
             )));
         }
+        let mut reindex = false;
         for (i, sql) in MIGRATIONS.iter().enumerate().skip(current) {
+            reindex |= sql.contains(REINDEX_MARKER);
             let tx = self.conn.transaction()?;
             tx.execute_batch(sql)?;
             tx.pragma_update(None, "user_version", (i + 1) as i64)?;
             tx.commit()?;
         }
-        // v2 turned blocks into a derived chunk index; build it from page content.
-        if current < 2 && MIGRATIONS.len() >= 2 {
+        // v2 turned blocks into a derived chunk index; build it (and later derived indexes) from page content.
+        if reindex || (current < 2 && MIGRATIONS.len() >= 2) {
             self.reindex_all()?;
         }
         Ok(())
@@ -738,6 +744,28 @@ mod tests {
         assert_eq!(db.page_doc(1).unwrap().content, "# Kopf\n\nzweiter Absatz [[Ziel]]");
         assert_eq!(db.page_doc(2).unwrap().backlinks.len(), 1);
         assert!(!crate::search::search(&db, "Absatz", 5).unwrap().is_empty());
+        drop(db);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn reindex_migrations_index_existing_pages() {
+        let path = std::env::temp_dir().join(format!("aether-mig-tasks-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let before = MIGRATIONS.iter().position(|m| m.contains(REINDEX_MARKER)).unwrap();
+        {
+            let c = Connection::open(&path).unwrap();
+            for m in &MIGRATIONS[..before] {
+                c.execute_batch(m).unwrap();
+            }
+            c.pragma_update(None, "user_version", before as i64).unwrap();
+            c.execute("INSERT INTO pages (id, title, content) VALUES (1, 'Alt', '- [ ] offen 📅 2026-10-01')", [])
+                .unwrap();
+        }
+        let db = Database::open(&path).unwrap();
+        let tasks = db.list_tasks(&crate::tasks::TaskFilter::default()).unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].due.as_deref(), Some("2026-10-01"));
         drop(db);
         let _ = std::fs::remove_file(&path);
     }

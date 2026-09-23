@@ -12,6 +12,7 @@ assistant that runs against **your own LiteLLM server**.
 - `[[Wiki links]]` with autocomplete; clicking a missing page creates it; renames rewrite links everywhere
 - Backlinks under every page and in the side panel, outline, tags (`#tag`) with a tag view
 - Daily notes (Ctrl Shift D) with previous/next day navigation
+- Tasks across all notes (Ctrl Shift A): `- [ ] Angebot senden 📅 2026-09-30 !!` (also `due:2026-09-30`; `!!` = hoch, `!` = mittel), grouped into Überfällig / Heute / Diese Woche / Später / Ohne Datum, filterable by status and tag, checked off right in the list
 - Slash menu (`/`), formatting toolbar on selection, find in page (Ctrl F)
 - Tabs, favorites, a drag-and-drop page tree, a command palette (Ctrl K) and a quick switcher (Ctrl O)
 - Import an Obsidian vault (folders, frontmatter, links, tags kept), export everything back to Markdown files
@@ -84,6 +85,7 @@ and a fake LiteLLM server for the assistant tests. It also saves screenshots of 
 | Ctrl O | Quick switcher |
 | Ctrl N | New page |
 | Ctrl Shift D | Today's daily note |
+| Ctrl Shift A | Tasks |
 | Ctrl Shift T | Start/stop timer |
 | Ctrl J | Assistant |
 | Ctrl F | Find in page |

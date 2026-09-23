@@ -50,6 +50,14 @@ pub fn definitions() -> Vec<Value> {
             json!({ "type": "object", "properties": { "netzplan": { "type": "string" } }, "required": ["netzplan"] }),
         ),
         f(
+            "list_tasks",
+            "Listet Aufgaben (- [ ] …) aus allen Notizen mit Seite, Fälligkeit (YYYY-MM-DD) und Priorität (2 hoch, 1 mittel).",
+            json!({ "type": "object", "properties": {
+                "status": { "type": "string", "enum": ["open", "done", "all"], "description": "Standard: open" },
+                "due_before": { "type": "string", "description": "Nur fällig bis einschließlich YYYY-MM-DD" },
+                "tag": { "type": "string", "description": "Tag der Aufgabe oder ihrer Seite, ohne #" } } }),
+        ),
+        f(
             "run_powershell",
             "Führt ein PowerShell-Skript aus. Der Nutzer muss jede Ausführung bestätigen.",
             json!({ "type": "object", "properties": { "script": { "type": "string" }, "cwd": { "type": "string" } }, "required": ["script"] }),
@@ -74,7 +82,7 @@ pub fn definitions() -> Vec<Value> {
 
 pub fn classify(tool: &str) -> Risk {
     match tool {
-        "log_time" | "search_workspace" | "budget_status" => Risk::Workspace,
+        "log_time" | "search_workspace" | "budget_status" | "list_tasks" => Risk::Workspace,
         _ => Risk::RequiresApproval,
     }
 }

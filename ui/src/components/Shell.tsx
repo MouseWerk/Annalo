@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import {
-  AlertTriangle, Briefcase, Home as HomeIcon, CalendarCheck2, CheckCircle2, Cpu, FilePlus2, Hash, Info, Link2, Play, Search, Settings, Timer, Trash2, X, XCircle,
+  AlertTriangle, Briefcase, Home as HomeIcon, CalendarCheck2, CheckCircle2, Cpu, FilePlus2, Hash, Info, Link2, Play, Search, Settings, Timer, Trash2, X, XCircle, ListChecks,
 } from "lucide-react";
 import { api } from "../lib/api";
 import { useApp, type Tab } from "../store/app";
@@ -29,6 +29,8 @@ export function tabTitle(t: Tab, pages: Map<number, { title: string }>) {
       return `#${t.tag}`;
     case "trash":
       return "Papierkorb";
+    case "tasks":
+      return "Aufgaben";
   }
 }
 
@@ -49,6 +51,8 @@ export function TabIcon({ t }: { t: Tab }) {
       return <Hash size={14} strokeWidth={1.75} />;
     case "trash":
       return <Trash2 size={14} strokeWidth={1.75} />;
+    case "tasks":
+      return <ListChecks size={14} strokeWidth={1.75} />;
   }
 }
 

@@ -10,7 +10,7 @@ import { Resizer, readSize } from "./components/Resizer";
 import { CommandPalette } from "./components/CommandPalette";
 import { RightPanel } from "./panels/RightPanel";
 import { createSubpage } from "./views/PageView";
-import { flushAllEditors } from "./editor/NoteEditor";
+import { flushAllEditors, reloadEditors } from "./editor/NoteEditor";
 import type { ActivityTick } from "./lib/types";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { tabTitle } from "./components/Shell";
@@ -42,6 +42,8 @@ export function App() {
     media.addEventListener("change", onMedia);
     const unlisten = [
       on("data://entries", () => useApp.getState().bumpEntries()),
+      // A task was toggled outside the editor: open editors of that page take over the new Markdown.
+      on<number>("data://tasks", (pageId) => reloadEditors([pageId])),
       on<ActivityTick>("activity://tick", (t) => {
         const st = useApp.getState();
         if (st.timer && t.timer_idle_minutes != null && t.timer_idle_minutes !== st.timer.idle_minutes)
@@ -72,6 +74,7 @@ export function App() {
       else if (mod && !e.shiftKey && k === "o") run(() => st.set({ paletteOpen: true, paletteMode: "pages", paletteQuery: "" }));
       else if (mod && !e.shiftKey && k === "n") run(() => createSubpage(null));
       else if (mod && e.shiftKey && k === "d") run(() => openToday());
+      else if (mod && e.shiftKey && k === "a") run(() => st.openTab({ kind: "tasks" }));
       else if (mod && e.shiftKey && k === "f")
         run(() => {
           if (!st.sidebarOpen) {

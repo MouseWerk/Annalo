@@ -23,6 +23,7 @@ use aether_core::netzplan::{self, Schedule};
 use aether_core::notes::PageDoc;
 use aether_core::search::{self, SearchHit};
 use aether_core::settings::Settings;
+use aether_core::tasks::{Task, TaskFilter};
 use aether_core::tracking::{self, BudgetStatus, LogOutcome};
 use aether_core::trash::TrashEntry;
 use aether_core::vault::{self, ImportReport};
@@ -215,6 +216,19 @@ fn tags_list(state: State<AppState>) -> Result<Vec<(String, i64)>> {
 #[tauri::command]
 fn tag_pages(state: State<AppState>, tag: String) -> Result<Vec<Page>> {
     state.db().pages_with_tag(&tag)
+}
+
+#[tauri::command]
+fn tasks_list(state: State<AppState>, filter: Option<TaskFilter>) -> Result<Vec<Task>> {
+    state.db().list_tasks(&filter.unwrap_or_default())
+}
+
+/// Checks or unchecks one task in its page's Markdown; the UI then reloads open editors of that page.
+#[tauri::command]
+fn task_set_done(app: AppHandle, state: State<AppState>, page_id: i64, ordinal: i64, done: bool) -> Result<()> {
+    state.db().set_task_done(page_id, ordinal, done)?;
+    let _ = app.emit("data://tasks", page_id);
+    Ok(())
 }
 
 #[tauri::command]
@@ -893,6 +907,12 @@ fn ai_run_workspace_tool(app: AppHandle, state: State<AppState>, name: String, a
             let np = db.netzplan_by_ref(&arg("netzplan"))?;
             serde_json::to_string(&tracking::budget_status(&db, np.id, &t)?)?
         }
+        "list_tasks" => {
+            let filter: TaskFilter = serde_json::from_value(args.clone())?;
+            let mut list = db.list_tasks(&filter)?;
+            list.truncate(100);
+            serde_json::to_string(&list)?
+        }
         other => return Err(Error::State(format!("'{other}' is not a workspace tool"))),
     };
     Ok(out)
@@ -1139,6 +1159,8 @@ pub fn run() {
             daily_note,
             tags_list,
             tag_pages,
+            tasks_list,
+            task_set_done,
             search_workspace,
             vault_import,
             vault_export,

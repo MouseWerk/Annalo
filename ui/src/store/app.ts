@@ -4,7 +4,7 @@ import { create } from "zustand";
 import { api, errorText } from "../lib/api";
 import type { BudgetStatus, PageDoc, PageNode, SessionMeter, SettingsView, TimerStatus } from "../lib/types";
 
-export type TabKind = "home" | "page" | "timesheet" | "projects" | "settings" | "tag" | "trash";
+export type TabKind = "home" | "page" | "timesheet" | "projects" | "settings" | "tag" | "trash" | "tasks";
 /** A place a tab can show. */
 export interface Loc {
   kind: TabKind;

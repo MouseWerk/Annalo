@@ -28,6 +28,8 @@ export const api = {
   dailyNote: (date?: string) => call<T.Page>("daily_note", { date: date ?? null }),
   tags: () => call<[string, number][]>("tags_list"),
   tagPages: (tag: string) => call<T.Page[]>("tag_pages", { tag }),
+  tasks: (filter: T.TaskFilter = {}) => call<T.Task[]>("tasks_list", { filter }),
+  setTaskDone: (pageId: number, ordinal: number, done: boolean) => call<void>("task_set_done", { pageId, ordinal, done }),
   search: (query: string, limit = 30) => call<T.SearchHit[]>("search_workspace", { query, limit }),
   importVault: (path: string) => call<T.ImportReport>("vault_import", { path }),
   exportVault: (path: string) => call<number>("vault_export", { path }),

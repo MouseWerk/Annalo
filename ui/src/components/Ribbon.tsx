@@ -1,6 +1,6 @@
 // Obsidian-style ribbon: a slim column of global actions left of the sidebar.
 
-import { Briefcase, CalendarCheck2, Command, FilePlus2, PanelLeft, Settings, Sparkles, Timer } from "lucide-react";
+import { Briefcase, CalendarCheck2, Command, FilePlus2, ListChecks, PanelLeft, Settings, Sparkles, Timer } from "lucide-react";
 import { api } from "../lib/api";
 import { useApp, savePref } from "../store/app";
 import { IconButton } from "./ui";
@@ -49,6 +49,7 @@ export function Ribbon() {
       <IconButton icon={Command} label="Befehlspalette (Ctrl K)" tooltipSide={side} size={32} iconSize={17} onClick={() => s().set({ paletteOpen: true, paletteMode: "all", paletteQuery: "" })} />
       <span className="ribbon-sep" />
       <IconButton icon={Timer} label="Zeiterfassung" active={tab?.kind === "timesheet"} tooltipSide={side} size={32} iconSize={17} onClick={() => s().openTab({ kind: "timesheet" })} />
+      <IconButton icon={ListChecks} label="Aufgaben (Ctrl Shift A)" active={tab?.kind === "tasks"} tooltipSide={side} size={32} iconSize={17} onClick={() => s().openTab({ kind: "tasks" })} />
       <IconButton icon={Briefcase} label="Projekte" active={tab?.kind === "projects"} tooltipSide={side} size={32} iconSize={17} onClick={() => s().openTab({ kind: "projects" })} />
       <IconButton icon={Sparkles} label="Assistent (Ctrl J)" tooltipSide={side} size={32} iconSize={17} onClick={openAssistant} />
       <span className="grow" />

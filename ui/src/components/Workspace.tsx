@@ -13,6 +13,7 @@ import { ProjectsView } from "../views/ProjectsView";
 import { SettingsView } from "../views/SettingsView";
 import { TagView } from "../views/TagView";
 import { TrashView } from "../views/TrashView";
+import { TasksView } from "../views/TasksView";
 
 const MIN_PANE = 280;
 
@@ -96,6 +97,7 @@ function TabContent({ tab, active }: { tab: Tab; active: boolean }) {
             {tab.kind === "settings" && <SettingsView />}
             {tab.kind === "tag" && <TagView tag={tab.tag!} />}
             {tab.kind === "trash" && <TrashView />}
+            {tab.kind === "tasks" && <TasksView />}
           </div>
         </>
       );

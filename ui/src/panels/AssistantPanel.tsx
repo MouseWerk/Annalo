@@ -3,7 +3,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  ArrowUp, Check, ChevronDown, Copy, FilePlus2, FileText, Gauge, GitBranch, Globe, Loader2, Plus, Search, Settings2, ShieldAlert, Sparkles, Square, Terminal, Timer, Wrench, X,
+  ArrowUp, Check, ChevronDown, Copy, FilePlus2, FileText, Gauge, GitBranch, Globe, ListChecks, Loader2, Plus, Search, Settings2, ShieldAlert, Sparkles, Square, Terminal, Timer, Wrench, X,
 } from "lucide-react";
 import { api, errorText, on } from "../lib/api";
 import { renderMarkdown } from "../lib/markdown";
@@ -30,6 +30,7 @@ const TOOL_META: Record<string, { label: string; icon: typeof Search }> = {
   log_time: { label: "Zeit buchen", icon: Timer },
   search_workspace: { label: "Workspace durchsuchen", icon: Search },
   budget_status: { label: "Budget abfragen", icon: Gauge },
+  list_tasks: { label: "Aufgaben abfragen", icon: ListChecks },
   run_powershell: { label: "PowerShell ausführen", icon: Terminal },
   git: { label: "Git-Befehl", icon: GitBranch },
   http_request: { label: "HTTP-Anfrage", icon: Globe },
