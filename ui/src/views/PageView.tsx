@@ -12,6 +12,7 @@ import { Button, EmptyState, IconButton, Spinner, useMenu } from "../components/
 import { addDays, dateLong, isoDay, relative } from "../lib/format";
 import { linkContext } from "../components/linkContext";
 import type { PageDoc } from "../lib/types";
+import { restorePage } from "./TrashView";
 
 export function PageView({ pageId, tab, active }: { pageId: number; tab: Tab; active: boolean }) {
   const [doc, setDoc] = useState<PageDoc | null>(null);
@@ -362,13 +363,13 @@ export async function deletePage(page: { id: number; title: string }) {
   const s = useApp.getState();
   const kids = s.pages.get(page.id)?.children.length ?? 0;
   const message = kids
-    ? `„${page.title}“ und ${kids} ${kids === 1 ? "Unterseite" : "Unterseiten"} werden gelöscht. Das kann nicht rückgängig gemacht werden.`
-    : `„${page.title}“ wird gelöscht. Das kann nicht rückgängig gemacht werden.`;
+    ? `„${page.title}“ und ${kids} ${kids === 1 ? "Unterseite" : "Unterseiten"} werden in den Papierkorb verschoben. Nach 30 Tagen werden sie endgültig gelöscht.`
+    : `„${page.title}“ wird in den Papierkorb verschoben. Nach 30 Tagen wird die Seite endgültig gelöscht.`;
   if (!(await s.confirm({ title: "Seite löschen?", message, confirmLabel: "Löschen", danger: true }))) return;
   try {
     await api.deletePage(page.id);
     await s.refreshTree();
-    s.toast({ tone: "info", title: "Seite gelöscht", detail: page.title });
+    s.toast({ tone: "info", title: "Seite gelöscht", detail: `„${page.title}“ liegt im Papierkorb`, action: { label: "Rückgängig", run: () => restorePage(page.id, page.title) } });
   } catch (e) {
     s.error("Seite konnte nicht gelöscht werden", e);
   }

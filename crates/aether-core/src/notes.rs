@@ -283,7 +283,7 @@ impl Database {
             .conn()
             .query_row(
                 &format!(
-                    "SELECT {} FROM pages WHERE title = ?1 COLLATE NOCASE ORDER BY id LIMIT 1",
+                    "SELECT {} FROM pages WHERE title = ?1 COLLATE NOCASE AND deleted_at IS NULL ORDER BY id LIMIT 1",
                     crate::db::PAGE_COLS
                 ),
                 [title.trim()],
@@ -303,7 +303,7 @@ impl Database {
             return Ok(None);
         }
         let conn = self.conn();
-        let mut st = conn.prepare_cached("SELECT id, title FROM pages ORDER BY id")?;
+        let mut st = conn.prepare_cached("SELECT id, title FROM pages WHERE deleted_at IS NULL ORDER BY id")?;
         let id = st
             .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
             .filter_map(|r| r.ok())
@@ -325,7 +325,7 @@ impl Database {
         let backlinks = {
             let mut st = conn.prepare_cached(
                 "SELECT p.id, p.title, p.icon, p.content FROM page_links l JOIN pages p ON p.id = l.from_page
-                 WHERE l.target = ?1 AND p.id <> ?2 ORDER BY p.updated_at DESC",
+                 WHERE l.target = ?1 AND p.id <> ?2 AND p.deleted_at IS NULL ORDER BY p.updated_at DESC",
             )?;
             let needle = page.title.to_lowercase();
             st.query_map(params![needle, id], |r| {
@@ -390,13 +390,17 @@ impl Database {
             if p == id {
                 return Err(Error::State("a page cannot be moved into itself".into()));
             }
-            cursor = self.page(p)?.parent_id;
+            let parent = self.page(p)?;
+            if parent.deleted_at.is_some() {
+                return Err(Error::State("Die Zielseite liegt im Papierkorb".into()));
+            }
+            cursor = parent.parent_id;
         }
         self.atomic(|| {
             let conn = self.conn();
             let siblings: Vec<i64> = {
                 let mut st =
-                    conn.prepare("SELECT id FROM pages WHERE parent_id IS ?1 AND id <> ?2 ORDER BY position, id")?;
+                    conn.prepare("SELECT id FROM pages WHERE parent_id IS ?1 AND id <> ?2 AND deleted_at IS NULL ORDER BY position, id")?;
                 st.query_map(params![parent_id, id], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
             };
             let pos = position.clamp(0, siblings.len() as i64) as usize;
@@ -422,7 +426,7 @@ impl Database {
 
     pub fn recent_pages(&self, limit: usize) -> Result<Vec<Page>> {
         let mut st = self.conn().prepare_cached(&format!(
-            "SELECT {} FROM pages WHERE content <> '' ORDER BY updated_at DESC, id DESC LIMIT ?1",
+            "SELECT {} FROM pages WHERE content <> '' AND deleted_at IS NULL ORDER BY updated_at DESC, id DESC LIMIT ?1",
             crate::db::PAGE_COLS
         ))?;
         let rows = st.query_map([limit as i64], crate::db::map_page)?.collect::<rusqlite::Result<_>>()?;
@@ -433,14 +437,14 @@ impl Database {
     pub fn tag_counts(&self) -> Result<Vec<(String, i64)>> {
         let mut st = self
             .conn()
-            .prepare_cached("SELECT tag, COUNT(*) FROM page_tags GROUP BY tag ORDER BY COUNT(*) DESC, tag")?;
+            .prepare_cached("SELECT tag, COUNT(*) FROM page_tags JOIN pages p ON p.id = page_id WHERE p.deleted_at IS NULL GROUP BY tag ORDER BY COUNT(*) DESC, tag")?;
         let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
         Ok(rows)
     }
 
     pub fn pages_with_tag(&self, tag: &str) -> Result<Vec<Page>> {
         let mut st = self.conn().prepare_cached(&format!(
-            "SELECT {} FROM pages WHERE id IN (SELECT page_id FROM page_tags WHERE tag = ?1) ORDER BY updated_at DESC",
+            "SELECT {} FROM pages WHERE deleted_at IS NULL AND id IN (SELECT page_id FROM page_tags WHERE tag = ?1) ORDER BY updated_at DESC",
             crate::db::PAGE_COLS
         ))?;
         let rows = st.query_map([tag.to_lowercase()], crate::db::map_page)?.collect::<rusqlite::Result<_>>()?;
@@ -453,7 +457,7 @@ impl Database {
         if let Some(p) = self
             .conn()
             .query_row(
-                &format!("SELECT {} FROM pages WHERE daily_date = ?1", crate::db::PAGE_COLS),
+                &format!("SELECT {} FROM pages WHERE daily_date = ?1 AND deleted_at IS NULL", crate::db::PAGE_COLS),
                 [&key],
                 crate::db::map_page,
             )
@@ -464,7 +468,10 @@ impl Database {
         let journal = match self
             .conn()
             .query_row(
-                &format!("SELECT {} FROM pages WHERE parent_id IS NULL AND title = ?1", crate::db::PAGE_COLS),
+                &format!(
+                    "SELECT {} FROM pages WHERE parent_id IS NULL AND title = ?1 AND deleted_at IS NULL",
+                    crate::db::PAGE_COLS
+                ),
                 [JOURNAL_TITLE],
                 crate::db::map_page,
             )

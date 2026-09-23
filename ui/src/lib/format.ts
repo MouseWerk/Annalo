@@ -31,6 +31,14 @@ export function relative(iso: string) {
   return new Date(iso).toLocaleDateString("de-DE", { day: "numeric", month: "short", year: "numeric" });
 }
 
+/** File size, e.g. "812 KB" or "3,4 MB". */
+export function fileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${nf0.format(bytes / 1024)} KB`;
+  if (bytes < 1024 ** 3) return `${nf1.format(bytes / 1024 ** 2)} MB`;
+  return `${nf1.format(bytes / 1024 ** 3)} GB`;
+}
+
 /** Local date as YYYY-MM-DD. */
 export function isoDay(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;

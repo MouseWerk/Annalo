@@ -742,3 +742,19 @@ button.side-section-title:hover { color: var(--text-2); }
 .week-gaps { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 16px; border-bottom: 1px solid var(--border); font-size: var(--fs-sm); color: var(--text-2); }
 .week-gaps svg { color: var(--warning); flex: none; }
 .week-gaps .gap-chip { padding: 1px 7px; border-radius: var(--r-xs); background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); font-variant-numeric: tabular-nums; }
+/* ------------------------------------------------------------------ trash */
+
+.trash-list { display: grid; gap: 2px; }
+.trash-item { display: flex; align-items: center; gap: 10px; min-height: 46px; padding: 4px 6px 4px 10px; border-radius: var(--r-sm); }
+.trash-item:hover { background: var(--bg-hover); }
+.trash-item > svg { color: var(--text-3); flex: none; }
+.trash-item-text { flex: 1; min-width: 0; display: grid; }
+.trash-item-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trash-item-meta { font-size: var(--fs-xs); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------------------------------------------------------------- backups */
+
+.backup-path { overflow-wrap: anywhere; }
+.backup-list { display: grid; padding: 4px 0; }
+.backup-row { display: flex; align-items: center; gap: 10px; min-height: 30px; }
+.backup-row .grow { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

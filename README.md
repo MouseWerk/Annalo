@@ -52,6 +52,8 @@ cargo tauri build    # NSIS + MSI installers in target/release/bundle
 ```
 
 Data lives in `%APPDATA%\os.aether.workspace\` (`workspace.db`). The first start seeds a small demo workspace.
+The database is backed up daily into `backups` there (or a folder chosen under Settings → Sicherung), and deleted
+pages stay in the trash for 30 days.
 
 ## Tests
 

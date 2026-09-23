@@ -11,10 +11,13 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 use crate::error::{Error, Result};
 use crate::model::*;
 
-const MIGRATIONS: &[&str] =
-    &[include_str!("../migrations/0001_init.sql"), include_str!("../migrations/0002_documents.sql")];
+const MIGRATIONS: &[&str] = &[
+    include_str!("../migrations/0001_init.sql"),
+    include_str!("../migrations/0002_documents.sql"),
+    include_str!("../migrations/0003_trash.sql"),
+];
 
-pub(crate) const PAGE_COLS: &str = "id, parent_id, title, icon, position, updated_at, favorite, daily_date";
+pub(crate) const PAGE_COLS: &str = "id, parent_id, title, icon, position, updated_at, favorite, daily_date, deleted_at";
 
 pub(crate) fn map_page(r: &Row) -> rusqlite::Result<Page> {
     Ok(Page {
@@ -26,6 +29,7 @@ pub(crate) fn map_page(r: &Row) -> rusqlite::Result<Page> {
         updated_at: r.get(5)?,
         favorite: r.get(6)?,
         daily_date: r.get(7)?,
+        deleted_at: r.get(8)?,
     })
 }
 
@@ -596,8 +600,13 @@ impl Database {
         if title.is_empty() {
             return Err(Error::State("title must not be empty".into()));
         }
+        if let Some(p) = parent_id
+            && self.page(p)?.deleted_at.is_some()
+        {
+            return Err(Error::State("Die übergeordnete Seite liegt im Papierkorb".into()));
+        }
         let position: i64 = self.conn.query_row(
-            "SELECT COALESCE(MAX(position) + 1, 0) FROM pages WHERE parent_id IS ?1",
+            "SELECT COALESCE(MAX(position) + 1, 0) FROM pages WHERE parent_id IS ?1 AND deleted_at IS NULL",
             [parent_id],
             |r| r.get(0),
         )?;
@@ -616,13 +625,18 @@ impl Database {
         Ok(())
     }
 
+    /// Deletes a page and its subtree permanently, bypassing the trash
+    /// (the UI uses [`Database::trash_page`]).
     pub fn delete_page(&self, id: i64) -> Result<()> {
         self.conn.execute("DELETE FROM pages WHERE id = ?1", [id])?;
         Ok(())
     }
 
+    /// Pages outside the trash.
     pub fn list_pages(&self) -> Result<Vec<Page>> {
-        let mut st = self.conn.prepare_cached(&format!("SELECT {PAGE_COLS} FROM pages ORDER BY position, id"))?;
+        let mut st = self
+            .conn
+            .prepare_cached(&format!("SELECT {PAGE_COLS} FROM pages WHERE deleted_at IS NULL ORDER BY position, id"))?;
         let rows = st.query_map([], map_page)?.collect::<rusqlite::Result<_>>()?;
         Ok(rows)
     }

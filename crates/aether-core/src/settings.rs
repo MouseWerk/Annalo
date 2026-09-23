@@ -40,6 +40,10 @@ pub struct Settings {
     pub daily_target_hours: f64,
     /// Workdays as ISO weekday numbers (1 = Monday … 7 = Sunday).
     pub workdays: Vec<u32>,
+    /// Folder for automatic backups; `None` = `backups` in the data folder.
+    pub backup_dir: Option<String>,
+    /// Number of backups kept; older ones are deleted.
+    pub backup_keep: usize,
 }
 
 impl Default for Settings {
@@ -58,6 +62,8 @@ impl Default for Settings {
             open_daily_on_start: false,
             daily_target_hours: 8.0,
             workdays: vec![1, 2, 3, 4, 5],
+            backup_dir: None,
+            backup_keep: 14,
         }
     }
 }
@@ -120,5 +126,6 @@ mod tests {
         let loaded = db.load_settings().unwrap();
         assert_eq!(loaded.theme, "dark");
         assert_eq!(loaded.idle_threshold_minutes, 5);
+        assert_eq!((loaded.backup_dir, loaded.backup_keep), (None, 14));
     }
 }

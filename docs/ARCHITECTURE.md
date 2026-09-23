@@ -28,7 +28,7 @@ events and OS integration. The UI never talks to the network or the filesystem d
 | `vorgaenge` + `vorgang_links` | Level 3: activities with duration, plan hours, optional manual remaining estimate, and precedence links for CPM |
 | `leistungsarten` | Level 4: activity types (`DEV`, `CONSULTING`, `PM`, `TEST`) |
 | `time_entries` | `netzplan_id`, `vorgang_nr`, `leistungsart`, `start_time`, `end_time`, `duration_minutes`, `description`, `status_flag` (`running`/`draft`/`released`/`exported`), `source`. A partial unique index allows only one running timer |
-| `pages` | Page tree; `content` holds the page as one Markdown document (v2). `daily_date` marks daily notes, `favorite` pins pages |
+| `pages` | Page tree; `content` holds the page as one Markdown document (v2). `daily_date` marks daily notes, `favorite` pins pages, `deleted_at` marks pages in the trash (v3) |
 | `notes_blocks` | Derived chunk index (split at headings, ~1200 chars) rebuilt on every save; `vector_embedding` is a little-endian `f32` BLOB. Unchanged chunks keep their embedding |
 | `page_links`, `page_tags` | Outgoing `[[links]]` (lower-cased targets, so links to not-yet-existing pages resolve later) and `#tags`, for backlinks and the tag view |
 | `pages_fts` | FTS5 over page titles (title hits rank first in search) |
@@ -41,6 +41,16 @@ the binary is refused rather than modified.
 
 Migration v2 converts the old block model: blocks are concatenated into
 `pages.content`, then every page is re-indexed (chunks, links, tags).
+
+## Data safety
+
+- **Trash** (`trash.rs`): deleting a page sets `deleted_at` on it and its subtree (one shared stamp, so
+  subpages trashed earlier stay separate entries). Every normal query (tree, search, links, tags, RAG,
+  export) skips trashed pages. Restoring puts a page back under its parent, or at the top level if the
+  parent is gone; title and daily-note clashes are resolved. Entries older than 30 days are purged on start.
+- **Backups** (`backup.rs`): `VACUUM INTO` writes a consistent snapshot `aether-YYYYMMDD-HHMMSS.db`;
+  older files beyond `backup_keep` (default 14) are deleted. The shell backs up on start when the newest
+  backup is older than 24 h and re-checks hourly, into `backup_dir` or `<data dir>/backups`.
 
 ## Notes model
 

@@ -3,7 +3,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowLeft, ArrowRight, Columns2, Plus, Briefcase, CalendarCheck2, Download, FilePlus2, FolderInput, Hash, Moon, PanelLeft, PanelRight, RefreshCw, Search, Settings, Sparkles, Square, Timer, Play, Focus,
+  ArrowLeft, ArrowRight, Columns2, Plus, Briefcase, CalendarCheck2, Download, FilePlus2, FolderInput, Hash, Moon, PanelLeft, PanelRight, RefreshCw, Search, Settings, Sparkles, Square, Timer, Trash2, Play, Focus,
 } from "lucide-react";
 import { api } from "../lib/api";
 import { useApp, savePref } from "../store/app";
@@ -168,6 +168,7 @@ export function CommandPalette() {
       { id: "timesheet", title: "Zeiterfassung öffnen", icon: ic(Timer), run: () => s().openTab({ kind: "timesheet" }) },
       { id: "projects", title: "Projekte öffnen", icon: ic(Briefcase), run: () => s().openTab({ kind: "projects" }) },
       { id: "assistant", title: "Assistent fragen", icon: ic(Sparkles), hint: "Ctrl J", run: () => openAssistant() },
+      { id: "trash", title: "Papierkorb", icon: ic(Trash2), run: () => s().openTab({ kind: "trash" }) },
       { id: "settings", title: "Einstellungen", icon: ic(Settings), hint: "Ctrl ,", run: () => s().openTab({ kind: "settings" }) },
       { id: "sidebar", title: "Seitenleiste umschalten", icon: ic(PanelLeft), hint: "Ctrl \\", run: () => { const v = !s().sidebarOpen; s().set({ sidebarOpen: v }); savePref("aether.sidebar", v); } },
       { id: "panel", title: "Seitenpanel umschalten", icon: ic(PanelRight), hint: "Ctrl Shift \\", run: () => { const v = !s().panelOpen; s().set({ panelOpen: v }); savePref("aether.panel", v); } },

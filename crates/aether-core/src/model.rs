@@ -141,6 +141,9 @@ pub struct Page {
     pub favorite: bool,
     /// Set for daily notes (`YYYY-MM-DD`).
     pub daily_date: Option<String>,
+    /// Set while the page is in the trash.
+    #[serde(default)]
+    pub deleted_at: Option<String>,
 }
 
 /// A page with its children, for the sidebar tree.
