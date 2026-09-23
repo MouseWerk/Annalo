@@ -124,6 +124,7 @@ test("editing an entry updates duration", async () => {
   const rows = await app.$$(".entry");
   let target;
   for (const r of rows) if (/Nachbereitung Workshop/.test(await app.textOf(r))) target = r;
+  await app.dismissToasts();
   await target.$(".icon-btn").click();
   await app.waitFor(".menu");
   await app.click(".menu-item:first-child");

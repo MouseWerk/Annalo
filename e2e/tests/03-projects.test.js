@@ -85,6 +85,7 @@ test("sample data can be removed from settings", async () => {
   const rows = await app.$$(".set-row");
   for (const r of rows)
     if (/Beispieldaten entfernen/.test(await app.textOf(r))) {
+      await app.dismissToasts();
       await (await r.$(".btn-danger")).click();
       break;
     }

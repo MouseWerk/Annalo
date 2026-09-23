@@ -49,6 +49,20 @@ const CASES: Record<string, string> = {
   embedNote: "Kein Bild: ![[Notiz]]\n",
   image: "![Logo](https://example.com/logo.png)\n",
   imageRelative: "![Plan](attachments/plan.png \"Titel\")\n",
+  tablePipeWiki: "| A                | B   |\n| ---------------- | --- |\n| [[Seite\\|Alias]] | 2   |\n",
+  tablePipeText: "| A      | B   |\n| ------ | --- |\n| a \\| b | 2   |\n",
+  tablePipeEmbed: "| A               | B   |\n| --------------- | --- |\n| ![[x.png\\|300]] | 2   |\n",
+  escapedHeading: "\\# kein Titel\n",
+  escapedOrdered: "2026\\. Jahr\n",
+  escapedOrderedParen: "1\\) nein\n",
+  escapedDash: "\\- x\n",
+  escapedPlus: "\\+ x\n",
+  escapedQuote: "\\> x\n",
+  escapedSetext: "Titel\n\\---\n",
+  escapedAfterBreak: "Zeile  \n\\# kein Titel\n",
+  hashMidLine: "Nummer # 5 und 3. Platz - gut\n",
+  bareUrlParens: "Siehe https://de.wikipedia.org/wiki/Foo_(Bar) hier\n",
+  linkTitleQuotes: 'Mit [t](https://example.com "x \\"y\\"") hier\n',
 };
 
 describe("markdown round-trip", () => {
@@ -60,6 +74,22 @@ describe("markdown round-trip", () => {
 
   it("keeps <autolinks> as bare URLs", () => {
     expect(roundtrip("Kurz: <https://example.com>\n")).toBe("Kurz: https://example.com\n");
+  });
+
+  it("does not grow escaped time-entry attributes", () => {
+    const md = 'Gebucht: <time-entry id="1" hours="1" target="A&quot;B &amp; C">x</time-entry>\n';
+    expect(roundtrip(md)).toBe(md);
+  });
+
+  it("parses an escaped wiki-link alias in a table cell", () => {
+    const el = document.createElement("div");
+    const editor = new Editor({ element: el, extensions: buildExtensions(), content: "| A |\n| --- |\n| [[Seite\\|Alias]] |\n", contentType: "markdown" });
+    const links: unknown[] = [];
+    editor.state.doc.descendants((n) => {
+      if (n.type.name === "wikiLink") links.push(n.attrs);
+    });
+    editor.destroy();
+    expect(links).toEqual([expect.objectContaining({ target: "Seite", alias: "Alias" })]);
   });
 
   it("is stable on a second pass", () => {

@@ -76,7 +76,7 @@ test("assistant streams an answer with markdown, links and metrics", async () =>
   const meta = await app.text(".msg-meta");
   assert.match(meta, /firma-(schnell|standard|reasoning)/);
   assert.match(meta, /Tokens/);
-  assert.match(meta, /\$0\.0012/);
+  assert.match(meta, /0,0012\s\$/);
   const req = llm.requests.filter((r) => r.url === "/v1/chat/completions").pop();
   assert.equal(req.headers.authorization, `Bearer ${llm.apiKey}`);
   assert.equal(req.body.stream, true);

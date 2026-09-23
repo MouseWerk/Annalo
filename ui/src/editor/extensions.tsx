@@ -82,8 +82,9 @@ export const WikiLink = Node.create<WikiLinkOptions>({
     },
   },
   parseMarkdown: (token) => ({ type: "wikiLink", attrs: { target: token.target, anchor: token.anchor, alias: token.alias } }),
-  renderMarkdown: (node) =>
-    `[[${node.attrs?.target}${node.attrs?.anchor ? "#" + node.attrs.anchor : ""}${node.attrs?.alias ? "|" + node.attrs.alias : ""}]]`,
+  // Inside a table cell (marked by schema.ts) the alias pipe must be `\|`.
+  renderMarkdown: (node, _h, ctx) =>
+    `[[${node.attrs?.target}${node.attrs?.anchor ? "#" + node.attrs.anchor : ""}${node.attrs?.alias ? (ctx?.meta?.parentAttrs?.__inTableCell ? "\\|" : "|") + node.attrs.alias : ""}]]`,
 });
 
 export interface LinkSuggestItem extends PopupItem {
@@ -294,7 +295,8 @@ export const ImageEmbed = Node.create<ImageOptions>({
     },
   },
   parseMarkdown: (token) => ({ type: "imageEmbed", attrs: { name: token.name, alt: token.alt } }),
-  renderMarkdown: (node) => `![[${node.attrs?.name}${node.attrs?.alt != null ? "|" + node.attrs.alt : ""}]]`,
+  renderMarkdown: (node, _h, ctx) =>
+    `![[${node.attrs?.name}${node.attrs?.alt != null ? (ctx?.meta?.parentAttrs?.__inTableCell ? "\\|" : "|") + node.attrs.alt : ""}]]`,
 
   addProseMirrorPlugins() {
     const upload = this.options.upload;
@@ -401,7 +403,8 @@ export const TimeEntryChip = Node.create({
       const m = /^<time-entry\s+([^>]*)>([^<]*)<\/time-entry>/.exec(src);
       if (!m) return undefined;
       const attrs: Record<string, string> = {};
-      for (const a of m[1].matchAll(/(\w+)="([^"]*)"/g)) attrs[a[1]] = a[2];
+      const entities: Record<string, string> = { quot: '"', amp: "&", lt: "<", gt: ">", "#39": "'" };
+      for (const a of m[1].matchAll(/(\w+)="([^"]*)"/g)) attrs[a[1]] = a[2].replace(/&(quot|amp|lt|gt|#39);/g, (_e, n: string) => entities[n]);
       return { type: "timeEntry", raw: m[0], attrs, text: m[2] };
     },
   },
@@ -546,6 +549,26 @@ export function splitFrontmatter(md: string): { frontmatter: string; body: strin
 // ------------------------------------------------------------- callouts
 
 const CALLOUT_RE = /^\[!(\w+)\][+-]?\s*/;
+const CALLOUT_LABELS: Record<string, string> = {
+  note: "Notiz",
+  info: "Info",
+  tip: "Tipp",
+  hint: "Tipp",
+  important: "Wichtig",
+  warning: "Warnung",
+  caution: "Vorsicht",
+  danger: "Gefahr",
+  error: "Fehler",
+  success: "Erledigt",
+  question: "Frage",
+  quote: "Zitat",
+  example: "Beispiel",
+  todo: "Aufgabe",
+  abstract: "Zusammenfassung",
+  summary: "Zusammenfassung",
+  bug: "Fehler",
+  failure: "Fehlschlag",
+};
 
 /** Styles Obsidian callouts (`> [!note] Title`) without changing the Markdown. */
 export const Callouts = Extension.create({
@@ -561,7 +584,10 @@ export const Callouts = Extension.create({
           const type = m[1].toLowerCase();
           decos.push(Decoration.node(pos, pos + node.nodeSize, { class: `callout callout-${type}`, "data-callout": type }));
           const start = pos + 2; // blockquote open + paragraph open
-          decos.push(Decoration.inline(start, start + m[0].trimEnd().length, { class: "callout-marker", "data-label": type }));
+          // A custom title replaces the type label (Obsidian shows one or the other).
+          const hasTitle = first!.firstChild?.isText === true && (first!.firstChild.text ?? "").slice(m[0].length).trim() !== "";
+          const label = hasTitle ? "" : (CALLOUT_LABELS[type] ?? type);
+          decos.push(Decoration.inline(start, start + m[0].trimEnd().length, { class: "callout-marker", "data-label": label }));
           // Title = rest of the first line (up to a line break).
           let end = start;
           let stop = false;

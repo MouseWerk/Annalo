@@ -99,10 +99,23 @@ export async function launch({ demo = true, width = 1480, height = 920 } = {}) {
     },
     $: (sel) => browser.$(sel),
     $$: (sel) => browser.$$(sel),
+    /** Closes open toasts so they cannot cover a target. */
+    async dismissToasts() {
+      await browser.execute(() => document.querySelectorAll(".toast [aria-label='Schließen']").forEach((b) => b.click()));
+      await browser.pause(150);
+    },
     async click(sel) {
       const el = await browser.$(sel);
       await el.waitForClickable({ timeout: 8000 });
-      await el.click();
+      try {
+        await el.click();
+      } catch (e) {
+        if (!/intercepted/.test(String(e))) throw e;
+        // A toast sits over the target (as it would for a user for a few seconds): close toasts and retry.
+        await browser.execute(() => document.querySelectorAll(".toast [aria-label='Schließen']").forEach((b) => b.click()));
+        await browser.pause(150);
+        await el.click();
+      }
       return el;
     },
     async text(sel) {

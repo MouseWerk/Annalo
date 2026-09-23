@@ -5,7 +5,7 @@ import StarterKit from "@tiptap/starter-kit";
 import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
 import { common, createLowlight } from "lowlight";
 import { TaskItem, TaskList } from "@tiptap/extension-list";
-import { TableKit } from "@tiptap/extension-table";
+import { Table, TableKit, renderTableToMarkdown } from "@tiptap/extension-table";
 import Highlight from "@tiptap/extension-highlight";
 import { Placeholder } from "@tiptap/extensions";
 import { Markdown } from "@tiptap/markdown";
@@ -20,9 +20,9 @@ const lowlight = createLowlight(common);
  * The default serializer escapes every `[ ] _ * ~`, which litters files
  * (`a\_b`, `\[Entwurf\]`) that Obsidian users read and edit directly.
  */
-export function escapeText(t: string): string {
-  return t
-    .replace(/\\(?=[\\`*_[\]~=#<>!|])/g, "\\\\")
+export function escapeText(t: string, atLineStart = true): string {
+  const s = t
+    .replace(/\\(?=[\\`*_[\]~=#<>!|.)+-])/g, "\\\\")
     .replace(/`/g, "\\`")
     .replace(/\[\[/g, "\\[\\[")
     .replace(/\[([^\]\n]*)\]\(/g, "\\[$1\\](")
@@ -34,11 +34,43 @@ export function escapeText(t: string): string {
     .replace(/==/g, "\\=\\=")
     .replace(/&(?=#?\w+;)/g, "&amp;")
     .replace(/<(?=[A-Za-z/!])/g, "&lt;");
+  return s
+    .split("\n")
+    .map((line, i) => (i > 0 || atLineStart ? escapeLineStart(line) : line))
+    .join("\n");
 }
+
+/** Escapes what would turn a line into a block (heading, list, quote, setext underline). */
+function escapeLineStart(line: string): string {
+  if (/^\s{0,3}(?:-+|=+)\s*$/.test(line)) return line.replace(/^(\s*)/, "$1\\");
+  return line.replace(/^(\s{0,3})(#{1,6}(?=\s|$)|[-+*](?=\s|$)|>)/, "$1\\$2").replace(/^(\s{0,3}\d+)([.)])(?=\s|$)/, "$1\\$2");
+}
+
+/** Marks paragraphs rendered inside table cells, where `|` must be escaped. */
+export const IN_TABLE_CELL = "__inTableCell";
+
+interface JsonNode {
+  type?: string;
+  attrs?: Record<string, unknown>;
+  content?: JsonNode[];
+  marks?: (string | { type: string })[];
+}
+
+function markTableCells(node: JsonNode): JsonNode {
+  const mark = (n: JsonNode): JsonNode => ({ ...n, attrs: { ...n.attrs, [IN_TABLE_CELL]: true }, content: n.content?.map(mark) });
+  return {
+    ...node,
+    content: node.content?.map((row) => ({ ...row, content: row.content?.map((cell) => ({ ...cell, content: cell.content?.map(mark) })) })),
+  };
+}
+
+const MarkdownTable = Table.extend({
+  renderMarkdown: (node, h) => renderTableToMarkdown(markTableCells(node as JsonNode) as typeof node, h),
+});
 
 interface SerializerInternals {
   codeTypes: Set<string>;
-  encodeTextForMarkdown: (text: string, node: { marks?: (string | { type: string })[] }, parent?: { type?: string }) => string;
+  encodeTextForMarkdown: (text: string, node: JsonNode, parent?: JsonNode) => string;
 }
 
 /** Installs the minimal escaping on the editor's Markdown serializer. */
@@ -49,13 +81,18 @@ const MarkdownFidelity = Extension.create({
     if (!manager) return;
     manager.encodeTextForMarkdown = (text, node, parent) => {
       const inCode = (parent?.type != null && manager.codeTypes.has(parent.type)) || (node.marks ?? []).some((m) => manager.codeTypes.has(typeof m === "string" ? m : m.type));
-      return inCode ? text : escapeText(text);
+      if (inCode) return text;
+      const siblings = parent?.content ?? [];
+      const idx = siblings.indexOf(node);
+      const atLineStart = !node.marks?.length && (idx === 0 || (idx > 0 && siblings[idx - 1].type === "hardBreak"));
+      const out = escapeText(text, atLineStart);
+      return parent?.attrs?.[IN_TABLE_CELL] ? out.replace(/\|/g, "\\|") : out;
     };
   },
 });
 
 /** Unescapes what `escapeText` added, to compare link text with its href. */
-const unescapeText = (t: string) => t.replace(/\\([\\`*_[\]~=#<>!|(])/g, "$1").replace(/&lt;/g, "<").replace(/&amp;/g, "&");
+const unescapeText = (t: string) => t.replace(/\\([\\`*_[\]~=#<>!|().+-])/g, "$1").replace(/&lt;/g, "<").replace(/&amp;/g, "&");
 
 // Marks are serialized as opening/closing strings without seeing their text,
 // so links are bracketed with sentinels and resolved in `cleanMarkdown`.
@@ -77,11 +114,11 @@ const MarkdownLink = Link.extend({
   renderMarkdown: (node, h) => {
     const href: string = node.attrs?.href ?? "";
     const title: string = node.attrs?.title ?? "";
-    return `${LINK_OPEN}[${h.renderChildren(node)}](${href}${title ? ` "${title}"` : ""})${LINK_CLOSE}`;
+    return `${LINK_OPEN}[${h.renderChildren(node)}](${href}${title ? ` "${title.replace(/[\\"]/g, "\\$&")}"` : ""})${LINK_CLOSE}`;
   },
 });
 
-const LINK_RE = new RegExp(`${LINK_OPEN}\\[([^${LINK_OPEN}${LINK_CLOSE}]*)\\]\\(([^\\s)]*)(?: "([^"]*)")?\\)${LINK_CLOSE}`, "g");
+const LINK_RE = new RegExp(`${LINK_OPEN}\\[([^${LINK_OPEN}${LINK_CLOSE}]*)\\]\\(((?:[^\\s()]|\\([^\\s()]*\\))*)(?: "((?:[^"\\\\]|\\\\.)*)")?\\)${LINK_CLOSE}`, "g");
 
 export interface SchemaOptions {
   onOpenLink?: (target: string, newTab: boolean) => void;
@@ -111,7 +148,8 @@ export function buildExtensions(o: SchemaOptions = {}): Extensions {
     TaskList,
     TaskItem.configure({ nested: true }),
     Highlight,
-    TableKit.configure({ table: { resizable: false } }),
+    TableKit.configure({ table: false }),
+    MarkdownTable.configure({ resizable: false }),
     Placeholder.configure({
       placeholder: ({ node }) => (node.type.name === "heading" ? "Überschrift" : "Schreibe etwas, / für Befehle, [[ für Links"),
       showOnlyCurrent: true,
