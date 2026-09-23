@@ -6,9 +6,20 @@ use crate::db::Database;
 use crate::error::Result;
 use crate::model::{EntrySource, NewTimeEntry};
 
+/// Seeds the samples on explicit request (`aether demo`), even if they were removed before.
+pub fn seed_explicit(db: &Database, now: DateTime<Utc>) -> Result<bool> {
+    db.conn().execute("DELETE FROM settings WHERE key = 'meta.demo_seeded'", [])?;
+    seed(db, now)
+}
+
 /// Seeds a project with a Netzplan, Vorgänge, time entries and pages.
-/// Does nothing if the workspace already has projects.
+/// Runs once per workspace: never again after the user removed the samples,
+/// and not at all if the workspace already had projects.
 pub fn seed(db: &Database, now: DateTime<Utc>) -> Result<bool> {
+    if db.meta_get("demo_seeded")?.is_some() {
+        return Ok(false);
+    }
+    db.meta_set("demo_seeded", "1")?;
     if !db.list_projects()?.is_empty() {
         return Ok(false);
     }
@@ -183,6 +194,9 @@ mod tests {
         let db = Database::open_in_memory().unwrap();
         assert!(seed(&db, Utc::now()).unwrap());
         assert!(!seed(&db, Utc::now()).unwrap(), "second run must not duplicate data");
+        remove(&db).unwrap();
+        assert!(!seed(&db, Utc::now()).unwrap(), "removed samples stay removed");
+        assert!(seed_explicit(&db, Utc::now()).unwrap());
         let np = db.netzplan_by_ref("NP-8801").unwrap();
         let s = crate::netzplan::schedule(&db.list_vorgaenge(np.id).unwrap()).unwrap();
         assert_eq!(s.duration, 12.0);

@@ -1,6 +1,6 @@
 //! Client for a LiteLLM proxy (OpenAI-compatible `/v1/chat/completions`).
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -8,6 +8,9 @@ use serde_json::{Value, json};
 
 use super::metrics::{PriceTable, StreamTimer, UsageRecord, estimate_tokens};
 use crate::error::{Error, Result};
+
+/// A stream that delivers nothing for this long is treated as dead.
+const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(180);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChatMessage {
@@ -138,7 +141,27 @@ impl LiteLlmClient {
         body["stream_options"] = json!({ "include_usage": true });
 
         let timer_start = Instant::now();
-        let resp = Self::check(self.post("/v1/chat/completions").json(&body).send().await?).await?;
+        let cancelled = || cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed));
+        // Resolves once the user cancels; polled so a stalled request or a model
+        // that is still thinking can be stopped too.
+        let wait_cancel = || async {
+            loop {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                if cancelled() {
+                    return;
+                }
+            }
+        };
+        let mut acc = StreamAccumulator::new(StreamTimer::start_at(timer_start));
+
+        let send = self.post("/v1/chat/completions").json(&body).send();
+        let resp = tokio::select! {
+            r = send => Self::check(r?).await?,
+            _ = wait_cancel() => {
+                acc.finish_reason = Some("cancelled".into());
+                return Ok(acc.finish(&req.model, &req.messages, None, &self.prices));
+            }
+        };
         // LiteLLM reports its own cost calculation in this header.
         let header_cost = resp
             .headers()
@@ -146,15 +169,20 @@ impl LiteLlmClient {
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse::<f64>().ok());
 
-        let mut acc = StreamAccumulator::new(StreamTimer::start_at(timer_start));
         let mut decoder = SseDecoder::default();
         let mut stream = resp.bytes_stream();
-        let cancelled = || cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed));
-        'outer: while let Some(chunk) = stream.next().await {
-            if cancelled() {
-                acc.finish_reason = Some("cancelled".into());
-                break;
-            }
+        'outer: loop {
+            let chunk = tokio::select! {
+                c = tokio::time::timeout(STREAM_IDLE_TIMEOUT, stream.next()) => match c {
+                    Ok(Some(c)) => c,
+                    Ok(None) => break,
+                    Err(_) => return Err(Error::Provider { status: 0, body: "Keine Antwort vom Modell (Zeitüberschreitung)".into() }),
+                },
+                _ = wait_cancel() => {
+                    acc.finish_reason = Some("cancelled".into());
+                    break;
+                }
+            };
             for data in decoder.push(&chunk?) {
                 if data == "[DONE]" {
                     break 'outer;

@@ -75,7 +75,7 @@ pub fn wiki_links(markdown: &str) -> Vec<String> {
             let Some(end) = after.find("]]") else { break };
             let inner = &after[..end];
             let target = inner.split(['|', '#']).next().unwrap_or("").trim();
-            if !target.is_empty() && !out.iter().any(|t| t.eq_ignore_ascii_case(target)) {
+            if !target.is_empty() && !out.iter().any(|t| t.to_lowercase() == target.to_lowercase()) {
                 out.push(target.to_owned());
             }
             rest = &after[end + 2..];
@@ -88,9 +88,37 @@ fn is_tag_char(c: char) -> bool {
     c.is_alphanumeric() || matches!(c, '_' | '-' | '/')
 }
 
-/// `#tags` in prose (not headings, not code, not purely numeric like `#1`).
+/// `tags:` of a YAML frontmatter block (Obsidian: `tags: [a, b]`, `tags: a, b` or a `- a` list).
+fn frontmatter_tags(markdown: &str) -> Vec<String> {
+    let Some(rest) = markdown.strip_prefix("---\n").or_else(|| markdown.strip_prefix("---\r\n")) else { return vec![] };
+    let Some(end) = rest.lines().position(|l| l.trim_end() == "---") else { return vec![] };
+    let lines: Vec<&str> = rest.lines().take(end).collect();
+    let mut out = vec![];
+    let mut push = |raw: &str| {
+        let t = raw.trim().trim_matches(['"', '\'']).trim_start_matches('#').to_lowercase();
+        if !t.is_empty() && t.chars().all(is_tag_char) && !out.contains(&t) {
+            out.push(t);
+        }
+    };
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        if let Some(value) = line.strip_prefix("tags:").or_else(|| line.strip_prefix("tag:")) {
+            let value = value.trim().trim_start_matches('[').trim_end_matches(']');
+            value.split([',', ' ']).filter(|v| !v.trim().is_empty()).for_each(&mut push);
+            while i + 1 < lines.len() && lines[i + 1].trim_start().starts_with("- ") {
+                i += 1;
+                push(&lines[i].trim_start()[2..]);
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// `#tags` in prose (not headings, not code, not purely numeric like `#1`) and frontmatter `tags:`.
 pub fn tags(markdown: &str) -> Vec<String> {
-    let mut out: Vec<String> = vec![];
+    let mut out: Vec<String> = frontmatter_tags(markdown);
     for line in prose_lines(markdown) {
         let line = strip_inline_code(line);
         let chars: Vec<char> = line.chars().collect();
@@ -251,7 +279,7 @@ impl Database {
     }
 
     pub fn page_by_title(&self, title: &str) -> Result<Option<Page>> {
-        Ok(self
+        let found = self
             .conn()
             .query_row(
                 &format!(
@@ -261,17 +289,39 @@ impl Database {
                 [title.trim()],
                 crate::db::map_page,
             )
-            .optional()?)
+            .optional()?;
+        match found {
+            Some(p) => Ok(Some(p)),
+            None => self.page_by_title_unicode(title),
+        }
+    }
+
+    /// SQLite's NOCASE only folds ASCII; `[[übersicht]]` must still find „Übersicht“.
+    fn page_by_title_unicode(&self, title: &str) -> Result<Option<Page>> {
+        let needle = title.trim().to_lowercase();
+        if needle.is_ascii() {
+            return Ok(None);
+        }
+        let conn = self.conn();
+        let mut st = conn.prepare_cached("SELECT id, title FROM pages ORDER BY id")?;
+        let id = st
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+            .filter_map(|r| r.ok())
+            .find(|(_, t)| t.to_lowercase() == needle)
+            .map(|(id, _)| id);
+        id.map(|id| self.page(id)).transpose()
+    }
+
+    pub fn page_tags(&self, id: i64) -> Result<Vec<String>> {
+        let mut st = self.conn().prepare_cached("SELECT tag FROM page_tags WHERE page_id = ?1 ORDER BY tag")?;
+        Ok(st.query_map([id], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?)
     }
 
     pub fn page_doc(&self, id: i64) -> Result<PageDoc> {
         let page = self.page(id)?;
+        let tags = self.page_tags(id)?;
         let conn = self.conn();
         let content: String = conn.query_row("SELECT content FROM pages WHERE id = ?1", [id], |r| r.get(0))?;
-        let tags = {
-            let mut st = conn.prepare_cached("SELECT tag FROM page_tags WHERE page_id = ?1 ORDER BY tag")?;
-            st.query_map([id], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?
-        };
         let backlinks = {
             let mut st = conn.prepare_cached(
                 "SELECT p.id, p.title, p.icon, p.content FROM page_links l JOIN pages p ON p.id = l.from_page
@@ -308,25 +358,28 @@ impl Database {
             return Err(Error::State("title must not be empty".into()));
         }
         let old = self.page(id)?.title;
-        self.rename_page(id, title)?;
-        if !update_links || old.eq_ignore_ascii_case(title) && old == title {
-            return Ok(0);
-        }
-        let sources: Vec<(i64, String)> = {
-            let mut st = self.conn().prepare(
-                "SELECT p.id, p.content FROM page_links l JOIN pages p ON p.id = l.from_page WHERE l.target = ?1",
-            )?;
-            st.query_map([old.to_lowercase()], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
-        };
-        let mut changed = 0;
-        for (pid, content) in sources {
-            let updated = replace_link_target(&content, &old, title);
-            if updated != content {
-                self.save_page_content(pid, &updated)?;
-                changed += 1;
+        // All or nothing: a failure must not leave some links rewritten and others not.
+        self.atomic(|| {
+            self.rename_page(id, title)?;
+            if !update_links || old == title {
+                return Ok(0);
             }
-        }
-        Ok(changed)
+            let sources: Vec<(i64, String)> = {
+                let mut st = self.conn().prepare(
+                    "SELECT p.id, p.content FROM page_links l JOIN pages p ON p.id = l.from_page WHERE l.target = ?1",
+                )?;
+                st.query_map([old.to_lowercase()], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
+            };
+            let mut changed = 0;
+            for (pid, content) in sources {
+                let updated = replace_link_target(&content, &old, title);
+                if updated != content {
+                    self.save_page_content(pid, &updated)?;
+                    changed += 1;
+                }
+            }
+            Ok(changed)
+        })
     }
 
     /// Moves a page under a new parent at `position` (0-based among siblings).
@@ -444,7 +497,7 @@ pub fn replace_link_target(content: &str, old: &str, new: &str) -> String {
         let inner = &after[..end];
         let split = inner.find(['|', '#']).unwrap_or(inner.len());
         let (target, suffix) = inner.split_at(split);
-        if target.trim().eq_ignore_ascii_case(old) {
+        if target.trim().to_lowercase() == old.to_lowercase() {
             out.push_str("[[");
             out.push_str(new);
             out.push_str(suffix);
@@ -540,5 +593,24 @@ mod tests {
         assert_eq!(db.daily_note(d).unwrap().id, p.id);
         assert!(db.page_doc(p.id).unwrap().content.starts_with("## Fokus"));
         assert_eq!(db.page(p.parent_id.unwrap()).unwrap().title, JOURNAL_TITLE);
+    }
+
+    #[test]
+    fn umlaut_links_resolve_and_follow_renames() {
+        let db = Database::open_in_memory().unwrap();
+        let target = db.create_page(None, "Übersicht", None).unwrap();
+        let src = db.create_page(None, "Quelle", None).unwrap();
+        db.save_page_content(src.id, "Siehe [[übersicht]].\n").unwrap();
+        let doc = db.page_doc(src.id).unwrap();
+        assert!(doc.unresolved_links.is_empty(), "{:?}", doc.unresolved_links);
+        assert_eq!(db.rename_page_linked(target.id, "Überblick", true).unwrap(), 1);
+        assert!(db.page_doc(src.id).unwrap().content.contains("[[Überblick]]"));
+    }
+
+    #[test]
+    fn frontmatter_tags_count() {
+        assert_eq!(tags("---\ntags: [kunde, \"Projekt\"]\n---\nText #inline\n"), ["kunde", "projekt", "inline"]);
+        assert_eq!(tags("---\nstatus: x\ntags:\n  - a\n  - '#b'\n---\n"), ["a", "b"]);
+        assert!(tags("---\n\nNur eine Linie\n\n---\n").is_empty());
     }
 }

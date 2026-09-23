@@ -9,7 +9,7 @@ use aether_core::export::{self, ExportFormat, ExportOptions};
 use aether_core::model::StatusFlag;
 use aether_core::tracking::{self, AlertLevel, Thresholds};
 use aether_core::{Database, Result, demo, netzplan, search, zeit};
-use chrono::{DateTime, FixedOffset, Local, NaiveDate, Offset, TimeZone, Utc};
+use chrono::{DateTime, Local, NaiveDate, TimeZone, Utc};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -122,12 +122,9 @@ enum ProjectCmd {
     },
 }
 
-fn local_offset() -> FixedOffset {
-    Local::now().offset().fix()
-}
-
 fn day_start(d: NaiveDate) -> DateTime<Utc> {
-    local_offset().from_local_datetime(&d.and_hms_opt(0, 0, 0).unwrap()).unwrap().with_timezone(&Utc)
+    let midnight = d.and_hms_opt(0, 0, 0).unwrap_or_default();
+    Local.from_local_datetime(&midnight).earliest().map_or_else(|| midnight.and_utc(), |t| t.with_timezone(&Utc))
 }
 
 fn level_icon(l: AlertLevel) -> &'static str {
@@ -146,7 +143,7 @@ fn run(cli: Cli) -> Result<()> {
 
     match cli.cmd {
         Cmd::Demo => {
-            if demo::seed(&db, now)? {
+            if demo::seed_explicit(&db, now)? {
                 println!("Demo workspace created in {}", cli.db.display());
             } else {
                 println!("Workspace already has data; nothing seeded.");
@@ -157,7 +154,7 @@ fn run(cli: Cli) -> Result<()> {
             if !zeit::is_zeit_command(&line) {
                 line = format!("/zeit {line}");
             }
-            let out = tracking::log_slash_command(&db, &line, now, local_offset(), &t)?;
+            let out = tracking::log_slash_command(&db, &line, now, &Local, &t)?;
             let e = &out.entry;
             println!(
                 "#{} gebucht: {:.2}h auf {}{} – {}",
@@ -329,8 +326,7 @@ fn run(cli: Cli) -> Result<()> {
                 ..Default::default()
             };
             let rows = db.list_time_entries(&filter)?;
-            let opts =
-                ExportOptions { pernr, jira_issue_map, utc_offset_minutes: local_offset().local_minus_utc() / 60 };
+            let opts = ExportOptions { pernr, jira_issue_map, utc_offset_minutes: None };
             let res = export::export(&rows, format, &opts)?;
             print!("{}", res.content);
             for (id, why) in &res.skipped {

@@ -138,6 +138,19 @@ impl SystemCall {
         Ok(call)
     }
 
+    /// Re-applies the policy of [`from_tool_call`](Self::from_tool_call) to a call that
+    /// arrived from elsewhere (e.g. deserialized from the UI).
+    pub fn validate(&self) -> Result<()> {
+        let (name, args) = match self {
+            SystemCall::RunPowershell { script, cwd } => ("run_powershell", json!({ "script": script, "cwd": cwd })),
+            SystemCall::Git { args, repo } => ("git", json!({ "args": args, "repo": repo })),
+            SystemCall::HttpRequest { method, url, body } => {
+                ("http_request", json!({ "method": method, "url": url, "body": body }))
+            }
+        };
+        Self::from_tool_call(name, &args.to_string()).map(|_| ())
+    }
+
     /// Human-readable summary for the approval dialog.
     pub fn describe(&self) -> String {
         match self {
@@ -176,6 +189,7 @@ fn run(mut cmd: Command) -> Result<String> {
 /// Runs an approved system call. Only call this after the user confirmed
 /// exactly the call returned by [`SystemCall::describe`].
 pub async fn execute_system_tool(call: &SystemCall, http: &reqwest::Client) -> Result<String> {
+    call.validate()?;
     match call {
         SystemCall::RunPowershell { script, cwd } => {
             let exe = if cfg!(windows) { "powershell.exe" } else { "pwsh" };
@@ -247,5 +261,13 @@ mod tests {
     fn truncation_respects_char_boundaries() {
         let s = truncate("ä".repeat(MAX_OUTPUT));
         assert!(s.ends_with("[gekürzt]"));
+    }
+
+    #[tokio::test]
+    async fn executor_rejects_calls_outside_policy() {
+        let push = SystemCall::Git { args: vec!["push".into(), "--force".into()], repo: ".".into() };
+        assert!(execute_system_tool(&push, &HttpClient::new()).await.is_err());
+        let file = SystemCall::HttpRequest { method: "GET".into(), url: "file:///etc/passwd".into(), body: None };
+        assert!(execute_system_tool(&file, &HttpClient::new()).await.is_err());
     }
 }

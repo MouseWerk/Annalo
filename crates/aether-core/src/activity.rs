@@ -60,6 +60,11 @@ pub struct IdleAccumulator {
 }
 
 impl IdleAccumulator {
+    /// Changes the threshold for idle periods that start from now on.
+    pub fn set_threshold(&mut self, threshold: Duration) {
+        self.threshold = chrono::Duration::from_std(threshold).unwrap_or(self.threshold);
+    }
+
     pub fn new(threshold: Duration) -> Self {
         IdleAccumulator {
             threshold: chrono::Duration::from_std(threshold).unwrap_or(chrono::Duration::MAX),

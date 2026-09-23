@@ -582,7 +582,7 @@ impl Database {
     pub fn booked_hours(&self, netzplan_id: i64, vorgang_nr: Option<&str>) -> Result<f64> {
         let minutes: i64 = self.conn.query_row(
             "SELECT COALESCE(SUM(duration_minutes), 0) FROM time_entries
-             WHERE netzplan_id = ?1 AND status_flag <> 'running' AND (?2 IS NULL OR vorgang_nr = ?2)",
+             WHERE netzplan_id = ?1 AND status_flag <> 'running' AND (?2 IS NULL OR vorgang_nr = ?2 COLLATE NOCASE)",
             params![netzplan_id, vorgang_nr],
             |r| r.get(0),
         )?;

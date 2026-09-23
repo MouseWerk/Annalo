@@ -75,6 +75,22 @@ impl Database {
         )?;
         Ok(())
     }
+
+    /// Internal flags kept next to the settings (e.g. whether sample data was seeded).
+    pub fn meta_get(&self, key: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn()
+            .query_row("SELECT value FROM settings WHERE key = ?1", [format!("meta.{key}")], |r| r.get(0))
+            .optional()?)
+    }
+
+    pub fn meta_set(&self, key: &str, value: &str) -> Result<()> {
+        self.conn().execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![format!("meta.{key}"), value],
+        )?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

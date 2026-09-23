@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use chrono::{FixedOffset, SecondsFormat};
+use chrono::{DateTime, FixedOffset, Local, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
@@ -49,14 +49,18 @@ pub struct ExportOptions {
     pub pernr: Option<String>,
     /// Maps `NP-8801/1020` (Vorgang) or `NP-8801` (Netzplan) to a Jira issue key.
     pub jira_issue_map: HashMap<String, String>,
-    /// Local UTC offset in minutes, used for dates in CATS/CSV and Jira `started`.
+    /// Fixed UTC offset in minutes for dates in CATS/CSV and Jira `started`.
+    /// `None` uses the system time zone per entry, so daylight saving time is honoured.
     #[serde(default)]
-    pub utc_offset_minutes: i32,
+    pub utc_offset_minutes: Option<i32>,
 }
 
 impl ExportOptions {
-    fn offset(&self) -> FixedOffset {
-        FixedOffset::east_opt(self.utc_offset_minutes * 60).unwrap_or(FixedOffset::east_opt(0).unwrap())
+    fn local(&self, t: DateTime<Utc>) -> DateTime<FixedOffset> {
+        match self.utc_offset_minutes.and_then(|m| FixedOffset::east_opt(m * 60)) {
+            Some(off) => t.with_timezone(&off),
+            None => t.with_timezone(&Local).fixed_offset(),
+        }
     }
 }
 
@@ -98,9 +102,11 @@ fn truncate_chars(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
 }
 
-/// Quotes a field for a delimiter-separated file (RFC 4180 rules).
+/// Quotes a field for a delimiter-separated file (RFC 4180 rules). Text that a
+/// spreadsheet would run as a formula (`=`, `+`, `-`, `@`, …) is prefixed with `'`.
 fn field(s: &str, delim: char) -> String {
-    if s.contains([delim, '"', '\n', '\r']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s.to_owned() }
+    let s = if s.starts_with(['=', '+', '-', '@', '\t', '\r']) { format!("'{s}") } else { s.to_owned() };
+    if s.contains([delim, '"', '\n', '\r']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s }
 }
 
 fn sap_cats(rows: &[&TimeEntryRow], opts: &ExportOptions) -> (String, Vec<i64>) {
@@ -108,7 +114,7 @@ fn sap_cats(rows: &[&TimeEntryRow], opts: &ExportOptions) -> (String, Vec<i64>) 
     let mut out = String::from("PERNR;WORKDATE;RPROJ;RNPLNR;VORNR;LSTAR;CATSHOURS;MEINH;LTXA1\r\n");
     let pernr = opts.pernr.as_deref().unwrap_or("");
     for r in rows {
-        let date = r.entry.start_time.with_timezone(&opts.offset()).format("%Y%m%d");
+        let date = opts.local(r.entry.start_time).format("%Y%m%d");
         let hrs = format!("{:.2}", hours(r)).replace('.', ",");
         let _ = write!(
             out,
@@ -131,8 +137,7 @@ fn csv(rows: &[&TimeEntryRow], opts: &ExportOptions) -> (String, Vec<i64>) {
     let mut out = String::from(
         "id,project,netzplan,wbs_element,vorgang,leistungsart,start,end,duration_minutes,hours,description,status\r\n",
     );
-    let fmt =
-        |t: chrono::DateTime<chrono::Utc>| t.with_timezone(&opts.offset()).to_rfc3339_opts(SecondsFormat::Secs, true);
+    let fmt = |t: chrono::DateTime<chrono::Utc>| opts.local(t).to_rfc3339_opts(SecondsFormat::Secs, true);
     for r in rows {
         let e = &r.entry;
         let cols = [
@@ -182,7 +187,7 @@ fn jira(rows: &[&TimeEntryRow], opts: &ExportOptions, skipped: &mut Vec<(i64, St
         };
         logs.push(JiraWorklog {
             issue_key: key.clone(),
-            started: r.entry.start_time.with_timezone(&opts.offset()).format("%Y-%m-%dT%H:%M:%S%.3f%z").to_string(),
+            started: opts.local(r.entry.start_time).format("%Y-%m-%dT%H:%M:%S%.3f%z").to_string(),
             time_spent_seconds: r.entry.duration_minutes.unwrap_or(0) * 60,
             comment: r.entry.description.clone(),
         });
@@ -221,7 +226,8 @@ mod tests {
     #[test]
     fn cats_uses_local_date_and_german_decimals() {
         let rows = [row(1, Some("1020"), Some(150), "Systemintegration; Phase 1"), row(2, None, None, "running")];
-        let opts = ExportOptions { pernr: Some("00012345".into()), utc_offset_minutes: 120, ..Default::default() };
+        let opts =
+            ExportOptions { pernr: Some("00012345".into()), utc_offset_minutes: Some(120), ..Default::default() };
         let r = export(&rows, ExportFormat::SapCats, &opts).unwrap();
         let line = r.content.lines().nth(1).unwrap();
         assert_eq!(line, "00012345;20260923;NP-8801-1020;NP-8801;1020;DEV;2,50;H;\"Systemintegration; Phase 1\"");
@@ -246,6 +252,14 @@ mod tests {
         let r = export(&rows, ExportFormat::JiraWorklog, &opts).unwrap();
         let logs: Vec<JiraWorklog> = serde_json::from_str(&r.content).unwrap();
         assert_eq!(logs.iter().map(|l| l.issue_key.as_str()).collect::<Vec<_>>(), ["AET-12", "AET-1", "AET-1"]);
+    }
+
+    #[test]
+    fn formulas_are_defused() {
+        let r =
+            export(&[row(1, None, Some(60), "=HYPERLINK(\"x\")")], ExportFormat::SapCats, &ExportOptions::default())
+                .unwrap();
+        assert!(r.content.lines().nth(1).unwrap().ends_with(";\"'=HYPERLINK(\"\"x\"\")\""), "{}", r.content);
     }
 
     #[test]

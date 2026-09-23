@@ -25,7 +25,7 @@ use aether_core::settings::Settings;
 use aether_core::tracking::{self, BudgetStatus, LogOutcome};
 use aether_core::vault::{self, ImportReport};
 use aether_core::{Database, Error, demo};
-use chrono::{DateTime, FixedOffset, Local, NaiveDate, Offset, Utc};
+use chrono::{DateTime, Local, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
@@ -80,10 +80,6 @@ impl AppState {
     fn router(&self) -> Arc<ModelRouter> {
         self.ai.read().unwrap_or_else(|e| e.into_inner()).router.clone()
     }
-}
-
-fn local_offset() -> FixedOffset {
-    Local::now().offset().fix()
 }
 
 // ------------------------------------------------------------------- pages
@@ -366,7 +362,7 @@ fn leistungsart_delete(state: State<AppState>, code: String) -> Result<()> {
 #[tauri::command]
 fn log_time(state: State<AppState>, line: String) -> Result<LogOutcome> {
     let t = state.settings().thresholds;
-    tracking::log_slash_command(&state.db(), &line, Utc::now(), local_offset(), &t)
+    tracking::log_slash_command(&state.db(), &line, Utc::now(), &Local, &t)
 }
 
 #[derive(Serialize)]
@@ -518,6 +514,7 @@ fn schedule(state: State<AppState>, netzplan_id: i64) -> Result<Schedule> {
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // IPC arguments map 1:1 to the UI call
 fn export_entries(
     state: State<AppState>,
     format: ExportFormat,
@@ -526,15 +523,20 @@ fn export_entries(
     only_released: bool,
     mark_exported: bool,
     path: Option<String>,
+    include_exported: Option<bool>,
 ) -> Result<ExportResult> {
     let settings = state.settings();
     let db = state.db();
     let status = only_released.then_some(StatusFlag::Released);
-    let rows = db.list_time_entries(&EntryFilter { from, to, status, ..Default::default() })?;
+    let mut rows = db.list_time_entries(&EntryFilter { from, to, status, ..Default::default() })?;
+    // Exported entries were already booked in SAP/Jira; exporting them again duplicates bookings.
+    if !include_exported.unwrap_or(false) {
+        rows.retain(|r| r.entry.status_flag != StatusFlag::Exported);
+    }
     let options = ExportOptions {
         pernr: settings.pernr.clone(),
         jira_issue_map: settings.jira_issue_map.clone(),
-        utc_offset_minutes: local_offset().local_minus_utc() / 60,
+        utc_offset_minutes: None,
     };
     let res = export::export(&rows, format, &options)?;
     if let Some(p) = path {
@@ -578,6 +580,7 @@ fn settings_save(state: State<AppState>, settings: Settings) -> Result<SettingsV
     let mut settings = settings;
     settings.litellm_base_url = url.trim_end_matches('/').to_owned();
     state.db().save_settings(&settings)?;
+    lock(&state.idle).set_threshold(Duration::from_secs(settings.idle_threshold_minutes * 60));
     *state.ai.write().unwrap_or_else(|e| e.into_inner()) = AiRuntime::new(settings, state.secrets.get());
     Ok(settings_get(state))
 }
@@ -706,19 +709,30 @@ async fn ai_chat(
         Some(m) if !m.is_empty() => client.embed(m, std::slice::from_ref(&prompt)).await.ok().and_then(|mut v| v.pop()),
         _ => None,
     };
-    let (context, active) = {
+    let (context, active, source_tags) = {
         let db = state.db();
         let context = rag::retrieve(&db, &prompt, query_embedding.as_deref(), 6)?;
         let active = match page_id {
             Some(id) => db.page_doc(id).ok().map(|d| (d.page.title, d.content)),
             None => None,
         };
-        (context, active)
+        // A chunk rarely contains its page's #privat tag, so the tags of every source page count too.
+        let mut ids: Vec<i64> = context.iter().filter_map(|c| c.page_id).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        let mut tags = vec![];
+        for id in ids {
+            tags.extend(db.page_tags(id)?.into_iter().map(|t| format!("#{t}")));
+        }
+        (context, active, tags.join(" "))
     };
     let mut context_texts: Vec<String> = context.iter().map(|c| c.text.clone()).collect();
     if let Some((_, text)) = &active {
         context_texts.push(text.clone());
     }
+    context_texts.push(source_tags);
+    // Earlier turns (and tool results) of the conversation are sent again, so they count as well.
+    context_texts.extend(messages.iter().filter_map(|m| m.content.clone()));
     let route = route_for(&state, &prompt, &context_texts, use_tools, tier);
 
     let mut full = vec![ChatMessage::system(system_prompt(&settings))];
@@ -796,12 +810,14 @@ fn ai_run_workspace_tool(app: AppHandle, state: State<AppState>, name: String, a
             if !aether_core::zeit::is_zeit_command(&line) {
                 line = format!("/zeit {line}");
             }
-            let res = serde_json::to_string(&tracking::log_slash_command(&db, &line, Utc::now(), local_offset(), &t)?)?;
+            let res = serde_json::to_string(&tracking::log_slash_command(&db, &line, Utc::now(), &Local, &t)?)?;
             let _ = app.emit("data://entries", ());
             res
         }
         // Snippets mark hits with STX/ETX; the model does not need them.
-        "search_workspace" => serde_json::to_string(&search::search(&db, &arg("query"), 10)?)?.replace("\\u0002", "").replace("\\u0003", ""),
+        "search_workspace" => serde_json::to_string(&search::search(&db, &arg("query"), 10)?)?
+            .replace("\\u0002", "")
+            .replace("\\u0003", ""),
         "budget_status" => {
             let np = db.netzplan_by_ref(&arg("netzplan"))?;
             serde_json::to_string(&tracking::budget_status(&db, np.id, &t)?)?

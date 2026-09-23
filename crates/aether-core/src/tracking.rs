@@ -1,12 +1,12 @@
 //! High-level time tracking: slash-command logging and budget / ETC alerts.
 
-use chrono::{DateTime, FixedOffset, NaiveTime, TimeZone, Utc};
+use chrono::{DateTime, NaiveTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::db::Database;
 use crate::error::{Error, Result};
 use crate::model::{EntrySource, NewTimeEntry, TimeEntry};
-use crate::zeit::{self, DateSpec};
+use crate::zeit;
 
 /// Default start time for entries booked on a past day without `@hh:mm`.
 const DEFAULT_START: NaiveTime = match NaiveTime::from_hms_opt(8, 0, 0) {
@@ -23,23 +23,28 @@ pub struct LogOutcome {
 
 /// Parses a `/zeit` line, validates it against the WBS and books it.
 ///
-/// `offset` is the user's local UTC offset, used to interpret dates and `@hh:mm`.
-pub fn log_slash_command(
+/// `offset` is the user's time zone, used to interpret dates and `@hh:mm`.
+pub fn log_slash_command<Tz: TimeZone>(
     db: &Database,
     line: &str,
     now: DateTime<Utc>,
-    offset: FixedOffset,
+    offset: &Tz,
     thresholds: &Thresholds,
 ) -> Result<LogOutcome> {
-    let local_now = now.with_timezone(&offset);
+    let local_now = now.with_timezone(offset);
     let cmd = zeit::parse(line, local_now.date_naive())?;
 
     let np = db.netzplan_by_ref(&cmd.netzplan_ref)?;
+    let mut vorgang_nr = cmd.vorgang_nr.clone();
     if let Some(v) = &cmd.vorgang_nr {
         let vorgaenge = db.list_vorgaenge(np.id)?;
         // A Netzplan without modelled Vorgänge accepts free activity codes.
-        if !vorgaenge.is_empty() && !vorgaenge.iter().any(|x| x.vorgang_nr.eq_ignore_ascii_case(v)) {
-            return Err(Error::not_found("vorgang", format!("{}/{v}", np.netzplan_nr)));
+        if !vorgaenge.is_empty() {
+            // Store the canonical spelling so budgets and exports match.
+            let Some(found) = vorgaenge.iter().find(|x| x.vorgang_nr.eq_ignore_ascii_case(v)) else {
+                return Err(Error::not_found("vorgang", format!("{}/{v}", np.netzplan_nr)));
+            };
+            vorgang_nr = Some(found.vorgang_nr.clone());
         }
     }
     if let Some(la) = &cmd.leistungsart
@@ -51,8 +56,8 @@ pub fn log_slash_command(
     let duration = chrono::Duration::minutes(cmd.duration_minutes);
     let start = match (cmd.date, cmd.start) {
         (_, Some(t)) => local_to_utc(offset, cmd.date.resolve(local_now.date_naive()).and_time(t))?,
-        // "Today" without a start time: the work just ended.
-        (DateSpec::Today, None) => now - duration,
+        // Today without a start time: the work just ended.
+        (d, None) if d.resolve(local_now.date_naive()) == local_now.date_naive() => now - duration,
         (d, None) => local_to_utc(offset, d.resolve(local_now.date_naive()).and_time(DEFAULT_START))?,
     };
     if start + duration > now + chrono::Duration::minutes(1) {
@@ -61,7 +66,7 @@ pub fn log_slash_command(
 
     let entry = db.insert_time_entry(&NewTimeEntry {
         netzplan_id: np.id,
-        vorgang_nr: cmd.vorgang_nr.clone(),
+        vorgang_nr: vorgang_nr.clone(),
         leistungsart: cmd.leistungsart,
         start_time: start,
         duration_minutes: cmd.duration_minutes,
@@ -69,14 +74,15 @@ pub fn log_slash_command(
         source: EntrySource::Slash,
     })?;
 
-    let alerts = alerts_for(db, np.id, cmd.vorgang_nr.as_deref(), thresholds)?;
+    let alerts = alerts_for(db, np.id, vorgang_nr.as_deref(), thresholds)?;
     Ok(LogOutcome { entry, alerts })
 }
 
-fn local_to_utc(offset: FixedOffset, dt: chrono::NaiveDateTime) -> Result<DateTime<Utc>> {
+/// Resolves a local wall-clock time in the given zone (per date, so DST is honoured).
+fn local_to_utc<Tz: TimeZone>(offset: &Tz, dt: chrono::NaiveDateTime) -> Result<DateTime<Utc>> {
     offset
         .from_local_datetime(&dt)
-        .single()
+        .earliest()
         .map(|t| t.with_timezone(&Utc))
         .ok_or_else(|| Error::State(format!("ambiguous local time {dt}")))
 }
@@ -226,16 +232,41 @@ mod tests {
         Utc.with_ymd_and_hms(2026, 9, 23, 15, 0, 0).unwrap()
     }
 
-    fn cet() -> FixedOffset {
-        FixedOffset::east_opt(2 * 3600).unwrap()
+    fn cet() -> chrono::FixedOffset {
+        chrono::FixedOffset::east_opt(2 * 3600).unwrap()
+    }
+
+    #[test]
+    fn stores_canonical_vorgang_spelling_and_counts_budget() {
+        let (db, np) = setup();
+        let t = Thresholds::default();
+        let v = db.list_vorgaenge(np).unwrap()[0].vorgang_nr.clone();
+        let line = format!("/zeit NP-8801/{} 1h x", v.to_lowercase());
+        let out = log_slash_command(&db, &line, now(), &cet(), &t).unwrap();
+        assert_eq!(out.entry.vorgang_nr.as_deref(), Some(v.as_str()));
+        assert!((db.booked_hours(np, Some(&v.to_lowercase())).unwrap() - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn todays_date_without_time_ends_now() {
+        let (db, _) = setup();
+        // 17:00 local; 2 h ending now is fine even when the date is spelled out.
+        let out =
+            log_slash_command(&db, "/zeit NP-8801/1020 2h x @23.09.", now(), &cet(), &Thresholds::default()).unwrap();
+        assert_eq!(out.entry.start_time, now() - chrono::Duration::hours(2));
     }
 
     #[test]
     fn logs_canonical_command_ending_now() {
         let (db, _) = setup();
-        let out =
-            log_slash_command(&db, "/zeit NP-8801/1020 2.5h 'Systemintegration'", now(), cet(), &Thresholds::default())
-                .unwrap();
+        let out = log_slash_command(
+            &db,
+            "/zeit NP-8801/1020 2.5h 'Systemintegration'",
+            now(),
+            &cet(),
+            &Thresholds::default(),
+        )
+        .unwrap();
         assert_eq!(out.entry.duration_minutes, Some(150));
         assert_eq!(out.entry.end_time, Some(now()));
         assert_eq!(out.entry.source, EntrySource::Slash);
@@ -249,7 +280,7 @@ mod tests {
             &db,
             "/zeit NP-8801/1010 1h #DEV Konzept @gestern @08:30",
             now(),
-            cet(),
+            &cet(),
             &Thresholds::default(),
         )
         .unwrap();
@@ -261,10 +292,10 @@ mod tests {
     fn rejects_unknown_wbs_elements() {
         let (db, _) = setup();
         let t = Thresholds::default();
-        assert!(log_slash_command(&db, "/zeit NP-9999 1h x", now(), cet(), &t).is_err());
-        assert!(log_slash_command(&db, "/zeit NP-8801/7777 1h x", now(), cet(), &t).is_err());
-        assert!(log_slash_command(&db, "/zeit NP-8801/1020 1h #NOPE x", now(), cet(), &t).is_err());
-        assert!(log_slash_command(&db, "/zeit NP-8801/1020 1h x @23:00", now(), cet(), &t).is_err(), "future");
+        assert!(log_slash_command(&db, "/zeit NP-9999 1h x", now(), &cet(), &t).is_err());
+        assert!(log_slash_command(&db, "/zeit NP-8801/7777 1h x", now(), &cet(), &t).is_err());
+        assert!(log_slash_command(&db, "/zeit NP-8801/1020 1h #NOPE x", now(), &cet(), &t).is_err());
+        assert!(log_slash_command(&db, "/zeit NP-8801/1020 1h x @23:00", now(), &cet(), &t).is_err(), "future");
     }
 
     #[test]
@@ -272,7 +303,7 @@ mod tests {
         let (db, np) = setup();
         let t = Thresholds::default();
         // 5h on a 6h Vorgang: 83% consumed → warning.
-        log_slash_command(&db, "/zeit NP-8801/1020 5h a @22.09. @08:00", now(), cet(), &t).unwrap();
+        log_slash_command(&db, "/zeit NP-8801/1020 5h a @22.09. @08:00", now(), &cet(), &t).unwrap();
         let s = budget_status(&db, np, &t).unwrap();
         let v = s.iter().find(|s| s.vorgang_nr.as_deref() == Some("1020")).unwrap();
         assert_eq!(v.level, AlertLevel::Warning);
@@ -285,7 +316,7 @@ mod tests {
         assert_eq!((v.level, v.eac_hours), (AlertLevel::Critical, 8.0));
 
         // Booking beyond plan → exceeded; alert is reported with the booking.
-        let out = log_slash_command(&db, "/zeit NP-8801/1020 2h b @21.09. @08:00", now(), cet(), &t).unwrap();
+        let out = log_slash_command(&db, "/zeit NP-8801/1020 2h b @21.09. @08:00", now(), &cet(), &t).unwrap();
         assert!(out.alerts.iter().any(|a| a.label == "NP-8801/1020" && a.level == AlertLevel::Exceeded));
         let total = &budget_status(&db, np, &t).unwrap()[0];
         // Netzplan: 7h booked of 10h, ETC = 4h (1010) + 3h (1020 manual) → EAC 14h > 10h.

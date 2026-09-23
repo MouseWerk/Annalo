@@ -36,6 +36,13 @@ fn stem(p: &Path) -> String {
     p.file_stem().and_then(|s| s.to_str()).unwrap_or("Ohne Titel").to_owned()
 }
 
+/// Reads a note; invalid UTF-8 (e.g. an old ANSI file) is replaced instead of aborting the import.
+fn read_text(p: &Path) -> Result<String> {
+    let bytes = fs::read(p)?;
+    let text = String::from_utf8_lossy(&bytes);
+    Ok(text.strip_prefix('\u{feff}').unwrap_or(&text).replace("\r\n", "\n"))
+}
+
 /// Imports `dir` under a new top-level page named after the folder.
 pub fn import_vault(db: &Database, dir: &Path) -> Result<ImportReport> {
     let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("Import").to_owned();
@@ -52,14 +59,16 @@ fn import_dir(db: &Database, dir: &Path, parent: i64, report: &mut ImportReport)
         fs::read_dir(dir)?.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| !hidden(p)).collect();
     entries.sort_by_key(|p| (!p.is_dir(), p.file_name().map(|n| n.to_ascii_lowercase())));
 
-    let folder_names: Vec<String> = entries.iter().filter(|p| p.is_dir()).map(|p| stem(p)).collect();
+    // Full folder names: `v1.2/` pairs with `v1.2.md`, whose stem is also `v1.2`.
+    let folder_names: Vec<String> =
+        entries.iter().filter(|p| p.is_dir()).filter_map(|p| p.file_name()?.to_str().map(str::to_owned)).collect();
     for path in &entries {
         if path.is_dir() {
             let title = path.file_name().and_then(|n| n.to_str()).unwrap_or("Ordner").to_owned();
             let note = dir.join(format!("{title}.md"));
             let page = db.create_page(Some(parent), &title, Some("folder"))?;
             if note.is_file() {
-                db.save_page_content(page.id, &fs::read_to_string(&note)?)?;
+                db.save_page_content(page.id, &read_text(&note)?)?;
                 report.pages += 1;
             }
             report.folders += 1;
@@ -70,7 +79,7 @@ fn import_dir(db: &Database, dir: &Path, parent: i64, report: &mut ImportReport)
                 continue; // folder note, already used as the folder page's content
             }
             let page = db.create_page(Some(parent), &title, Some("file-text"))?;
-            db.save_page_content(page.id, &fs::read_to_string(path)?)?;
+            db.save_page_content(page.id, &read_text(path)?)?;
             report.pages += 1;
         } else {
             report.skipped += 1;
@@ -92,7 +101,17 @@ fn file_name(title: &str) -> String {
                 }
             })
             .collect();
-    let cleaned = cleaned.trim().trim_end_matches('.').to_owned();
+    let mut cleaned: String = cleaned.trim().trim_end_matches('.').chars().take(120).collect();
+    cleaned = cleaned.trim_end_matches(['.', ' ']).to_owned();
+    // CON, NUL, COM1 … are reserved device names on Windows, also with an extension.
+    const RESERVED: &[&str] = &[
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1",
+        "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
+    let stem = cleaned.split('.').next().unwrap_or("").trim().to_ascii_uppercase();
+    if RESERVED.contains(&stem.as_str()) {
+        cleaned.push('_');
+    }
     if cleaned.is_empty() { "Ohne Titel".into() } else { cleaned }
 }
 
@@ -175,5 +194,12 @@ mod tests {
     fn sanitizes_file_names() {
         assert_eq!(file_name("A/B: C?"), "A-B- C-");
         assert_eq!(file_name("  ...  "), "Ohne Titel");
+    }
+
+    #[test]
+    fn reserved_and_long_names_are_safe() {
+        assert_eq!(file_name("CON"), "CON_");
+        assert_eq!(file_name("nul.txt"), "nul.txt_");
+        assert_eq!(file_name(&"x".repeat(300)).len(), 120);
     }
 }

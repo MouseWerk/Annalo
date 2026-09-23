@@ -183,7 +183,7 @@ pub fn parse_duration(s: &str) -> Result<i64> {
     let minutes = if let Some((h, m)) = lower.split_once(':') {
         let h: u32 = h.parse().map_err(|_| err())?;
         let m: u32 = m.parse().map_err(|_| err())?;
-        if m >= 60 {
+        if m >= 60 || h > 24 {
             return Err(err());
         }
         f64::from(h * 60 + m)
@@ -238,12 +238,21 @@ fn parse_date(s: &str, today: NaiveDate) -> Result<DateSpec> {
     if let Ok(d) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
         return Ok(DateSpec::On(d));
     }
-    if let Ok(d) = NaiveDate::parse_from_str(s, "%d.%m.%Y") {
-        return Ok(DateSpec::On(d));
-    }
-    // "22.09." or "22.09" – current year.
     let trimmed = s.trim_end_matches('.');
+    // "22.09.2026" or "22.9.26".
+    if trimmed.matches('.').count() == 2 {
+        let year = trimmed.rsplit('.').next().unwrap_or("");
+        let fmt = if year.len() == 2 { "%d.%m.%y" } else { "%d.%m.%Y" };
+        if let Ok(d) = NaiveDate::parse_from_str(trimmed, fmt)
+            && d.year() >= 2000
+        {
+            return Ok(DateSpec::On(d));
+        }
+        return Err(Error::Parse(format!("invalid date '@{s}' (use @heute, @gestern, @2026-09-22 or @22.09.)")));
+    }
+    // "22.09." or "22.09": the most recent such day (Dec dates in early January mean last year).
     if let Ok(d) = NaiveDate::parse_from_str(&format!("{trimmed}.{}", today.year()), "%d.%m.%Y") {
+        let d = if d > today { d.with_year(today.year() - 1).unwrap_or(d) } else { d };
         return Ok(DateSpec::On(d));
     }
     Err(Error::Parse(format!("invalid date '@{s}' (use @heute, @gestern, @2026-09-22 or @22.09.)")))
@@ -252,6 +261,19 @@ fn parse_date(s: &str, today: NaiveDate) -> Result<DateSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn huge_clock_duration_is_rejected_not_wrapped() {
+        assert!(parse_duration("71582789:00").is_err());
+    }
+
+    #[test]
+    fn dates_near_new_year_and_two_digit_years() {
+        let jan2 = NaiveDate::from_ymd_opt(2027, 1, 2).unwrap();
+        assert_eq!(parse_date("30.12.", jan2).unwrap(), DateSpec::On(NaiveDate::from_ymd_opt(2026, 12, 30).unwrap()));
+        assert_eq!(parse_date("22.9.26", jan2).unwrap(), DateSpec::On(NaiveDate::from_ymd_opt(2026, 9, 22).unwrap()));
+        assert!(parse_date("22.9.0026", jan2).is_err());
+    }
 
     fn today() -> NaiveDate {
         NaiveDate::from_ymd_opt(2026, 9, 23).unwrap()
