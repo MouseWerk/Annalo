@@ -5,6 +5,7 @@
 //!
 //! * [`db`] – embedded SQLite store (FTS5 full-text search, embeddings as BLOBs)
 //! * [`notes`] – Markdown documents, backlinks, tags, daily notes
+//! * [`pagework`] – pages linked to a Vorgang (`vorgang:` property): budget and bookings
 //! * [`trash`] – page trash (restore, purge, 30-day expiry)
 //! * [`backup`] – database snapshots (`VACUUM INTO`) with rotation
 //! * [`vault`] – Obsidian vault import / Markdown export
@@ -30,6 +31,7 @@ pub mod export;
 pub mod model;
 pub mod netzplan;
 pub mod notes;
+pub mod pagework;
 pub mod search;
 pub mod settings;
 pub mod tasks;

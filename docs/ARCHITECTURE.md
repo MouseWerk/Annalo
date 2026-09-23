@@ -27,7 +27,7 @@ events and OS integration. The UI never talks to the network or the filesystem d
 | `netzplaene` | Level 2: `netzplan_nr`, `wbs_element` (PSP-Element), `planned_hours` |
 | `vorgaenge` + `vorgang_links` | Level 3: activities with duration, plan hours, optional manual remaining estimate, and precedence links for CPM |
 | `leistungsarten` | Level 4: activity types (`DEV`, `CONSULTING`, `PM`, `TEST`) |
-| `time_entries` | `netzplan_id`, `vorgang_nr`, `leistungsart`, `start_time`, `end_time`, `duration_minutes`, `description`, `status_flag` (`running`/`draft`/`released`/`exported`), `source`. A partial unique index allows only one running timer |
+| `time_entries` | `netzplan_id`, `vorgang_nr`, `leistungsart`, `start_time`, `end_time`, `duration_minutes`, `description`, `status_flag` (`running`/`draft`/`released`/`exported`), `source`, `page_id` (the note a `/zeit` line was typed in, v5; cleared when the page is purged). A partial unique index allows only one running timer |
 | `pages` | Page tree; `content` holds the page as one Markdown document (v2). `daily_date` marks daily notes, `favorite` pins pages, `deleted_at` marks pages in the trash (v3) |
 | `notes_blocks` | Derived chunk index (split at headings, ~1200 chars) rebuilt on every save; `vector_embedding` is a little-endian `f32` BLOB. Unchanged chunks keep their embedding |
 | `page_links`, `page_tags` | Outgoing `[[links]]` (lower-cased targets, so links to not-yet-existing pages resolve later) and `#tags`, for backlinks and the tag view |
@@ -58,6 +58,10 @@ Migration v2 converts the old block model: blocks are concatenated into
 - The editor (TipTap/ProseMirror) loads and saves Markdown via `@tiptap/markdown`. Custom nodes serialize to portable syntax:
   `[[Target#Heading|Alias]]` for links and `<time-entry id=… hours=… target=…>text</time-entry>` for booked time.
 - YAML frontmatter is split off before editing and re-attached on save, so imported Obsidian notes keep their properties.
+  The property editor under the title (`ui/src/lib/frontmatter.ts`) reads `key: value`, dates and lists; anything more complex
+  stays a raw YAML row and is written back verbatim. Its edits go through the editor's save path (one writer per page).
+- A `vorgang:` / `netzplan:` property links a page to the WBS (`pagework.rs`): the work card shows budget, ETC and recent
+  bookings, and `/zeit` lines without a reference on that page book on it.
 - Autosave runs 450 ms after the last change and on window blur. Renames rewrite `[[links]]` in every referencing page.
 - Images live as files in `<data_dir>/attachments/`, named by the first 16 hex digits of their SHA-256 (same image, same file),
   and are embedded Obsidian-style as `![[name.png|300]]`. The shell serves them through the `aether-asset:` URI scheme, which

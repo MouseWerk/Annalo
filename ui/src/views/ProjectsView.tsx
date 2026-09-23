@@ -10,7 +10,7 @@ import { compact, h1, parseGermanNumber } from "../lib/format";
 import { useWbs } from "./wbs";
 import type { AlertLevel, BudgetStatus, NetzplanTree, ProjectTree, Schedule, Vorgang } from "../lib/types";
 
-const LEVEL: Record<AlertLevel, { label: string; tone: Tone }> = {
+export const LEVEL: Record<AlertLevel, { label: string; tone: Tone }> = {
   ok: { label: "Im Plan", tone: "success" },
   warning: { label: "Warnung", tone: "warning" },
   critical: { label: "Kritisch", tone: "danger" },

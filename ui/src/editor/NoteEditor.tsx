@@ -21,6 +21,8 @@ const SAVE_DELAY = 450;
 export interface NoteEditorHandle {
   editor: Editor | null;
   flush: () => Promise<void>;
+  /** Replaces the page's frontmatter (property editor); saved like any other edit. */
+  setFrontmatter: (fm: string) => void;
 }
 
 // Flush handles of all mounted editors (rename, window close).
@@ -42,6 +44,7 @@ export function NoteEditor({
   onOpenLink,
   onOpenTag,
   handleRef,
+  onFrontmatter,
   active = true,
 }: {
   active?: boolean;
@@ -49,6 +52,8 @@ export function NoteEditor({
   onSaved: (doc: PageDoc) => void;
   onOpenLink: (target: string, newTab: boolean) => void;
   onOpenTag: (tag: string) => void;
+  /** The frontmatter changed from outside (another pane, a reload). */
+  onFrontmatter?: (fm: string) => void;
   handleRef?: (h: NoteEditorHandle) => void;
 }) {
   const frontmatter = useRef(splitFrontmatter(doc.content).frontmatter);
@@ -57,8 +62,8 @@ export function NoteEditor({
   const saving = useRef<Promise<void> | null>(null);
   const [status, setStatus] = useState<"saved" | "dirty" | "saving">("saved");
   const [linkDraft, setLinkDraft] = useState<string | null>(null);
-  const cb = useRef({ onSaved, onOpenLink, onOpenTag });
-  cb.current = { onSaved, onOpenLink, onOpenTag };
+  const cb = useRef({ onSaved, onOpenLink, onOpenTag, onFrontmatter });
+  cb.current = { onSaved, onOpenLink, onOpenTag, onFrontmatter };
   const activeRef = useRef(active);
   activeRef.current = active;
   const instance = useRef(Math.random().toString(36).slice(2));
@@ -69,7 +74,10 @@ export function NoteEditor({
 
   const apply = (editor: Editor, content: string) => {
     const { frontmatter: fm, body } = splitFrontmatter(content);
-    frontmatter.current = fm;
+    if (fm !== frontmatter.current) {
+      frontmatter.current = fm;
+      cb.current.onFrontmatter?.(fm);
+    }
     if (toMarkdown(editor) === body) return;
     const { from, to } = editor.state.selection;
     editor.commands.setContent(body, { contentType: "markdown", emitUpdate: false });
@@ -152,11 +160,11 @@ export function NoteEditor({
         },
         book: async (line) => {
           try {
-            const out = await api.logTime(line);
+            const out = await api.logTime(line, doc.id);
             const s = useApp.getState();
             s.bumpEntries();
             s.alerts(out.alerts);
-            const target = line.trim().split(/\s+/)[1] ?? "";
+            const target = out.reference || (line.trim().split(/\s+/)[1] ?? "");
             s.toast({ tone: "success", title: `${hoursFromMinutes(out.entry.duration_minutes)} h gebucht`, detail: `${target}${out.entry.description ? " · " + out.entry.description : ""}` });
             return { entryId: out.entry.id, hours: hoursFromMinutes(out.entry.duration_minutes), target, text: out.entry.description };
           } catch (e) {
@@ -229,7 +237,15 @@ export function NoteEditor({
       await saving.current;
       if (dirty.current) throw new Error("Änderungen konnten nicht gespeichert werden");
     };
-    handleRef?.({ editor, flush: flushNow });
+    const setFrontmatter = (fm: string) => {
+      if (fm === frontmatter.current) return;
+      frontmatter.current = fm;
+      dirty.current = true;
+      setStatus("dirty");
+      window.clearTimeout(saveTimer.current);
+      saveTimer.current = window.setTimeout(() => save(editor), SAVE_DELAY);
+    };
+    handleRef?.({ editor, flush: flushNow, setFrontmatter });
     flushers.add(flushNow);
     const flush = () => {
       window.clearTimeout(saveTimer.current);

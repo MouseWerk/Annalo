@@ -46,6 +46,8 @@ export interface TimeEntry {
   description: string;
   status_flag: StatusFlag;
   source: "manual" | "timer" | "slash" | "auto";
+  /** The page the entry was booked from (`/zeit` in a note). */
+  page_id?: number | null;
 }
 export interface TimeEntryRow extends TimeEntry {
   project_code: string;
@@ -118,6 +120,26 @@ export interface Schedule {
 export interface LogOutcome {
   entry: TimeEntry;
   alerts: BudgetStatus[];
+  /** Canonical reference, e.g. `NP-8801/1020`. */
+  reference: string;
+}
+/** Budget and bookings of the Vorgang a page is linked to (`vorgang:` property). */
+export interface PageWork {
+  reference: string;
+  label: string;
+  netzplan_id: number | null;
+  netzplan: string | null;
+  vorgang: string | null;
+  title: string;
+  planned_hours: number;
+  booked_hours: number;
+  etc_hours: number;
+  eac_hours: number;
+  consumed: number;
+  level: AlertLevel;
+  entries: TimeEntry[];
+  page_hours: number;
+  error: string | null;
 }
 export interface TimerStatus {
   entry: TimeEntry;

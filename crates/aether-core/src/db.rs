@@ -16,6 +16,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0002_documents.sql"),
     include_str!("../migrations/0003_trash.sql"),
     include_str!("../migrations/0004_tasks.sql"),
+    include_str!("../migrations/0005_entry_page.sql"),
 ];
 
 /// A migration with this marker adds a derived page index; every page is re-indexed after it ran.
@@ -423,7 +424,7 @@ impl Database {
     // ----------------------------------------------------------- time entries
 
     const ENTRY_COLS: &'static str = "e.id, e.netzplan_id, e.vorgang_nr, e.leistungsart, e.start_time, e.end_time,
-         e.duration_minutes, e.description, e.status_flag, e.source";
+         e.duration_minutes, e.description, e.status_flag, e.source, e.page_id";
 
     fn map_entry(r: &Row) -> rusqlite::Result<TimeEntry> {
         let status: String = r.get(8)?;
@@ -440,6 +441,7 @@ impl Database {
             // The CHECK constraints guarantee these parse.
             status_flag: StatusFlag::parse(&status).unwrap_or(StatusFlag::Draft),
             source: EntrySource::parse(&source).unwrap_or(EntrySource::Manual),
+            page_id: r.get(10)?,
         })
     }
 
@@ -461,8 +463,8 @@ impl Database {
         let end = e.start_time + chrono::Duration::minutes(e.duration_minutes);
         self.conn.execute(
             "INSERT INTO time_entries
-               (netzplan_id, vorgang_nr, leistungsart, start_time, end_time, duration_minutes, description, status_flag, source)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'draft', ?8)",
+               (netzplan_id, vorgang_nr, leistungsart, start_time, end_time, duration_minutes, description, status_flag, source, page_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'draft', ?8, ?9)",
             params![
                 e.netzplan_id,
                 e.vorgang_nr,
@@ -471,7 +473,8 @@ impl Database {
                 ts(end),
                 e.duration_minutes,
                 e.description,
-                e.source.as_str()
+                e.source.as_str(),
+                e.page_id
             ],
         )?;
         self.time_entry(self.conn.last_insert_rowid())
@@ -594,9 +597,9 @@ impl Database {
             .query_map(params![f.from.map(ts), f.to.map(ts), f.netzplan_id, f.status.map(StatusFlag::as_str)], |r| {
                 Ok(TimeEntryRow {
                     entry: Self::map_entry(r)?,
-                    project_code: r.get(10)?,
-                    netzplan_nr: r.get(11)?,
-                    wbs_element: r.get(12)?,
+                    project_code: r.get(11)?,
+                    netzplan_nr: r.get(12)?,
+                    wbs_element: r.get(13)?,
                 })
             })?
             .collect::<rusqlite::Result<_>>()?;
@@ -609,6 +612,30 @@ impl Database {
             "SELECT COALESCE(SUM(duration_minutes), 0) FROM time_entries
              WHERE netzplan_id = ?1 AND status_flag <> 'running' AND (?2 IS NULL OR vorgang_nr = ?2 COLLATE NOCASE)",
             params![netzplan_id, vorgang_nr],
+            |r| r.get(0),
+        )?;
+        Ok(minutes as f64 / 60.0)
+    }
+
+    /// The latest finished entries on a Netzplan (optionally one Vorgang), newest first.
+    pub fn recent_entries(&self, netzplan_id: i64, vorgang_nr: Option<&str>, limit: usize) -> Result<Vec<TimeEntry>> {
+        let mut st = self.conn.prepare_cached(&format!(
+            "SELECT {} FROM time_entries e
+             WHERE e.netzplan_id = ?1 AND e.status_flag <> 'running' AND (?2 IS NULL OR e.vorgang_nr = ?2 COLLATE NOCASE)
+             ORDER BY e.start_time DESC, e.id DESC LIMIT ?3",
+            Self::ENTRY_COLS
+        ))?;
+        let rows = st
+            .query_map(params![netzplan_id, vorgang_nr, limit as i64], Self::map_entry)?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
+    }
+
+    /// Hours booked from one page (`/zeit` in that note).
+    pub fn page_booked_hours(&self, page_id: i64) -> Result<f64> {
+        let minutes: i64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(duration_minutes), 0) FROM time_entries WHERE page_id = ?1 AND status_flag <> 'running'",
+            [page_id],
             |r| r.get(0),
         )?;
         Ok(minutes as f64 / 60.0)
@@ -822,6 +849,7 @@ mod tests {
                 duration_minutes: 60,
                 description: "x".into(),
                 source: EntrySource::Manual,
+                page_id: None,
             })
             .unwrap();
         assert!(db.delete_netzplan(np.id).unwrap_err().to_string().contains("gebuchte Zeiten"));

@@ -22,6 +22,7 @@ use aether_core::export::{self, ExportFormat, ExportOptions, ExportResult};
 use aether_core::model::*;
 use aether_core::netzplan::{self, Schedule};
 use aether_core::notes::PageDoc;
+use aether_core::pagework::{self, PageWork};
 use aether_core::search::{self, SearchHit};
 use aether_core::settings::Settings;
 use aether_core::tasks::{Task, TaskFilter};
@@ -509,9 +510,20 @@ fn leistungsart_delete(state: State<AppState>, code: String) -> Result<()> {
 // ---------------------------------------------------------- time tracking
 
 #[tauri::command]
-fn log_time(state: State<AppState>, line: String) -> Result<LogOutcome> {
+fn log_time(state: State<AppState>, line: String, page_id: Option<i64>) -> Result<LogOutcome> {
     let t = state.settings().thresholds;
-    tracking::log_slash_command(&state.db(), &line, Utc::now(), &Local, &t)
+    let db = state.db();
+    // Typed on a page linked to a Vorgang: `/zeit 1.5h …` books on that Vorgang.
+    let default_ref = page_id.map(|id| db.page_reference(id)).transpose()?.flatten();
+    let ctx = tracking::SlashContext { default_ref: default_ref.as_deref(), page_id };
+    tracking::log_slash_command_in(&db, &line, Utc::now(), &Local, &t, ctx)
+}
+
+/// Budget and bookings of the Vorgang a page is linked to (`vorgang:` property).
+#[tauri::command]
+fn page_work(state: State<AppState>, page_id: i64) -> Result<Option<PageWork>> {
+    let t = state.settings().thresholds;
+    pagework::page_work(&state.db(), page_id, &t)
 }
 
 #[derive(Serialize)]
@@ -616,9 +628,12 @@ fn time_entry_create(
         duration_minutes,
         description,
         source: EntrySource::Manual,
+        page_id: None,
     })?;
     let alerts = tracking::alerts_for(&db, entry.netzplan_id, entry.vorgang_nr.as_deref(), &t)?;
-    Ok(LogOutcome { entry, alerts })
+    let np = db.netzplan_by_id(entry.netzplan_id)?.netzplan_nr;
+    let reference = entry.vorgang_nr.as_ref().map_or(np.clone(), |v| format!("{np}/{v}"));
+    Ok(LogOutcome { entry, alerts, reference })
 }
 
 #[tauri::command]
@@ -1323,6 +1338,7 @@ pub fn run() {
             leistungsart_save,
             leistungsart_delete,
             log_time,
+            page_work,
             timer_status,
             timer_start,
             timer_stop,

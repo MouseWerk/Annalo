@@ -67,6 +67,7 @@ pub fn seed(db: &Database, now: DateTime<Utc>) -> Result<bool> {
             duration_minutes: minutes,
             description: desc.into(),
             source: EntrySource::Manual,
+            page_id: None,
         })?;
     }
 

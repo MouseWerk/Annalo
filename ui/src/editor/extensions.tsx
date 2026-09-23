@@ -445,7 +445,8 @@ export const ZeitCommand = Extension.create<
         const { $from, empty } = editor.state.selection;
         if (!empty || $from.parent.type.name !== "paragraph") return false;
         const text = $from.parent.textContent.trim();
-        if (!/^\/(zeit|time)\s+\S+\s+\S+/i.test(text)) return false;
+        // `/zeit NP-8801/1020 2h …`, or `/zeit 2h …` on a page linked to a Vorgang.
+        if (!/^\/(zeit|time)\s+(\S+\s+\S+|\d\S*$)/i.test(text)) return false;
         // A second Enter while the booking is in flight must not book twice.
         const pending = this.storage.pending;
         if (pending.has(text)) return true;

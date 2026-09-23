@@ -13,10 +13,14 @@ import { addDays, dateLong, isoDay, relative } from "../lib/format";
 import { linkContext } from "../components/linkContext";
 import type { PageDoc } from "../lib/types";
 import { restorePage } from "./TrashView";
+import { PropertyEditor, WorkCard, pageReference } from "./PageProperties";
 
 export function PageView({ pageId, tab, active }: { pageId: number; tab: Tab; active: boolean }) {
   const [doc, setDoc] = useState<PageDoc | null>(null);
   const [missing, setMissing] = useState(false);
+  // The frontmatter as the editor holds it (it saves it with the body).
+  const [fm, setFm] = useState("");
+  const [addingProp, setAddingProp] = useState(false);
   const pages = useApp((s) => s.pages);
   const handle = useRef<NoteEditorHandle | null>(null);
   const root = useRef<HTMLDivElement>(null);
@@ -32,6 +36,7 @@ export function PageView({ pageId, tab, active }: { pageId: number; tab: Tab; ac
       .then((d) => {
         if (!alive) return;
         setDoc(d);
+        setFm(splitFrontmatter(d.content).frontmatter);
         if (activeRef.current) useApp.getState().set({ activeDoc: d });
       })
       .catch(() => alive && setMissing(true));
@@ -98,6 +103,7 @@ export function PageView({ pageId, tab, active }: { pageId: number; tab: Tab; ac
       </>
     );
 
+  const reference = pageReference(fm);
   const node = pages.get(doc.id);
   const crumbs: { id: number; title: string }[] = [];
   for (let p = node?.parent_id != null ? pages.get(node.parent_id) : undefined; p; p = p.parent_id != null ? pages.get(p.parent_id) : undefined) crumbs.unshift(p);
@@ -105,8 +111,20 @@ export function PageView({ pageId, tab, active }: { pageId: number; tab: Tab; ac
   return (
     <div className="page-view" ref={root}>
       <PageHeader tab={tab} root={root} doc={doc} crumbs={crumbs} onChange={(d) => setDoc({ ...doc, ...d })}>
-        <Properties doc={doc} />
+        <Properties doc={doc} fm={fm} onAdd={() => setAddingProp(true)} />
+        <PropertyEditor
+          fm={fm}
+          adding={addingProp}
+          onAdded={() => setAddingProp(false)}
+          onChange={(next) => {
+            // Through the editor's save path, so body and properties never overwrite each other.
+            setFm(next);
+            handle.current?.setFrontmatter(next);
+          }}
+        />
+        {reference && <WorkCard pageId={doc.id} reference={reference} title={doc.title} />}
         <NoteEditor
+          onFrontmatter={setFm}
           key={doc.id}
           active={active}
           doc={doc}
@@ -303,9 +321,8 @@ function PageHeader({
   );
 }
 
-function Properties({ doc }: { doc: PageDoc }) {
-  const { frontmatter: fm, body } = splitFrontmatter(doc.content);
-  const [open, setOpen] = useState(false);
+function Properties({ doc, fm, onAdd }: { doc: PageDoc; fm: string; onAdd: () => void }) {
+  const { body } = splitFrontmatter(doc.content);
   // Inline #tags are already clickable in the text; only show the others (frontmatter tags).
   const lower = body.toLowerCase();
   const extraTags = doc.tags.filter((t) => !lower.includes(`#${t.toLowerCase()}`));
@@ -318,12 +335,11 @@ function Properties({ doc }: { doc: PageDoc }) {
           {t}
         </button>
       ))}
-      {fm && (
-        <button type="button" className="prop prop-btn" onClick={() => setOpen((v) => !v)}>
-          Eigenschaften
+      {!fm && (
+        <button type="button" className="prop prop-btn" onClick={onAdd}>
+          Eigenschaft hinzufügen
         </button>
       )}
-      {open && fm && <pre className="frontmatter">{fm.trim()}</pre>}
     </div>
   );
 }
