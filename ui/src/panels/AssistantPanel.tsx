@@ -1,0 +1,503 @@
+// The AI assistant: streaming chat over LiteLLM with workspace context,
+// sources, cost/speed metrics and approval-gated tools.
+
+import { useEffect, useRef, useState } from "react";
+import {
+  ArrowUp, Check, ChevronDown, Copy, FilePlus2, FileText, Gauge, GitBranch, Globe, Loader2, Plus, Search, Settings2, ShieldAlert, Sparkles, Square, Terminal, Timer, Wrench, X,
+} from "lucide-react";
+import { api, errorText, on } from "../lib/api";
+import { renderMarkdown } from "../lib/markdown";
+import { useApp } from "../store/app";
+import { Button, IconButton, useMenu } from "../components/ui";
+import { h1 } from "../lib/format";
+import type { ChatMessage, ContextChunk, RouteDecision, StreamEvent, Tier, ToolCall } from "../lib/types";
+
+type Turn =
+  | { id: string; kind: "user"; text: string }
+  | {
+      id: string;
+      kind: "assistant";
+      text: string;
+      streaming: boolean;
+      meta?: { model: string; tier: Tier; ttft: number | null; tps: number | null; tokens: number; cost: number; exact: boolean; reasons: string[] };
+      sources?: ContextChunk[];
+      error?: string;
+      cancelled?: boolean;
+    }
+  | { id: string; kind: "tool"; name: string; label: string; status: "running" | "done" | "error" | "pending" | "rejected"; summary?: string; output?: string; decide?: (ok: boolean) => void };
+
+const TOOL_META: Record<string, { label: string; icon: typeof Search }> = {
+  log_time: { label: "Zeit buchen", icon: Timer },
+  search_workspace: { label: "Workspace durchsuchen", icon: Search },
+  budget_status: { label: "Budget abfragen", icon: Gauge },
+  run_powershell: { label: "PowerShell ausführen", icon: Terminal },
+  git: { label: "Git-Befehl", icon: GitBranch },
+  http_request: { label: "HTTP-Anfrage", icon: Globe },
+};
+
+const SUGGESTIONS = [
+  "Fasse die aktuelle Seite zusammen",
+  "Welche Aufgaben sind noch offen?",
+  "Wie steht das Budget von NP-8801?",
+  "Was habe ich diese Woche gebucht?",
+];
+
+const uid = () => Math.random().toString(36).slice(2, 10);
+const tierLabel: Record<Tier, string> = { local: "Lokal", standard: "Standard", reasoning: "Reasoning" };
+
+export function AssistantPanel() {
+  const settings = useApp((s) => s.settings);
+  const activeDoc = useApp((s) => s.activeDoc);
+  const activeTab = useApp((s) => s.tabs.find((t) => t.id === s.activeTabId));
+  const [turns, setTurns] = useState<Turn[]>([]);
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [tier, setTier] = useState<Tier | null>(() => (localStorage.getItem("aether.tier") as Tier | null) || null);
+  const [useTools, setUseTools] = useState(() => localStorage.getItem("aether.tools") !== "0");
+  const [includePage, setIncludePage] = useState(true);
+  const [preview, setPreview] = useState<RouteDecision | null>(null);
+  const history = useRef<ChatMessage[]>([]);
+  const requestId = useRef<string | null>(null);
+  const scroller = useRef<HTMLDivElement>(null);
+  const textarea = useRef<HTMLTextAreaElement>(null);
+  const stick = useRef(true);
+  const [menu, openMenu] = useMenu();
+  const s = useApp.getState;
+
+  const pageContext = activeTab?.kind === "page" && activeDoc && activeDoc.id === activeTab.pageId ? activeDoc : null;
+
+  const update = (id: string, patch: Partial<Turn>) => setTurns((ts) => ts.map((t) => (t.id === id ? ({ ...t, ...patch } as Turn) : t)));
+
+  // Stream deltas into the current assistant turn, batched per frame.
+  useEffect(() => {
+    let buffer = "";
+    let frame = 0;
+    let target: string | null = null;
+    const un = on<{ request_id: string; event: StreamEvent }>("ai://stream", ({ request_id, event }) => {
+      if (request_id !== requestId.current) return;
+      if (event.type === "delta") {
+        buffer += event.text;
+        target = request_id;
+        if (!frame)
+          frame = requestAnimationFrame(() => {
+            frame = 0;
+            const chunk = buffer;
+            buffer = "";
+            setTurns((ts) => {
+              const last = ts[ts.length - 1];
+              if (!last || last.kind !== "assistant" || !target) return ts;
+              return [...ts.slice(0, -1), { ...last, text: last.text + chunk }];
+            });
+          });
+      }
+    });
+    const un2 = on("ai://meter", (m) => s().set({ meter: m as never }));
+    return () => {
+      un.then((f) => f());
+      un2.then((f) => f());
+      cancelAnimationFrame(frame);
+    };
+  }, [s]);
+
+  useEffect(() => {
+    const el = scroller.current;
+    if (el && stick.current) el.scrollTop = el.scrollHeight;
+  }, [turns]);
+
+  useEffect(() => {
+    const onAsk = (e: Event) => send((e as CustomEvent<string>).detail);
+    window.addEventListener("aether:ask", onAsk);
+    return () => window.removeEventListener("aether:ask", onAsk);
+  });
+
+  useEffect(() => {
+    if (!input.trim()) return setPreview(null);
+    const t = setTimeout(() => api.routePreview(input, useTools, tier).then(setPreview).catch(() => {}), 250);
+    return () => clearTimeout(t);
+  }, [input, tier, useTools]);
+
+  const runTools = async (calls: ToolCall[]): Promise<ChatMessage[]> => {
+    const results: ChatMessage[] = [];
+    for (const c of calls) {
+      const id = uid();
+      const meta = TOOL_META[c.function.name];
+      setTurns((ts) => [...ts, { id, kind: "tool", name: c.function.name, label: meta?.label ?? c.function.name, status: "running" }]);
+      try {
+        const plan = await api.planTool(c.function.name, c.function.arguments);
+        let out: string;
+        if (plan.risk === "workspace") {
+          out = await api.runWorkspaceTool(c.function.name, c.function.arguments);
+          if (c.function.name === "log_time") {
+            try {
+              s().alerts(JSON.parse(out).alerts ?? []);
+            } catch {
+              /* ignore */
+            }
+            s().bumpEntries();
+          }
+          update(id, { status: "done", summary: summarizeArgs(c) });
+        } else {
+          const ok = await new Promise<boolean>((resolve) => update(id, { status: "pending", summary: plan.summary, decide: resolve }));
+          if (!ok) {
+            update(id, { status: "rejected", decide: undefined });
+            out = "Der Nutzer hat die Ausführung abgelehnt.";
+          } else {
+            update(id, { status: "running", decide: undefined });
+            out = await api.runSystemTool(plan.call);
+            update(id, { status: "done", output: out });
+          }
+        }
+        results.push({ role: "tool", tool_call_id: c.id, content: out });
+      } catch (e) {
+        update(id, { status: "error", output: errorText(e) });
+        results.push({ role: "tool", tool_call_id: c.id, content: `Fehler: ${errorText(e)}` });
+      }
+    }
+    return results;
+  };
+
+  async function send(textArg?: string) {
+    const text = (textArg ?? input).trim();
+    if (!text || busy) return;
+    setInput("");
+    setBusy(true);
+    stick.current = true;
+    setTurns((ts) => [...ts, { id: uid(), kind: "user", text }]);
+    const turnStart = history.current.length;
+    history.current.push({ role: "user", content: text });
+    try {
+      for (let round = 0; round < 5; round++) {
+        const aid = uid();
+        const rid = crypto.randomUUID();
+        requestId.current = rid;
+        setTurns((ts) => [...ts, { id: aid, kind: "assistant", text: "", streaming: true }]);
+        const out = await api.chat({ requestId: rid, messages: history.current, useTools, tier, pageId: includePage && pageContext ? pageContext.id : null });
+        const c = out.completion;
+        requestId.current = null;
+        update(aid, {
+          text: c.content,
+          streaming: false,
+          cancelled: c.finish_reason === "cancelled",
+          sources: out.context.filter((x) => x.page_id != null || x.time_entry_id != null),
+          meta: {
+            model: out.route.model,
+            tier: out.route.tier,
+            ttft: c.usage.ttft_ms,
+            tps: c.usage.tokens_per_second,
+            tokens: c.usage.prompt_tokens + c.usage.completion_tokens,
+            cost: c.usage.cost_usd,
+            exact: c.exact_usage,
+            reasons: out.route.reasons,
+          },
+        });
+        s().set({ meter: out.meter });
+        history.current.push({ role: "assistant", content: c.content || null, tool_calls: c.tool_calls.length ? c.tool_calls : undefined });
+        if (!c.tool_calls.length || c.finish_reason === "cancelled") break;
+        if (!c.content) setTurns((ts) => ts.filter((t) => t.id !== aid));
+        history.current.push(...(await runTools(c.tool_calls)));
+      }
+    } catch (e) {
+      requestId.current = null;
+      setTurns((ts) => {
+        const last = ts[ts.length - 1];
+        if (last?.kind === "assistant" && last.streaming) return [...ts.slice(0, -1), { ...last, streaming: false, error: errorText(e) }];
+        return [...ts, { id: uid(), kind: "assistant", text: "", streaming: false, error: errorText(e) }];
+      });
+      history.current.length = turnStart;
+    } finally {
+      setBusy(false);
+      textarea.current?.focus();
+    }
+  }
+
+  const stop = () => requestId.current && api.cancelChat(requestId.current);
+  const newChat = () => {
+    if (busy) stop();
+    history.current = [];
+    setTurns([]);
+  };
+
+  const router = settings?.settings.router;
+  const tierOptions: { value: Tier | null; label: string; model?: string }[] = [
+    { value: null, label: "Automatisch", model: settings?.settings.auto_route === false ? router?.standard_model : "nach Aufgabe" },
+    { value: "local", label: "Lokal", model: router?.local_model },
+    { value: "standard", label: "Standard", model: router?.standard_model },
+    { value: "reasoning", label: "Reasoning", model: router?.reasoning_model },
+  ];
+  const currentTier = tierOptions.find((o) => o.value === tier) ?? tierOptions[0];
+
+  return (
+    <div className="assistant">
+      <div className="assistant-head">
+        <button
+          type="button"
+          className="model-pill"
+          onClick={(e) =>
+            openMenu(
+              { clientX: (e.currentTarget as HTMLElement).getBoundingClientRect().left, clientY: (e.currentTarget as HTMLElement).getBoundingClientRect().bottom + 4 },
+              [
+                ...tierOptions.map((o) => ({
+                  label: `${o.label}${o.model ? ` · ${o.model}` : ""}`,
+                  checked: o.value === tier,
+                  onSelect: () => {
+                    setTier(o.value);
+                    o.value ? localStorage.setItem("aether.tier", o.value) : localStorage.removeItem("aether.tier");
+                  },
+                })),
+                "separator" as const,
+                {
+                  label: useTools ? "Werkzeuge deaktivieren" : "Werkzeuge aktivieren",
+                  icon: Wrench,
+                  onSelect: () => {
+                    setUseTools(!useTools);
+                    localStorage.setItem("aether.tools", useTools ? "0" : "1");
+                  },
+                },
+                { label: "KI-Einstellungen", icon: Settings2, onSelect: () => s().openTab({ kind: "settings" }) },
+              ],
+            )
+          }
+        >
+          <Sparkles size={13} />
+          <span>{currentTier.label}</span>
+          {currentTier.value && <span className="faint mono">{currentTier.model}</span>}
+          <ChevronDown size={13} className="faint" />
+        </button>
+        <span className="grow" />
+        <IconButton icon={Plus} label="Neuer Chat" size={26} iconSize={15} onClick={newChat} />
+      </div>
+
+      <div
+        className="assistant-scroll"
+        ref={scroller}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+        }}
+        onClick={(e) => {
+          const a = (e.target as HTMLElement).closest<HTMLElement>("a[data-wikilink]");
+          if (a) {
+            e.preventDefault();
+            api.resolvePage(a.dataset.target!, false).then((p) => p && s().openPage(p.id, { newTab: e.ctrlKey || e.metaKey }));
+          }
+        }}
+      >
+        {turns.length === 0 ? (
+          <div className="assistant-empty">
+            <div className="assistant-empty-icon">
+              <Sparkles size={20} strokeWidth={1.5} />
+            </div>
+            <div className="assistant-empty-title">Wie kann ich helfen?</div>
+            <p className="faint">Ich kenne deine Notizen, Projekte und Zeitbuchungen und kann für dich buchen.</p>
+            {settings && !settings.api_key_set && (
+              <button type="button" className="setup-hint" onClick={() => s().openTab({ kind: "settings" })}>
+                <Settings2 size={14} /> LiteLLM-Server und Token in den Einstellungen verbinden
+              </button>
+            )}
+            <div className="suggestions">
+              {SUGGESTIONS.map((q) => (
+                <button key={q} type="button" className="ai-suggestion" onClick={() => send(q)}>
+                  {q}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          turns.map((t) => <TurnView key={t.id} turn={t} />)
+        )}
+      </div>
+
+      <div className="composer">
+        {pageContext && (
+          <div className="composer-context">
+            <button type="button" className={`context-chip ${includePage ? "" : "off"}`} onClick={() => setIncludePage(!includePage)} title={includePage ? "Seite wird mitgesendet" : "Seite wird nicht mitgesendet"}>
+              <FileText size={12} />
+              <span>{pageContext.title}</span>
+              {includePage ? <X size={11} /> : <Plus size={11} />}
+            </button>
+            {preview && (
+              <span className="route-hint" title={preview.reasons.join("\n")}>
+                <span className={`tier-dot tier-${preview.tier}`} /> {tierLabel[preview.tier]}
+              </span>
+            )}
+          </div>
+        )}
+        <div className="composer-box">
+          <textarea
+            ref={textarea}
+            rows={1}
+            value={input}
+            placeholder="Frage stellen oder Aufgabe beschreiben …"
+            aria-label="Nachricht an den Assistenten"
+            onChange={(e) => {
+              setInput(e.target.value);
+              e.target.style.height = "auto";
+              e.target.style.height = `${Math.min(e.target.scrollHeight, 180)}px`;
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                send();
+              }
+            }}
+          />
+          {busy ? (
+            <button type="button" className="send-btn stop" aria-label="Antwort stoppen" onClick={stop}>
+              <Square size={12} fill="currentColor" />
+            </button>
+          ) : (
+            <button type="button" className="send-btn" aria-label="Senden" disabled={!input.trim()} onClick={() => send()}>
+              <ArrowUp size={15} strokeWidth={2.25} />
+            </button>
+          )}
+        </div>
+        <div className="composer-foot faint">
+          <span>Enter senden · Shift Enter neue Zeile</span>
+          {!useTools && <span>Werkzeuge aus</span>}
+        </div>
+      </div>
+      {menu}
+    </div>
+  );
+}
+
+function summarizeArgs(c: ToolCall) {
+  try {
+    const a = JSON.parse(c.function.arguments);
+    return a.command ?? a.query ?? a.netzplan ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function TurnView({ turn }: { turn: Turn }) {
+  const s = useApp.getState;
+  const [copied, setCopied] = useState(false);
+  if (turn.kind === "user") return <div className="msg-user">{turn.text}</div>;
+
+  if (turn.kind === "tool") {
+    const Icon = TOOL_META[turn.name]?.icon ?? Wrench;
+    if (turn.status === "pending")
+      return (
+        <div className="tool-approval" role="alertdialog" aria-label="Freigabe erforderlich">
+          <div className="tool-approval-head">
+            <ShieldAlert size={15} />
+            <span>{turn.label}: Freigabe erforderlich</span>
+          </div>
+          <pre className="tool-approval-cmd">{turn.summary}</pre>
+          <div className="tool-approval-actions">
+            <Button size="sm" variant="ghost" onClick={() => turn.decide?.(false)}>
+              Ablehnen
+            </Button>
+            <Button size="sm" variant="primary" onClick={() => turn.decide?.(true)}>
+              Ausführen
+            </Button>
+          </div>
+        </div>
+      );
+    return (
+      <div className={`tool-step tool-${turn.status}`}>
+        <span className="tool-step-icon">{turn.status === "running" ? <Loader2 size={13} className="spin" /> : <Icon size={13} />}</span>
+        <span className="tool-step-label">{turn.label}</span>
+        {turn.summary && <span className="tool-step-arg mono">{turn.summary}</span>}
+        {turn.status === "done" && <Check size={13} className="tool-ok" />}
+        {turn.status === "rejected" && <span className="faint">abgelehnt</span>}
+        {turn.status === "error" && <span className="tool-err">{turn.output}</span>}
+        {turn.status === "done" && turn.output && <pre className="tool-output">{turn.output}</pre>}
+      </div>
+    );
+  }
+
+  const m = turn.meta;
+  return (
+    <div className="msg-ai">
+      {turn.error ? (
+        <div className="msg-error">
+          <div>Die Anfrage ist fehlgeschlagen.</div>
+          <div className="faint small mono">{turn.error}</div>
+          <Button size="sm" icon={Settings2} onClick={() => s().openTab({ kind: "settings" })}>
+            Verbindung prüfen
+          </Button>
+        </div>
+      ) : turn.streaming && !turn.text ? (
+        <div className="thinking">
+          <span />
+          <span />
+          <span />
+        </div>
+      ) : (
+        <div className={`prose prose-chat ${turn.streaming ? "streaming" : ""}`} dangerouslySetInnerHTML={{ __html: renderMarkdown(turn.text) }} />
+      )}
+      {turn.cancelled && <div className="faint small">Abgebrochen</div>}
+      {!turn.streaming && !turn.error && turn.sources && turn.sources.length > 0 && (
+        <div className="sources">
+          <span className="sources-label">Quellen</span>
+          {dedupeSources(turn.sources).slice(0, 3).map((src, i) => (
+            <button
+              key={i}
+              type="button"
+              className="source"
+              title={src.text.slice(0, 300)}
+              onClick={() => (src.page_id != null ? s().openPage(src.page_id) : s().openTab({ kind: "timesheet" }))}
+            >
+              {src.page_id != null ? <FileText size={11} /> : <Timer size={11} />}
+              {src.source.replace(/^Seite: /, "")}
+            </button>
+          ))}
+        </div>
+      )}
+      {m && !turn.streaming && (
+        <div className="msg-meta">
+          <span className="msg-meta-stats">
+            <span title={m.reasons.join("\n")}>
+              <span className={`tier-dot tier-${m.tier}`} /> {m.model}
+            </span>
+            {m.ttft != null && <span title="Zeit bis zum ersten Token">{h1(m.ttft / 1000)} s</span>}
+            {m.tps != null && <span title="Tokens pro Sekunde">{Math.round(m.tps)} t/s</span>}
+            <span>
+              {m.tokens.toLocaleString("de-DE")} Tokens{m.exact ? "" : " (geschätzt)"}
+            </span>
+            {m.cost > 0 && <span>${m.cost.toFixed(4)}</span>}
+          </span>
+          <span className="msg-actions">
+          <IconButton
+            icon={copied ? Check : Copy}
+            label="Kopieren"
+            size={22}
+            iconSize={12}
+            tooltipSide="top"
+            onClick={() => {
+              navigator.clipboard.writeText(turn.text);
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1200);
+            }}
+          />
+          <IconButton
+            icon={FilePlus2}
+            label="Als Seite speichern"
+            size={22}
+            iconSize={12}
+            tooltipSide="top"
+            onClick={async () => {
+              const title = turn.text.split("\n").find((l) => l.trim())?.replace(/^#+\s*/, "").slice(0, 60) || "Antwort";
+              const p = await api.createPage(title, null, "sparkles", turn.text);
+              await s().refreshTree();
+              s().openPage(p.id, { newTab: true });
+            }}
+          />
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function dedupeSources(src: ContextChunk[]) {
+  const seen = new Set<string>();
+  return src.filter((x) => {
+    const k = x.page_id != null ? `p${x.page_id}` : `t${x.time_entry_id}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}

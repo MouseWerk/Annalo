@@ -1,0 +1,304 @@
+// Ctrl K: commands, pages, full-text search, "/zeit …" booking and "? question".
+// Ctrl O: quick switcher (pages only).
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  ArrowRight, Briefcase, CalendarCheck2, Download, FilePlus2, FolderInput, Hash, Moon, PanelLeft, PanelRight, RefreshCw, Search, Settings, Sparkles, Square, Timer, Play, Focus,
+} from "lucide-react";
+import { api } from "../lib/api";
+import { useApp, savePref } from "../store/app";
+import { PageIcon } from "./icons";
+import { createSubpage } from "../views/PageView";
+import { stopTimer } from "./Sidebar";
+import { hoursFromMinutes } from "../lib/format";
+import type { SearchHit } from "../lib/types";
+import { importVault, exportVault, toggleTheme } from "../lib/actions";
+
+interface Item {
+  id: string;
+  section: string;
+  title: string;
+  subtitle?: string;
+  snippet?: string;
+  icon: React.ReactNode;
+  hint?: string;
+  run: (newTab: boolean) => void;
+}
+
+/** Subsequence match score: prefers prefix and word-start matches. */
+function fuzzy(text: string, q: string): number {
+  if (!q) return 1;
+  const t = text.toLowerCase();
+  const i = t.indexOf(q);
+  if (i === 0) return 100 - t.length / 100;
+  if (i > 0) return (/[\s\-_/.]/.test(t[i - 1]) ? 80 : 60) - t.length / 100;
+  let ti = 0;
+  for (const c of q) {
+    ti = t.indexOf(c, ti);
+    if (ti < 0) return 0;
+    ti++;
+  }
+  return 20 - t.length / 100;
+}
+
+const ic = (C: typeof Search) => <C size={16} strokeWidth={1.75} />;
+
+export function CommandPalette() {
+  const open = useApp((s) => s.paletteOpen);
+  const mode = useApp((s) => s.paletteMode);
+  const initial = useApp((s) => s.paletteQuery);
+  const pages = useApp((s) => s.pages);
+  const timer = useApp((s) => s.timer);
+  const [q, setQ] = useState("");
+  const [sel, setSel] = useState(0);
+  const [hits, setHits] = useState<SearchHit[]>([]);
+  const input = useRef<HTMLInputElement>(null);
+  const list = useRef<HTMLDivElement>(null);
+  const s = useApp.getState;
+
+  useEffect(() => {
+    if (open) {
+      setQ(initial);
+      setSel(0);
+      setHits([]);
+      setTimeout(() => input.current?.focus(), 10);
+    }
+  }, [open, initial]);
+
+  const query = q.trim();
+  useEffect(() => {
+    if (!open || mode === "pages" || query.length < 2 || query.startsWith("/") || query.startsWith("?")) {
+      setHits([]);
+      return;
+    }
+    let alive = true;
+    const t = setTimeout(() => api.search(query, 12).then((h) => alive && setHits(h)).catch(() => {}), 90);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [query, open, mode]);
+
+  const close = () => s().set({ paletteOpen: false });
+
+  const items = useMemo<Item[]>(() => {
+    const out: Item[] = [];
+    const lower = query.toLowerCase();
+
+    if (mode === "all" && /^\/(zeit|time)\b/i.test(query)) {
+      out.push({
+        id: "zeit",
+        section: "Zeiterfassung",
+        title: `Buchen: ${query.replace(/^\/(zeit|time)\s*/i, "") || "…"}`,
+        subtitle: "Netzplan/Vorgang Dauer #Leistungsart Beschreibung",
+        icon: ic(Timer),
+        hint: "Enter",
+        run: async () => {
+          try {
+            const out2 = await api.logTime(query);
+            s().toast({ tone: "success", title: `${hoursFromMinutes(out2.entry.duration_minutes)} h gebucht`, detail: out2.entry.description || undefined });
+            s().alerts(out2.alerts);
+            s().bumpEntries();
+          } catch (e) {
+            s().error("Buchung fehlgeschlagen", e);
+          }
+        },
+      });
+      return out;
+    }
+    if (mode === "all" && query.startsWith("?")) {
+      const question = query.slice(1).trim();
+      out.push({
+        id: "ask",
+        section: "Assistent",
+        title: question ? `Fragen: ${question}` : "Frage an den Assistenten …",
+        icon: ic(Sparkles),
+        hint: "Enter",
+        run: () => {
+          if (!question) return;
+          s().set({ panelOpen: true, panelTab: "assistant" });
+          window.dispatchEvent(new CustomEvent("aether:ask", { detail: question }));
+        },
+      });
+      return out;
+    }
+
+    const pageItems = [...pages.values()]
+      .map((p) => {
+        const score = fuzzy(p.title, lower);
+        return { p, score: score > 0 ? score + (p.favorite ? 5 : 0) : 0 };
+      })
+      .filter((x) => x.score > 0)
+      .sort((a, b) => b.score - a.score || b.p.updated_at.localeCompare(a.p.updated_at))
+      .slice(0, lower ? 8 : 6)
+      .map(({ p }) => ({
+        id: `page-${p.id}`,
+        section: lower ? "Seiten" : "Zuletzt bearbeitet",
+        title: p.title,
+        subtitle: p.parent_id != null ? pages.get(p.parent_id)?.title : undefined,
+        icon: <PageIcon name={p.icon} size={16} />,
+        run: (newTab: boolean) => s().openPage(p.id, { newTab }),
+      }));
+    if (!lower) pageItems.sort((a, b) => (pages.get(+b.id.slice(5))!.updated_at).localeCompare(pages.get(+a.id.slice(5))!.updated_at));
+    out.push(...pageItems);
+
+    if (mode === "pages") {
+      if (lower && !pageItems.some((p) => p.title.toLowerCase() === lower))
+        out.push({ id: "create", section: "Neu", title: `„${query}“ anlegen`, icon: ic(FilePlus2), run: () => createSubpage(null, query) });
+      return out;
+    }
+
+    const commands: Omit<Item, "section">[] = [
+      { id: "new", title: "Neue Seite", icon: ic(FilePlus2), hint: "Ctrl N", run: () => createSubpage(null) },
+      {
+        id: "today",
+        title: "Heutige Tagesnotiz",
+        icon: ic(CalendarCheck2),
+        hint: "Ctrl Shift D",
+        run: async () => {
+          const p = await api.dailyNote();
+          await s().refreshTree();
+          s().openPage(p.id);
+        },
+      },
+      timer
+        ? { id: "timer", title: "Timer stoppen", icon: ic(Square), hint: "Ctrl Shift T", run: () => stopTimer() }
+        : { id: "timer", title: "Timer starten", icon: ic(Play), hint: "Ctrl Shift T", run: () => s().openTab({ kind: "timesheet" }) },
+      { id: "timesheet", title: "Zeiterfassung öffnen", icon: ic(Timer), run: () => s().openTab({ kind: "timesheet" }) },
+      { id: "projects", title: "Projekte öffnen", icon: ic(Briefcase), run: () => s().openTab({ kind: "projects" }) },
+      { id: "assistant", title: "Assistent fragen", icon: ic(Sparkles), hint: "Ctrl J", run: () => { s().set({ panelOpen: true, panelTab: "assistant" }); setTimeout(() => document.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus(), 50); } },
+      { id: "settings", title: "Einstellungen", icon: ic(Settings), hint: "Ctrl ,", run: () => s().openTab({ kind: "settings" }) },
+      { id: "sidebar", title: "Seitenleiste umschalten", icon: ic(PanelLeft), hint: "Ctrl \\", run: () => { const v = !s().sidebarOpen; s().set({ sidebarOpen: v }); savePref("aether.sidebar", v); } },
+      { id: "panel", title: "Seitenpanel umschalten", icon: ic(PanelRight), hint: "Ctrl Shift \\", run: () => { const v = !s().panelOpen; s().set({ panelOpen: v }); savePref("aether.panel", v); } },
+      { id: "focus", title: "Fokusmodus", icon: ic(Focus), hint: "Ctrl .", run: () => s().set({ focusMode: !s().focusMode }) },
+      { id: "theme", title: "Hell / Dunkel wechseln", icon: ic(Moon), run: () => toggleTheme() },
+      { id: "import", title: "Obsidian-Vault importieren", icon: ic(FolderInput), run: () => importVault() },
+      { id: "export", title: "Als Markdown-Ordner exportieren", icon: ic(Download), run: () => exportVault() },
+      {
+        id: "index",
+        title: "Semantischen Suchindex aktualisieren",
+        icon: ic(RefreshCw),
+        run: async () => {
+          try {
+            const n = await api.indexPending();
+            s().toast({ tone: "success", title: "Suchindex aktualisiert", detail: `${n} Abschnitte eingebettet` });
+          } catch (e) {
+            s().error("Index nicht aktualisiert", e);
+          }
+        },
+      },
+    ];
+    out.push(
+      ...commands
+        .map((c) => ({ c, score: fuzzy(c.title, lower) }))
+        .filter((x) => x.score > 0)
+        .sort((a, b) => (lower ? b.score - a.score : 0))
+        .slice(0, lower ? 5 : 20)
+        .map(({ c }) => ({ ...c, section: "Befehle" })),
+    );
+
+    for (const h of hits) {
+      if (h.kind === "note")
+        out.push({ id: `note-${h.page_id}`, section: "Inhalte", title: h.title, snippet: h.snippet, icon: <PageIcon name={h.icon} size={16} />, run: (nt) => s().openPage(h.page_id, { newTab: nt }) });
+      else if (h.kind === "time_entry")
+        out.push({ id: `te-${h.id}`, section: "Zeiteinträge", title: `${h.netzplan_nr}${h.vorgang_nr ? "/" + h.vorgang_nr : ""}`, snippet: h.snippet, icon: ic(Timer), run: () => s().openTab({ kind: "timesheet" }) });
+    }
+    if (lower && !pageItems.some((p) => p.title.toLowerCase() === lower))
+      out.push({ id: "create", section: "Neu", title: `Seite „${query}“ anlegen`, icon: ic(FilePlus2), run: () => createSubpage(null, query) });
+    const tagHits = lower.startsWith("#") ? lower.slice(1) : null;
+    if (tagHits) out.unshift({ id: "tag", section: "Tags", title: `#${tagHits}`, icon: ic(Hash), run: () => s().openTab({ kind: "tag", tag: tagHits }) });
+    return out;
+  }, [query, pages, hits, mode, timer]);
+
+  useEffect(() => setSel((v) => Math.min(v, Math.max(0, items.length - 1))), [items.length]);
+  useEffect(() => {
+    list.current?.querySelector(".pal-item.sel")?.scrollIntoView({ block: "nearest" });
+  }, [sel]);
+
+  if (!open) return null;
+
+  const run = (i: number, newTab = false) => {
+    const it = items[i];
+    if (!it) return;
+    close();
+    it.run(newTab);
+  };
+
+  let lastSection = "";
+  return (
+    <div className="overlay overlay-top" onMouseDown={(e) => e.target === e.currentTarget && close()}>
+      <div className="palette" role="dialog" aria-modal="true" aria-label="Befehlspalette">
+        <div className="pal-input">
+          <Search size={16} className="faint" />
+          <input
+            ref={input}
+            value={q}
+            placeholder={mode === "pages" ? "Seite öffnen …" : "Suchen, Befehl, /zeit buchen oder ? fragen"}
+            onChange={(e) => {
+              setQ(e.target.value);
+              setSel(0);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "ArrowDown") {
+                e.preventDefault();
+                setSel((v) => (v + 1) % Math.max(items.length, 1));
+              } else if (e.key === "ArrowUp") {
+                e.preventDefault();
+                setSel((v) => (v - 1 + items.length) % Math.max(items.length, 1));
+              } else if (e.key === "Enter") {
+                e.preventDefault();
+                run(sel, e.ctrlKey || e.metaKey);
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                close();
+              }
+            }}
+            aria-label="Suche"
+            spellCheck={false}
+          />
+          <kbd>Esc</kbd>
+        </div>
+        <div className="pal-list" ref={list} role="listbox">
+          {items.length === 0 && <div className="pal-empty">Keine Ergebnisse</div>}
+          {items.map((it, i) => {
+            const header = it.section !== lastSection ? it.section : null;
+            lastSection = it.section;
+            return (
+              <div key={it.id + i}>
+                {header && <div className="pal-section">{header}</div>}
+                <div
+                  role="option"
+                  aria-selected={i === sel}
+                  className={`pal-item ${i === sel ? "sel" : ""}`}
+                  onMouseMove={() => sel !== i && setSel(i)}
+                  onClick={(e) => run(i, e.ctrlKey || e.metaKey)}
+                >
+                  <span className="pal-icon">{it.icon}</span>
+                  <span className="pal-text">
+                    <span className="pal-title">
+                      {it.title}
+                      {it.subtitle && <span className="pal-sub">{it.subtitle}</span>}
+                    </span>
+                    {it.snippet && <span className="pal-snippet" dangerouslySetInnerHTML={{ __html: snippetHtml(it.snippet) }} />}
+                  </span>
+                  {it.hint ? <kbd>{it.hint}</kbd> : i === sel ? <ArrowRight size={14} className="faint" /> : null}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div className="pal-foot">
+          <span><kbd>↑</kbd><kbd>↓</kbd> wählen</span>
+          <span><kbd>Enter</kbd> öffnen</span>
+          <span><kbd>Ctrl Enter</kbd> neuer Tab</span>
+          <span className="grow" />
+          <span className="faint">/zeit buchen · ? fragen · # Tag</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+/** FTS snippets mark hits as [term]. */
+const snippetHtml = (sn: string) => esc(sn).replace(/\[([^\]]*)\]/g, "<mark>$1</mark>");

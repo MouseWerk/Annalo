@@ -1,105 +1,92 @@
 //! AETHER OS desktop shell: exposes `aether-core` to the web UI over Tauri IPC.
 
-use std::path::Path;
-use std::sync::{Mutex, MutexGuard};
-use std::time::Duration;
+mod secrets;
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex, MutexGuard, RwLock};
+use std::time::{Duration, Instant};
 
 use aether_core::activity::{self, IdleAccumulator, WindowUsage};
 use aether_core::ai::LiteLlmClient;
-use aether_core::ai::client::{ChatMessage, ChatRequest, Completion};
-use aether_core::ai::metrics::{PriceTable, SessionMeter};
+use aether_core::ai::client::{ChatMessage, ChatRequest, Completion, StreamEvent};
+use aether_core::ai::metrics::SessionMeter;
 use aether_core::ai::rag::{self, ContextChunk};
-use aether_core::ai::router::{self, ModelRouter, RouteDecision, RouteInput, RouterConfig};
+use aether_core::ai::router::{ModelRouter, RouteDecision, RouteInput, RouterConfig, Tier};
 use aether_core::ai::tools::{self, Risk, SystemCall};
 use aether_core::db::EntryFilter;
 use aether_core::export::{self, ExportFormat, ExportOptions, ExportResult};
-use aether_core::graph::{self, PageGraph};
 use aether_core::model::*;
 use aether_core::netzplan::{self, Schedule};
+use aether_core::notes::PageDoc;
 use aether_core::search::{self, SearchHit};
-use aether_core::tracking::{self, BudgetStatus, LogOutcome, Thresholds};
+use aether_core::settings::Settings;
+use aether_core::tracking::{self, BudgetStatus, LogOutcome};
+use aether_core::vault::{self, ImportReport};
 use aether_core::{Database, Error, demo};
-use chrono::{DateTime, FixedOffset, Local, Offset, Utc};
+use chrono::{DateTime, FixedOffset, Local, NaiveDate, Offset, Utc};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
+use secrets::SecretStore;
+
 type Result<T> = std::result::Result<T, Error>;
-
-// ------------------------------------------------------------------- config
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Config {
-    /// Root of the LiteLLM proxy.
-    pub litellm_base_url: String,
-    /// Name of the environment variable holding the proxy key (never stored in the file).
-    pub litellm_api_key_env: String,
-    /// Embedding model for local RAG; `None` = keyword retrieval only.
-    pub embedding_model: Option<String>,
-    pub router: RouterConfig,
-    pub prices: PriceTable,
-    pub thresholds: Thresholds,
-    /// Pauses longer than this are subtracted from running timers.
-    pub idle_threshold_minutes: u64,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            litellm_base_url: "http://localhost:4000".into(),
-            litellm_api_key_env: "LITELLM_API_KEY".into(),
-            embedding_model: None,
-            router: RouterConfig::default(),
-            prices: PriceTable::default(),
-            thresholds: Thresholds::default(),
-            idle_threshold_minutes: 5,
-        }
-    }
-}
-
-impl Config {
-    fn load_or_create(dir: &Path) -> std::result::Result<Self, Box<dyn std::error::Error>> {
-        let path = dir.join("aether.config.json");
-        if path.exists() {
-            Ok(serde_json::from_str(&std::fs::read_to_string(path)?)?)
-        } else {
-            let c = Config::default();
-            std::fs::write(path, serde_json::to_string_pretty(&c)?)?;
-            Ok(c)
-        }
-    }
-}
 
 // -------------------------------------------------------------------- state
 
+/// AI configuration derived from the settings; rebuilt when they change.
+struct AiRuntime {
+    settings: Settings,
+    client: Arc<LiteLlmClient>,
+    router: Arc<ModelRouter>,
+}
+
+impl AiRuntime {
+    fn new(settings: Settings, api_key: Option<String>) -> Self {
+        let client = LiteLlmClient::new(settings.litellm_base_url.clone(), api_key);
+        AiRuntime { client: Arc::new(client), router: Arc::new(ModelRouter::new(settings.router.clone())), settings }
+    }
+}
+
 pub struct AppState {
     db: Mutex<Database>,
-    config: Config,
-    client: LiteLlmClient,
-    router: ModelRouter,
+    ai: RwLock<AiRuntime>,
+    secrets: SecretStore,
+    data_dir: PathBuf,
     meter: Mutex<SessionMeter>,
     session_id: String,
     idle: Mutex<IdleAccumulator>,
     usage: Mutex<WindowUsage>,
+    cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
+}
+
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    // A panic while holding the lock leaves SQLite consistent (transactions roll back).
+    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 impl AppState {
     fn db(&self) -> MutexGuard<'_, Database> {
-        // A panic while holding the lock leaves SQLite consistent (transactions roll back).
-        self.db.lock().unwrap_or_else(|e| e.into_inner())
+        lock(&self.db)
     }
-}
-
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+    fn settings(&self) -> Settings {
+        self.ai.read().unwrap_or_else(|e| e.into_inner()).settings.clone()
+    }
+    fn client(&self) -> Arc<LiteLlmClient> {
+        self.ai.read().unwrap_or_else(|e| e.into_inner()).client.clone()
+    }
+    fn router(&self) -> Arc<ModelRouter> {
+        self.ai.read().unwrap_or_else(|e| e.into_inner()).router.clone()
+    }
 }
 
 fn local_offset() -> FixedOffset {
     Local::now().offset().fix()
 }
 
-// ------------------------------------------------------------ pages/blocks
+// ------------------------------------------------------------------- pages
 
 #[tauri::command]
 fn workspace_tree(state: State<AppState>) -> Result<Vec<PageNode>> {
@@ -107,51 +94,123 @@ fn workspace_tree(state: State<AppState>) -> Result<Vec<PageNode>> {
 }
 
 #[tauri::command]
-fn page_blocks(state: State<AppState>, page_id: i64) -> Result<Vec<Block>> {
-    state.db().list_blocks(page_id)
+fn page_get(state: State<AppState>, id: i64) -> Result<PageDoc> {
+    state.db().page_doc(id)
 }
 
 #[tauri::command]
-fn create_page(state: State<AppState>, parent_id: Option<i64>, title: String, icon: Option<String>) -> Result<Page> {
-    state.db().create_page(parent_id, &title, icon.as_deref())
+fn page_save(state: State<AppState>, id: i64, content: String) -> Result<PageDoc> {
+    let db = state.db();
+    db.save_page_content(id, &content)?;
+    db.page_doc(id)
 }
 
 #[tauri::command]
-fn rename_page(state: State<AppState>, id: i64, title: String) -> Result<()> {
-    state.db().rename_page(id, &title)
+fn page_create(
+    state: State<AppState>,
+    parent_id: Option<i64>,
+    title: String,
+    icon: Option<String>,
+    content: Option<String>,
+) -> Result<Page> {
+    let db = state.db();
+    // Avoid duplicate titles so [[links]] stay unambiguous.
+    let mut name = title.trim().to_owned();
+    let base = name.clone();
+    let mut n = 2;
+    while db.page_by_title(&name)?.is_some() {
+        name = format!("{base} {n}");
+        n += 1;
+    }
+    let page = db.create_page(parent_id, &name, icon.as_deref())?;
+    if let Some(c) = content {
+        db.save_page_content(page.id, &c)?;
+    }
+    Ok(page)
 }
 
 #[tauri::command]
-fn delete_page(state: State<AppState>, id: i64) -> Result<()> {
+fn page_rename(state: State<AppState>, id: i64, title: String, update_links: bool) -> Result<usize> {
+    let db = state.db();
+    if let Some(other) = db.page_by_title(&title)?
+        && other.id != id
+    {
+        return Err(Error::State(format!("Eine Seite „{}“ existiert bereits", other.title)));
+    }
+    db.rename_page_linked(id, &title, update_links)
+}
+
+#[tauri::command]
+fn page_delete(state: State<AppState>, id: i64) -> Result<()> {
     state.db().delete_page(id)
 }
 
 #[tauri::command]
-fn add_block(state: State<AppState>, page_id: i64, block_type: String, content: String) -> Result<Block> {
-    state.db().add_block(page_id, &block_type, &content)
+fn page_move(state: State<AppState>, id: i64, parent_id: Option<i64>, position: i64) -> Result<()> {
+    state.db().move_page(id, parent_id, position)
 }
 
 #[tauri::command]
-fn update_block(state: State<AppState>, id: i64, block_type: String, content: String) -> Result<Block> {
-    state.db().update_block(id, &block_type, &content)
+fn page_set_favorite(state: State<AppState>, id: i64, favorite: bool) -> Result<()> {
+    state.db().set_favorite(id, favorite)
 }
 
 #[tauri::command]
-fn delete_block(state: State<AppState>, id: i64) -> Result<()> {
-    state.db().delete_block(id)
+fn page_set_icon(state: State<AppState>, id: i64, icon: Option<String>) -> Result<()> {
+    state.db().set_page_icon(id, icon.as_deref())
+}
+
+/// Resolves a [[link]] target; with `create`, a missing page is created at the top level.
+#[tauri::command]
+fn page_resolve(state: State<AppState>, title: String, create: bool) -> Result<Option<Page>> {
+    let db = state.db();
+    match db.page_by_title(&title)? {
+        Some(p) => Ok(Some(p)),
+        None if create => Ok(Some(db.create_page(None, &title, Some("file-text"))?)),
+        None => Ok(None),
+    }
 }
 
 #[tauri::command]
-fn search_workspace(state: State<AppState>, query: String) -> Result<Vec<SearchHit>> {
-    search::search(&state.db(), &query, 30)
+fn recent_pages(state: State<AppState>, limit: usize) -> Result<Vec<Page>> {
+    state.db().recent_pages(limit)
 }
 
 #[tauri::command]
-fn page_graph(state: State<AppState>) -> Result<PageGraph> {
-    graph::page_graph(&state.db())
+fn daily_note(state: State<AppState>, date: Option<NaiveDate>) -> Result<Page> {
+    state.db().daily_note(date.unwrap_or_else(|| Local::now().date_naive()))
 }
 
-// ---------------------------------------------------------- time tracking
+#[tauri::command]
+fn tags_list(state: State<AppState>) -> Result<Vec<(String, i64)>> {
+    state.db().tag_counts()
+}
+
+#[tauri::command]
+fn tag_pages(state: State<AppState>, tag: String) -> Result<Vec<Page>> {
+    state.db().pages_with_tag(&tag)
+}
+
+#[tauri::command]
+fn search_workspace(state: State<AppState>, query: String, limit: Option<usize>) -> Result<Vec<SearchHit>> {
+    search::search(&state.db(), &query, limit.unwrap_or(30))
+}
+
+#[tauri::command]
+fn vault_import(state: State<AppState>, path: String) -> Result<ImportReport> {
+    let dir = PathBuf::from(&path);
+    if !dir.is_dir() {
+        return Err(Error::State(format!("„{path}“ ist kein Ordner")));
+    }
+    vault::import_vault(&state.db(), &dir)
+}
+
+#[tauri::command]
+fn vault_export(state: State<AppState>, path: String) -> Result<usize> {
+    vault::export_vault(&state.db(), &PathBuf::from(path))
+}
+
+// --------------------------------------------------------------------- WBS
 
 #[derive(Serialize)]
 struct NetzplanTree {
@@ -167,7 +226,7 @@ struct ProjectTree {
     netzplaene: Vec<NetzplanTree>,
 }
 
-/// Projects → Netzpläne → Vorgänge, for the WBS selector.
+/// Projects → Netzpläne → Vorgänge.
 #[tauri::command]
 fn wbs_tree(state: State<AppState>) -> Result<Vec<ProjectTree>> {
     let db = state.db();
@@ -184,9 +243,59 @@ fn wbs_tree(state: State<AppState>) -> Result<Vec<ProjectTree>> {
         .collect()
 }
 
-/// Adds a Vorgang to a Netzplan; `predecessors` are Vorgang numbers of the same Netzplan.
+fn required(value: &str, what: &str) -> Result<String> {
+    let v = value.trim();
+    if v.is_empty() { Err(Error::State(format!("{what} fehlt"))) } else { Ok(v.to_owned()) }
+}
+
 #[tauri::command]
-fn create_vorgang(
+fn project_create(state: State<AppState>, code: String, name: String) -> Result<Project> {
+    state.db().create_project(&required(&code, "Projekt-ID")?, &required(&name, "Name")?)
+}
+
+#[tauri::command]
+fn project_update(state: State<AppState>, id: i64, name: String) -> Result<()> {
+    state.db().update_project(id, &required(&name, "Name")?)
+}
+
+#[tauri::command]
+fn project_delete(state: State<AppState>, id: i64) -> Result<()> {
+    state.db().delete_project(id)
+}
+
+#[tauri::command]
+fn netzplan_create(
+    state: State<AppState>,
+    project_id: i64,
+    netzplan_nr: String,
+    wbs_element: String,
+    description: String,
+    planned_hours: f64,
+) -> Result<Netzplan> {
+    let nr = required(&netzplan_nr, "Netzplan-Nr.")?;
+    let wbs = if wbs_element.trim().is_empty() { nr.clone() } else { wbs_element.trim().to_owned() };
+    state.db().create_netzplan(project_id, &nr, &wbs, description.trim(), planned_hours.max(0.0))
+}
+
+#[tauri::command]
+fn netzplan_update(
+    state: State<AppState>,
+    id: i64,
+    wbs_element: String,
+    description: String,
+    planned_hours: f64,
+) -> Result<()> {
+    state.db().update_netzplan(id, &wbs_element, &description, planned_hours.max(0.0))
+}
+
+#[tauri::command]
+fn netzplan_delete(state: State<AppState>, id: i64) -> Result<()> {
+    state.db().delete_netzplan(id)
+}
+
+/// Adds a Vorgang; `predecessors` are Vorgang numbers of the same Netzplan.
+#[tauri::command]
+fn vorgang_create(
     state: State<AppState>,
     netzplan_id: i64,
     vorgang_nr: String,
@@ -195,10 +304,7 @@ fn create_vorgang(
     planned_hours: f64,
     predecessors: Vec<String>,
 ) -> Result<Vorgang> {
-    let vorgang_nr = vorgang_nr.trim();
-    if vorgang_nr.is_empty() {
-        return Err(Error::State("Vorgangsnummer fehlt".into()));
-    }
+    let nr = required(&vorgang_nr, "Vorgangsnummer")?;
     let db = state.db();
     let existing = db.list_vorgaenge(netzplan_id)?;
     let preds: Vec<i64> = predecessors
@@ -211,18 +317,56 @@ fn create_vorgang(
                 .ok_or_else(|| Error::not_found("vorgang", p.clone()))
         })
         .collect::<Result<_>>()?;
-    // A new Vorgang has no successors, so linking it cannot create a cycle.
-    let mut v = db.create_vorgang(netzplan_id, vorgang_nr, description.trim(), duration_days, planned_hours)?;
-    for p in preds {
-        db.link_vorgaenge(p, v.id)?;
-        v.predecessors.push(p);
-    }
-    Ok(v)
+    db.atomic(|| {
+        // A new Vorgang has no successors, so linking it cannot create a cycle.
+        let mut v =
+            db.create_vorgang(netzplan_id, &nr, description.trim(), duration_days.max(0.0), planned_hours.max(0.0))?;
+        for p in preds {
+            db.link_vorgaenge(p, v.id)?;
+            v.predecessors.push(p);
+        }
+        Ok(v)
+    })
 }
 
 #[tauri::command]
+fn vorgang_update(
+    state: State<AppState>,
+    id: i64,
+    description: String,
+    duration_days: f64,
+    planned_hours: f64,
+    remaining_hours: Option<f64>,
+) -> Result<()> {
+    state.db().update_vorgang(id, &description, duration_days.max(0.0), planned_hours.max(0.0), remaining_hours)
+}
+
+#[tauri::command]
+fn vorgang_delete(state: State<AppState>, id: i64) -> Result<()> {
+    state.db().delete_vorgang(id)
+}
+
+#[tauri::command]
+fn leistungsarten_list(state: State<AppState>) -> Result<Vec<(String, String)>> {
+    state.db().list_leistungsarten()
+}
+
+#[tauri::command]
+fn leistungsart_save(state: State<AppState>, code: String, description: String) -> Result<()> {
+    state.db().upsert_leistungsart(&code, &description)
+}
+
+#[tauri::command]
+fn leistungsart_delete(state: State<AppState>, code: String) -> Result<()> {
+    state.db().delete_leistungsart(&code)
+}
+
+// ---------------------------------------------------------- time tracking
+
+#[tauri::command]
 fn log_time(state: State<AppState>, line: String) -> Result<LogOutcome> {
-    tracking::log_slash_command(&state.db(), &line, Utc::now(), local_offset(), &state.config.thresholds)
+    let t = state.settings().thresholds;
+    tracking::log_slash_command(&state.db(), &line, Utc::now(), local_offset(), &t)
 }
 
 #[derive(Serialize)]
@@ -241,6 +385,7 @@ fn timer_status(state: State<AppState>) -> Result<Option<TimerStatus>> {
 
 #[tauri::command]
 fn timer_start(
+    app: AppHandle,
     state: State<AppState>,
     netzplan_id: i64,
     vorgang_nr: Option<String>,
@@ -255,6 +400,7 @@ fn timer_start(
         Utc::now(),
     )?;
     lock(&state.idle).reset();
+    let _ = app.emit("data://entries", ());
     Ok(e)
 }
 
@@ -263,23 +409,33 @@ struct StopOutcome {
     entry: TimeEntry,
     idle_minutes: i64,
     alerts: Vec<BudgetStatus>,
+    /// True when less than a minute was recorded and nothing was booked.
+    discarded: bool,
 }
 
 /// Stops the timer. With `subtract_idle` the detected idle time is not booked.
 #[tauri::command]
-fn timer_stop(state: State<AppState>, subtract_idle: bool) -> Result<StopOutcome> {
+fn timer_stop(app: AppHandle, state: State<AppState>, subtract_idle: bool) -> Result<StopOutcome> {
     let now = Utc::now();
     let idle_minutes = lock(&state.idle).idle_minutes(now);
+    let thresholds = state.settings().thresholds;
     let db = state.db();
     let entry = db.stop_timer(now, if subtract_idle { idle_minutes } else { 0 })?;
     lock(&state.idle).reset();
-    let alerts = tracking::alerts_for(&db, entry.netzplan_id, entry.vorgang_nr.as_deref(), &state.config.thresholds)?;
-    Ok(StopOutcome { entry, idle_minutes, alerts })
+    let _ = app.emit("data://entries", ());
+    if entry.duration_minutes.unwrap_or(0) < 1 {
+        db.delete_time_entry(entry.id)?;
+        return Ok(StopOutcome { entry, idle_minutes, alerts: vec![], discarded: true });
+    }
+    let alerts = tracking::alerts_for(&db, entry.netzplan_id, entry.vorgang_nr.as_deref(), &thresholds)?;
+    Ok(StopOutcome { entry, idle_minutes, alerts, discarded: false })
 }
 
 #[tauri::command]
-fn timer_discard(state: State<AppState>) -> Result<()> {
-    state.db().discard_timer()
+fn timer_discard(app: AppHandle, state: State<AppState>) -> Result<()> {
+    state.db().discard_timer()?;
+    let _ = app.emit("data://entries", ());
+    Ok(())
 }
 
 #[tauri::command]
@@ -289,6 +445,55 @@ fn time_entries(
     to: Option<DateTime<Utc>>,
 ) -> Result<Vec<TimeEntryRow>> {
     state.db().list_time_entries(&EntryFilter { from, to, ..Default::default() })
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn time_entry_create(
+    state: State<AppState>,
+    netzplan_id: i64,
+    vorgang_nr: Option<String>,
+    leistungsart: Option<String>,
+    start_time: DateTime<Utc>,
+    duration_minutes: i64,
+    description: String,
+) -> Result<LogOutcome> {
+    if !(1..=24 * 60).contains(&duration_minutes) {
+        return Err(Error::State("Dauer muss zwischen 1 Minute und 24 Stunden liegen".into()));
+    }
+    let t = state.settings().thresholds;
+    let db = state.db();
+    let entry = db.insert_time_entry(&NewTimeEntry {
+        netzplan_id,
+        vorgang_nr: vorgang_nr.filter(|v| !v.is_empty()),
+        leistungsart: leistungsart.filter(|v| !v.is_empty()),
+        start_time,
+        duration_minutes,
+        description,
+        source: EntrySource::Manual,
+    })?;
+    let alerts = tracking::alerts_for(&db, entry.netzplan_id, entry.vorgang_nr.as_deref(), &t)?;
+    Ok(LogOutcome { entry, alerts })
+}
+
+#[tauri::command]
+fn time_entry_update(
+    state: State<AppState>,
+    id: i64,
+    vorgang_nr: Option<String>,
+    leistungsart: Option<String>,
+    start_time: DateTime<Utc>,
+    duration_minutes: i64,
+    description: String,
+) -> Result<TimeEntry> {
+    state.db().update_time_entry(
+        id,
+        vorgang_nr.as_deref().filter(|v| !v.is_empty()),
+        leistungsart.as_deref().filter(|v| !v.is_empty()),
+        start_time,
+        duration_minutes,
+        &description,
+    )
 }
 
 #[tauri::command]
@@ -303,7 +508,8 @@ fn delete_time_entry(state: State<AppState>, id: i64) -> Result<()> {
 
 #[tauri::command]
 fn budget(state: State<AppState>, netzplan_id: i64) -> Result<Vec<BudgetStatus>> {
-    tracking::budget_status(&state.db(), netzplan_id, &state.config.thresholds)
+    let t = state.settings().thresholds;
+    tracking::budget_status(&state.db(), netzplan_id, &t)
 }
 
 #[tauri::command]
@@ -317,29 +523,126 @@ fn export_entries(
     format: ExportFormat,
     from: Option<DateTime<Utc>>,
     to: Option<DateTime<Utc>>,
-    mut options: ExportOptions,
+    only_released: bool,
     mark_exported: bool,
+    path: Option<String>,
 ) -> Result<ExportResult> {
+    let settings = state.settings();
     let db = state.db();
-    let rows = db.list_time_entries(&EntryFilter { from, to, ..Default::default() })?;
-    options.utc_offset_minutes = local_offset().local_minus_utc() / 60;
+    let status = only_released.then_some(StatusFlag::Released);
+    let rows = db.list_time_entries(&EntryFilter { from, to, status, ..Default::default() })?;
+    let options = ExportOptions {
+        pernr: settings.pernr.clone(),
+        jira_issue_map: settings.jira_issue_map.clone(),
+        utc_offset_minutes: local_offset().local_minus_utc() / 60,
+    };
     let res = export::export(&rows, format, &options)?;
+    if let Some(p) = path {
+        std::fs::write(&p, &res.content)?;
+    }
     if mark_exported {
         db.set_entry_status(&res.exported_ids, StatusFlag::Exported)?;
     }
     Ok(res)
 }
 
+// ---------------------------------------------------------------- settings
+
+#[derive(Serialize)]
+struct SettingsView {
+    settings: Settings,
+    api_key_set: bool,
+    api_key_storage: &'static str,
+    data_dir: String,
+    version: &'static str,
+}
+
+#[tauri::command]
+fn settings_get(state: State<AppState>) -> SettingsView {
+    SettingsView {
+        settings: state.settings(),
+        api_key_set: state.secrets.get().is_some(),
+        api_key_storage: state.secrets.backend(),
+        data_dir: state.data_dir.display().to_string(),
+        version: env!("CARGO_PKG_VERSION"),
+    }
+}
+
+/// Saves settings and applies them immediately (no restart needed).
+#[tauri::command]
+fn settings_save(state: State<AppState>, settings: Settings) -> Result<SettingsView> {
+    let url = settings.litellm_base_url.trim().to_owned();
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(Error::State("Die Server-URL muss mit http:// oder https:// beginnen".into()));
+    }
+    let mut settings = settings;
+    settings.litellm_base_url = url.trim_end_matches('/').to_owned();
+    state.db().save_settings(&settings)?;
+    *state.ai.write().unwrap_or_else(|e| e.into_inner()) = AiRuntime::new(settings, state.secrets.get());
+    Ok(settings_get(state))
+}
+
+/// Stores (or with `None`, removes) the LiteLLM API key in the OS credential store.
+#[tauri::command]
+fn api_key_set(state: State<AppState>, key: Option<String>) -> Result<SettingsView> {
+    state.secrets.set(key.as_deref().map(str::trim)).map_err(Error::State)?;
+    let settings = state.settings();
+    *state.ai.write().unwrap_or_else(|e| e.into_inner()) = AiRuntime::new(settings, state.secrets.get());
+    Ok(settings_get(state))
+}
+
+#[derive(Serialize)]
+struct ConnectionTest {
+    ok: bool,
+    latency_ms: u64,
+    models: Vec<String>,
+    error: Option<String>,
+}
+
+/// Checks a LiteLLM server by listing its models. Unsaved URL/key values can be tested.
+#[tauri::command]
+async fn ai_test_connection(
+    state: State<'_, AppState>,
+    base_url: Option<String>,
+    api_key: Option<String>,
+) -> Result<ConnectionTest> {
+    let url = base_url.unwrap_or_else(|| state.settings().litellm_base_url);
+    let key = api_key.filter(|k| !k.is_empty()).or_else(|| state.secrets.get());
+    let client = LiteLlmClient::new(url.trim().trim_end_matches('/').to_owned(), key);
+    let start = Instant::now();
+    let res = client.models().await;
+    let latency_ms = start.elapsed().as_millis() as u64;
+    Ok(match res {
+        Ok(mut models) => {
+            models.sort();
+            ConnectionTest { ok: true, latency_ms, models, error: None }
+        }
+        Err(e) => ConnectionTest { ok: false, latency_ms, models: vec![], error: Some(e.to_string()) },
+    })
+}
+
 // ----------------------------------------------------------------------- AI
 
-const SYSTEM_PROMPT: &str = "Du bist der Assistent von AETHER OS, einem lokalen Produktivitäts-Workspace. \
-Antworte präzise, auf Deutsch, sofern der Nutzer nicht anders schreibt. Zeit bucht man mit der \
-/zeit-Syntax (z. B. /zeit NP-8801/1020 2.5h #DEV 'Beschreibung'). Nutze Tools nur, wenn nötig.";
+fn system_prompt(settings: &Settings) -> String {
+    let now = Local::now();
+    let mut s = format!(
+        "Du bist der Assistent von AETHER OS, einem lokalen Arbeitsbereich für Notizen, Projekte und \
+         Zeiterfassung. Heute ist {}. Antworte präzise und auf Deutsch, sofern der Nutzer nicht anders \
+         schreibt. Nutze Markdown. Verweise auf Seiten mit [[Seitenname]]. Zeit wird mit der /zeit-Syntax \
+         gebucht, z. B. /zeit NP-8801/1020 2.5h #DEV 'Beschreibung'. Nutze Tools nur, wenn nötig.",
+        now.format("%A, %d.%m.%Y %H:%M")
+    );
+    if !settings.assistant_instructions.trim().is_empty() {
+        s.push_str("\n\nZusätzliche Anweisungen des Nutzers:\n");
+        s.push_str(settings.assistant_instructions.trim());
+    }
+    s
+}
 
 #[derive(Serialize, Clone)]
 struct StreamPayload<'a> {
     request_id: &'a str,
-    event: &'a aether_core::ai::StreamEvent,
+    event: &'a StreamEvent,
 }
 
 #[derive(Serialize)]
@@ -350,16 +653,26 @@ struct ChatOutcome {
     meter: SessionMeter,
 }
 
-#[tauri::command]
-fn ai_route_preview(state: State<AppState>, prompt: String, use_tools: bool) -> RouteDecision {
-    let (force, prompt) = router::parse_override(&prompt);
-    state.router.route(&RouteInput { prompt, context: &[], uses_tools: use_tools, force })
+fn route_for(
+    state: &AppState,
+    prompt: &str,
+    context: &[String],
+    uses_tools: bool,
+    tier: Option<Tier>,
+) -> RouteDecision {
+    let settings = state.settings();
+    let force = tier.or((!settings.auto_route).then_some(Tier::Standard));
+    state.router().route(&RouteInput { prompt, context, uses_tools, force })
 }
 
-/// The router's model per tier, for the "Active Model" picker.
+#[tauri::command]
+fn ai_route_preview(state: State<AppState>, prompt: String, use_tools: bool, tier: Option<Tier>) -> RouteDecision {
+    route_for(&state, &prompt, &[], use_tools, tier)
+}
+
 #[tauri::command]
 fn ai_models(state: State<AppState>) -> RouterConfig {
-    state.router.config.clone()
+    state.settings().router
 }
 
 #[tauri::command]
@@ -367,35 +680,52 @@ fn ai_meter(state: State<AppState>) -> SessionMeter {
     lock(&state.meter).clone()
 }
 
-/// Runs one chat turn with RAG context and streams deltas as `ai://stream` events.
+/// Runs one chat turn with retrieval and streams deltas as `ai://stream` events.
 /// Tool calls in the result are executed by the UI via the `ai_*_tool` commands.
 #[tauri::command]
 async fn ai_chat(
     app: AppHandle,
     state: State<'_, AppState>,
     request_id: String,
-    mut messages: Vec<ChatMessage>,
+    messages: Vec<ChatMessage>,
     use_tools: bool,
+    tier: Option<Tier>,
+    page_id: Option<i64>,
 ) -> Result<ChatOutcome> {
-    let last_user =
-        messages.iter_mut().rev().find(|m| m.role == "user").ok_or_else(|| Error::State("no user message".into()))?;
-    let raw = last_user.content.clone().unwrap_or_default();
-    let (force, prompt) = router::parse_override(&raw);
-    let prompt = prompt.to_owned();
-    last_user.content = Some(prompt.clone());
+    let prompt = messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .and_then(|m| m.content.clone())
+        .ok_or_else(|| Error::State("no user message".into()))?;
+    let settings = state.settings();
+    let client = state.client();
 
     // Retrieval: embeddings are optional; keyword search always works offline.
-    let query_embedding = match &state.config.embedding_model {
-        Some(m) => state.client.embed(m, std::slice::from_ref(&prompt)).await.ok().and_then(|mut v| v.pop()),
-        None => None,
+    let query_embedding = match &settings.embedding_model {
+        Some(m) if !m.is_empty() => client.embed(m, std::slice::from_ref(&prompt)).await.ok().and_then(|mut v| v.pop()),
+        _ => None,
     };
-    let context = rag::retrieve(&state.db(), &prompt, query_embedding.as_deref(), 6)?;
-    let context_texts: Vec<String> = context.iter().map(|c| c.text.clone()).collect();
+    let (context, active) = {
+        let db = state.db();
+        let context = rag::retrieve(&db, &prompt, query_embedding.as_deref(), 6)?;
+        let active = match page_id {
+            Some(id) => db.page_doc(id).ok().map(|d| (d.page.title, d.content)),
+            None => None,
+        };
+        (context, active)
+    };
+    let mut context_texts: Vec<String> = context.iter().map(|c| c.text.clone()).collect();
+    if let Some((_, text)) = &active {
+        context_texts.push(text.clone());
+    }
+    let route = route_for(&state, &prompt, &context_texts, use_tools, tier);
 
-    let route =
-        state.router.route(&RouteInput { prompt: &prompt, context: &context_texts, uses_tools: use_tools, force });
-
-    let mut full = vec![ChatMessage::system(SYSTEM_PROMPT)];
+    let mut full = vec![ChatMessage::system(system_prompt(&settings))];
+    if let Some((title, text)) = &active {
+        let text: String = text.chars().take(12_000).collect();
+        full.push(ChatMessage::system(format!("Aktuell geöffnete Seite „{title}“:\n\n{text}")));
+    }
     if !context.is_empty() {
         full.push(ChatMessage::system(rag::format_context(&context)));
     }
@@ -408,12 +738,15 @@ async fn ai_chat(
         max_tokens: None,
     };
 
-    let completion = state
-        .client
-        .chat_stream(&req, |event| {
+    let cancel = Arc::new(AtomicBool::new(false));
+    lock(&state.cancels).insert(request_id.clone(), cancel.clone());
+    let result = client
+        .chat_stream(&req, Some(&cancel), |event| {
             let _ = app.emit("ai://stream", StreamPayload { request_id: &request_id, event: &event });
         })
-        .await?;
+        .await;
+    lock(&state.cancels).remove(&request_id);
+    let completion = result?;
 
     state.db().record_ai_usage(&state.session_id, &completion.usage)?;
     let meter = {
@@ -423,6 +756,13 @@ async fn ai_chat(
     };
     let _ = app.emit("ai://meter", &meter);
     Ok(ChatOutcome { completion, route, context, meter })
+}
+
+#[tauri::command]
+fn ai_cancel(state: State<AppState>, request_id: String) {
+    if let Some(flag) = lock(&state.cancels).get(&request_id) {
+        flag.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 #[derive(Serialize)]
@@ -445,9 +785,10 @@ fn ai_plan_tool(name: String, arguments: String) -> Result<ToolPlan> {
 }
 
 #[tauri::command]
-fn ai_run_workspace_tool(state: State<AppState>, name: String, arguments: String) -> Result<String> {
+fn ai_run_workspace_tool(app: AppHandle, state: State<AppState>, name: String, arguments: String) -> Result<String> {
     let args: serde_json::Value = serde_json::from_str(&arguments)?;
     let arg = |k: &str| args[k].as_str().unwrap_or_default().to_owned();
+    let t = state.settings().thresholds;
     let db = state.db();
     let out = match name.as_str() {
         "log_time" => {
@@ -455,18 +796,14 @@ fn ai_run_workspace_tool(state: State<AppState>, name: String, arguments: String
             if !aether_core::zeit::is_zeit_command(&line) {
                 line = format!("/zeit {line}");
             }
-            serde_json::to_string(&tracking::log_slash_command(
-                &db,
-                &line,
-                Utc::now(),
-                local_offset(),
-                &state.config.thresholds,
-            )?)?
+            let res = serde_json::to_string(&tracking::log_slash_command(&db, &line, Utc::now(), local_offset(), &t)?)?;
+            let _ = app.emit("data://entries", ());
+            res
         }
         "search_workspace" => serde_json::to_string(&search::search(&db, &arg("query"), 10)?)?,
         "budget_status" => {
             let np = db.netzplan_by_ref(&arg("netzplan"))?;
-            serde_json::to_string(&tracking::budget_status(&db, np.id, &state.config.thresholds)?)?
+            serde_json::to_string(&tracking::budget_status(&db, np.id, &t)?)?
         }
         other => return Err(Error::State(format!("'{other}' is not a workspace tool"))),
     };
@@ -477,18 +814,18 @@ fn ai_run_workspace_tool(state: State<AppState>, name: String, arguments: String
 /// the exact summary returned by `ai_plan_tool`.
 #[tauri::command]
 async fn ai_run_system_tool(call: SystemCall) -> Result<String> {
-    tools::execute_system_tool(&call, &reqwest_client()).await
+    tools::execute_system_tool(&call, &tools::HttpClient::new()).await
 }
 
-fn reqwest_client() -> aether_core::ai::tools::HttpClient {
-    aether_core::ai::tools::HttpClient::new()
-}
-
-/// Embeds blocks that have no embedding yet. Returns the number indexed.
+/// Embeds note chunks that have no embedding yet. Returns the number indexed.
 #[tauri::command]
 async fn ai_index_pending(state: State<'_, AppState>) -> Result<usize> {
-    let model =
-        state.config.embedding_model.clone().ok_or_else(|| Error::State("no embedding_model configured".into()))?;
+    let model = state
+        .settings()
+        .embedding_model
+        .filter(|m| !m.is_empty())
+        .ok_or_else(|| Error::State("Kein Embedding-Modell in den Einstellungen gewählt".into()))?;
+    let client = state.client();
     let mut total = 0;
     loop {
         let batch = rag::pending_blocks(&state.db(), 32)?;
@@ -496,7 +833,7 @@ async fn ai_index_pending(state: State<'_, AppState>) -> Result<usize> {
             return Ok(total);
         }
         let texts: Vec<String> = batch.iter().map(|(_, t)| t.clone()).collect();
-        let vectors = state.client.embed(&model, &texts).await?;
+        let vectors = client.embed(&model, &texts).await?;
         let db = state.db();
         for ((id, _), v) in batch.iter().zip(&vectors) {
             rag::store_embedding(&db, *id, v)?;
@@ -512,7 +849,7 @@ struct ActivityTick {
     idle_seconds: Option<u64>,
     window: Option<activity::WindowInfo>,
     timer_idle_minutes: Option<i64>,
-    top_apps: Vec<(String, u64)>,
+    is_idle: bool,
 }
 
 /// Samples input idleness and the foreground window every 5 seconds.
@@ -525,7 +862,8 @@ fn spawn_activity_sampler(app: AppHandle) {
             let state = app.state::<AppState>();
             let idle = probe.idle_duration();
             let window = probe.foreground_window();
-            let threshold = Duration::from_secs(state.config.idle_threshold_minutes * 60);
+            let threshold = Duration::from_secs(state.settings().idle_threshold_minutes * 60);
+            let is_idle = idle.is_some_and(|d| d >= threshold);
             let running = state.db().running_timer().ok().flatten().is_some();
             let timer_idle_minutes = if running {
                 let mut acc = lock(&state.idle);
@@ -536,27 +874,48 @@ fn spawn_activity_sampler(app: AppHandle) {
             } else {
                 None
             };
-            let top_apps = {
-                let mut u = lock(&state.usage);
-                u.record(window.as_ref(), idle.is_some_and(|d| d >= threshold), INTERVAL);
-                u.top(5)
-            };
-            let tick = ActivityTick { idle_seconds: idle.map(|d| d.as_secs()), window, timer_idle_minutes, top_apps };
+            lock(&state.usage).record(window.as_ref(), is_idle, INTERVAL);
+            let tick = ActivityTick { idle_seconds: idle.map(|d| d.as_secs()), window, timer_idle_minutes, is_idle };
             let _ = app.emit("activity://tick", tick);
         }
     });
 }
 
+#[derive(Serialize)]
+struct AppInfo {
+    version: &'static str,
+    data_dir: String,
+    platform: &'static str,
+}
+
+#[tauri::command]
+fn app_info(state: State<AppState>) -> AppInfo {
+    AppInfo {
+        version: env!("CARGO_PKG_VERSION"),
+        data_dir: state.data_dir.display().to_string(),
+        platform: std::env::consts::OS,
+    }
+}
+
 // ------------------------------------------------------------------ startup
+
+#[derive(Deserialize, Default)]
+struct StartupOptions {
+    /// Seed the demo workspace on first start (default true).
+    demo: Option<bool>,
+}
 
 pub fn run() {
     let palette = Shortcut::new(Some(Modifiers::ALT), Code::Space);
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
                     if event.state() == ShortcutState::Pressed && shortcut == &palette {
                         if let Some(w) = app.get_webview_window("main") {
+                            let _ = w.unminimize();
                             let _ = w.show();
                             let _ = w.set_focus();
                         }
@@ -566,29 +925,36 @@ pub fn run() {
                 .build(),
         )
         .setup(move |app| {
-            let dir = app.path().app_data_dir()?;
+            // AETHER_DATA_DIR lets tests run against a throw-away workspace.
+            let dir = match std::env::var_os("AETHER_DATA_DIR") {
+                Some(d) => PathBuf::from(d),
+                None => app.path().app_data_dir()?,
+            };
             std::fs::create_dir_all(&dir)?;
-            let config = Config::load_or_create(&dir)?;
+            let opts: StartupOptions =
+                std::env::var("AETHER_STARTUP").ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
             let db = Database::open(dir.join("workspace.db"))?;
-            demo::seed(&db, Utc::now())?;
-
-            let api_key = std::env::var(&config.litellm_api_key_env).ok();
-            let mut client = LiteLlmClient::new(config.litellm_base_url.clone(), api_key);
-            client.prices = config.prices.clone();
-            let idle_threshold = Duration::from_secs(config.idle_threshold_minutes * 60);
+            if opts.demo.unwrap_or(true) {
+                demo::seed(&db, Utc::now())?;
+            }
+            let settings = db.load_settings()?;
+            let secrets = SecretStore::new(&dir);
+            let idle_threshold = Duration::from_secs(settings.idle_threshold_minutes * 60);
+            let ai = AiRuntime::new(settings, secrets.get());
 
             app.manage(AppState {
                 db: Mutex::new(db),
-                router: ModelRouter::new(config.router.clone()),
-                client,
-                config,
+                ai: RwLock::new(ai),
+                secrets,
+                data_dir: dir,
                 meter: Mutex::new(SessionMeter::default()),
                 session_id: Utc::now().format("%Y%m%dT%H%M%S").to_string(),
                 idle: Mutex::new(IdleAccumulator::new(idle_threshold)),
                 usage: Mutex::new(WindowUsage::default()),
+                cancels: Mutex::new(HashMap::new()),
             });
 
-            // Another instance may already own the shortcut; the in-app Ctrl+K still works.
+            // Another instance may already own the shortcut; Ctrl+K still works in-app.
             if let Err(e) = app.global_shortcut().register(palette) {
                 eprintln!("Alt+Space not available: {e}");
             }
@@ -597,36 +963,62 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             workspace_tree,
-            page_blocks,
-            create_page,
-            rename_page,
-            delete_page,
-            add_block,
-            update_block,
-            delete_block,
+            page_get,
+            page_save,
+            page_create,
+            page_rename,
+            page_delete,
+            page_move,
+            page_set_favorite,
+            page_set_icon,
+            page_resolve,
+            recent_pages,
+            daily_note,
+            tags_list,
+            tag_pages,
             search_workspace,
-            page_graph,
+            vault_import,
+            vault_export,
             wbs_tree,
-            create_vorgang,
+            project_create,
+            project_update,
+            project_delete,
+            netzplan_create,
+            netzplan_update,
+            netzplan_delete,
+            vorgang_create,
+            vorgang_update,
+            vorgang_delete,
+            leistungsarten_list,
+            leistungsart_save,
+            leistungsart_delete,
             log_time,
             timer_status,
             timer_start,
             timer_stop,
             timer_discard,
             time_entries,
+            time_entry_create,
+            time_entry_update,
             set_entry_status,
             delete_time_entry,
             budget,
             schedule,
             export_entries,
+            settings_get,
+            settings_save,
+            api_key_set,
+            ai_test_connection,
             ai_route_preview,
             ai_models,
             ai_meter,
             ai_chat,
+            ai_cancel,
             ai_plan_tool,
             ai_run_workspace_tool,
             ai_run_system_tool,
             ai_index_pending,
+            app_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running AETHER OS");

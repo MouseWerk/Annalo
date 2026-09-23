@@ -124,8 +124,15 @@ impl LiteLlmClient {
         Err(Error::Provider { status, body })
     }
 
-    /// Streams a chat completion, calling `on_event` for every delta.
-    pub async fn chat_stream(&self, req: &ChatRequest, mut on_event: impl FnMut(StreamEvent)) -> Result<Completion> {
+    /// Streams a chat completion, calling `on_event` for every delta. When
+    /// `cancel` becomes true the stream is dropped and the partial answer is
+    /// returned with `finish_reason = "cancelled"`.
+    pub async fn chat_stream(
+        &self,
+        req: &ChatRequest,
+        cancel: Option<&std::sync::atomic::AtomicBool>,
+        mut on_event: impl FnMut(StreamEvent),
+    ) -> Result<Completion> {
         let mut body = serde_json::to_value(req)?;
         body["stream"] = json!(true);
         body["stream_options"] = json!({ "include_usage": true });
@@ -142,7 +149,12 @@ impl LiteLlmClient {
         let mut acc = StreamAccumulator::new(StreamTimer::start_at(timer_start));
         let mut decoder = SseDecoder::default();
         let mut stream = resp.bytes_stream();
+        let cancelled = || cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed));
         'outer: while let Some(chunk) = stream.next().await {
+            if cancelled() {
+                acc.finish_reason = Some("cancelled".into());
+                break;
+            }
             for data in decoder.push(&chunk?) {
                 if data == "[DONE]" {
                     break 'outer;

@@ -8,6 +8,13 @@
     "core:event:default",
     "core:window:allow-show",
     "core:window:allow-set-focus",
+    "core:window:allow-set-title",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "dialog:allow-ask",
+    "dialog:allow-confirm",
+    "dialog:allow-message",
+    "opener:default",
     "global-shortcut:allow-register",
     "global-shortcut:allow-unregister"
   ]

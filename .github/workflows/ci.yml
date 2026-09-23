@@ -6,27 +6,45 @@ on:
 
 jobs:
   core:
-    name: Core tests (Linux)
-    runs-on: ubuntu-latest
+    name: Core, UI and end-to-end tests (Linux)
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: System packages (WebKitGTK, WebDriver, Xvfb)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev webkit2gtk-driver xvfb x11-utils
       - run: cargo fmt --all --check
-      - run: cargo clippy -p aether-core -p aether-cli --all-targets -- -D warnings
+      - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test -p aether-core -p aether-cli
-      - run: |
-          for f in ui/js/*.js; do node --check "$f"; done
+      - run: npm ci --prefix ui && npm run --prefix ui typecheck
+      - run: cargo install tauri-driver --locked
+      - name: End-to-end tests against the desktop app
+        run: npm ci --prefix e2e && e2e/run.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-screenshots
+          path: e2e/screenshots
 
-  desktop:
-    name: Desktop build (Windows)
+  windows:
+    name: Windows installer
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --prefix ui
       - run: cargo install tauri-cli --version "^2" --locked
       - run: cargo tauri build
         working-directory: src-tauri

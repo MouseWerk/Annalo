@@ -47,6 +47,10 @@ enum Cmd {
     Schedule { netzplan: String },
     /// Full-text search over notes and time logs.
     Search { query: Vec<String> },
+    /// Import an Obsidian vault (folder of Markdown files).
+    Import { dir: PathBuf },
+    /// Write all pages as Markdown files into a folder.
+    ExportVault { dir: PathBuf },
     /// Export time entries.
     Export {
         /// cats | jira | csv | json
@@ -294,13 +298,22 @@ fn run(cli: Cli) -> Result<()> {
         Cmd::Search { query } => {
             for hit in search::search(&db, &query.join(" "), 20)? {
                 match hit {
-                    search::SearchHit::Block { page_title, snippet, .. } => println!("[Seite] {page_title}: {snippet}"),
+                    search::SearchHit::Page { title, .. } => println!("[Seite] {title}"),
+                    search::SearchHit::Note { title, snippet, .. } => println!("[Notiz] {title}: {snippet}"),
                     search::SearchHit::TimeEntry { netzplan_nr, vorgang_nr, snippet, .. } => println!(
                         "[Zeit]  {netzplan_nr}{}: {snippet}",
                         vorgang_nr.map(|v| format!("/{v}")).unwrap_or_default()
                     ),
                 }
             }
+        }
+        Cmd::Import { dir } => {
+            let r = aether_core::vault::import_vault(&db, &dir)?;
+            println!("{} Seiten, {} Ordner importiert ({} Anhänge übersprungen)", r.pages, r.folders, r.skipped);
+        }
+        Cmd::ExportVault { dir } => {
+            let n = aether_core::vault::export_vault(&db, &dir)?;
+            println!("{n} Markdown-Dateien nach {} geschrieben", dir.display());
         }
         Cmd::Export { format, from, to, pernr, jira_map, mark } => {
             let format = ExportFormat::parse(&format).ok_or_else(|| {

@@ -11,7 +11,23 @@ use rusqlite::{Connection, OptionalExtension, Row, params};
 use crate::error::{Error, Result};
 use crate::model::*;
 
-const MIGRATIONS: &[&str] = &[include_str!("../migrations/0001_init.sql")];
+const MIGRATIONS: &[&str] =
+    &[include_str!("../migrations/0001_init.sql"), include_str!("../migrations/0002_documents.sql")];
+
+pub(crate) const PAGE_COLS: &str = "id, parent_id, title, icon, position, updated_at, favorite, daily_date";
+
+pub(crate) fn map_page(r: &Row) -> rusqlite::Result<Page> {
+    Ok(Page {
+        id: r.get(0)?,
+        parent_id: r.get(1)?,
+        title: r.get(2)?,
+        icon: r.get(3)?,
+        position: r.get(4)?,
+        updated_at: r.get(5)?,
+        favorite: r.get(6)?,
+        daily_date: r.get(7)?,
+    })
+}
 
 pub struct Database {
     conn: Connection,
@@ -25,6 +41,16 @@ pub(crate) fn parse_ts(s: &str) -> rusqlite::Result<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(s)
         .map(|t| t.with_timezone(&Utc))
         .map_err(|e| rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e)))
+}
+
+/// Turns a foreign-key violation on delete into a readable message.
+fn booked_guard(e: rusqlite::Error, what: &str) -> Error {
+    match e {
+        rusqlite::Error::SqliteFailure(f, _) if f.code == rusqlite::ErrorCode::ConstraintViolation => {
+            Error::State(format!("{what} hat gebuchte Zeiten und kann nicht gelöscht werden"))
+        }
+        other => Error::Db(other),
+    }
 }
 
 /// Filter for [`Database::list_time_entries`]. `None` fields do not filter.
@@ -71,12 +97,35 @@ impl Database {
             tx.pragma_update(None, "user_version", (i + 1) as i64)?;
             tx.commit()?;
         }
+        // v2 turned blocks into a derived chunk index; build it from page content.
+        if current < 2 && MIGRATIONS.len() >= 2 {
+            self.reindex_all()?;
+        }
         Ok(())
     }
 
     pub fn schema_version(&self) -> Result<usize> {
         let v: i64 = self.conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
         Ok(v.max(0) as usize)
+    }
+
+    /// Runs `f` atomically. Uses SAVEPOINTs, so calls may nest (e.g. a vault
+    /// import that saves many pages).
+    pub fn atomic<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let name = format!("sp{}", SEQ.fetch_add(1, Ordering::Relaxed));
+        self.conn.execute_batch(&format!("SAVEPOINT {name}"))?;
+        match f() {
+            Ok(v) => {
+                self.conn.execute_batch(&format!("RELEASE {name}"))?;
+                Ok(v)
+            }
+            Err(e) => {
+                let _ = self.conn.execute_batch(&format!("ROLLBACK TO {name}; RELEASE {name}"));
+                Err(e)
+            }
+        }
     }
 
     /// Escape hatch for modules that run their own queries (search, RAG).
@@ -268,6 +317,76 @@ impl Database {
         Ok(rows)
     }
 
+    pub fn update_project(&self, id: i64, name: &str) -> Result<()> {
+        self.conn.execute("UPDATE projects SET name = ?2 WHERE id = ?1", params![id, name.trim()])?;
+        Ok(())
+    }
+
+    /// Deletes a project with its Netzpläne. Refused while time entries reference them.
+    pub fn delete_project(&self, id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM projects WHERE id = ?1", [id]).map_err(|e| booked_guard(e, "Projekt"))?;
+        Ok(())
+    }
+
+    pub fn update_netzplan(&self, id: i64, wbs_element: &str, description: &str, planned_hours: f64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE netzplaene SET wbs_element = ?2, description = ?3, planned_hours = ?4 WHERE id = ?1",
+            params![id, wbs_element.trim(), description.trim(), planned_hours],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_netzplan(&self, id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM netzplaene WHERE id = ?1", [id]).map_err(|e| booked_guard(e, "Netzplan"))?;
+        Ok(())
+    }
+
+    pub fn update_vorgang(
+        &self,
+        id: i64,
+        description: &str,
+        duration_days: f64,
+        planned_hours: f64,
+        remaining_hours: Option<f64>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "UPDATE vorgaenge SET description = ?2, duration_days = ?3, planned_hours = ?4, remaining_hours = ?5 WHERE id = ?1",
+            params![id, description.trim(), duration_days, planned_hours, remaining_hours],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_vorgang(&self, id: i64) -> Result<()> {
+        self.conn.execute("DELETE FROM vorgaenge WHERE id = ?1", [id])?;
+        Ok(())
+    }
+
+    pub fn list_leistungsarten(&self) -> Result<Vec<(String, String)>> {
+        let mut st = self.conn.prepare_cached("SELECT code, description FROM leistungsarten ORDER BY code")?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
+    }
+
+    pub fn upsert_leistungsart(&self, code: &str, description: &str) -> Result<()> {
+        let code = code.trim().to_uppercase();
+        if code.is_empty() || !code.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return Err(Error::State("Leistungsart: nur Buchstaben, Ziffern und _".into()));
+        }
+        self.conn.execute(
+            "INSERT INTO leistungsarten (code, description) VALUES (?1, ?2)
+             ON CONFLICT(code) DO UPDATE SET description = excluded.description",
+            params![code, description.trim()],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_leistungsart(&self, code: &str) -> Result<()> {
+        self.conn
+            .execute("DELETE FROM leistungsarten WHERE code = ?1", [code])
+            .map_err(|e| booked_guard(e, "Leistungsart"))?;
+        Ok(())
+    }
+
     pub fn leistungsart_exists(&self, code: &str) -> Result<bool> {
         Ok(self
             .conn
@@ -384,6 +503,34 @@ impl Database {
         Ok(())
     }
 
+    /// Edits a finished time entry. Exported entries are locked.
+    pub fn update_time_entry(
+        &self,
+        id: i64,
+        vorgang_nr: Option<&str>,
+        leistungsart: Option<&str>,
+        start_time: DateTime<Utc>,
+        duration_minutes: i64,
+        description: &str,
+    ) -> Result<TimeEntry> {
+        let e = self.time_entry(id)?;
+        match e.status_flag {
+            StatusFlag::Running => return Err(Error::State("stop the timer before editing it".into())),
+            StatusFlag::Exported => return Err(Error::State("exported entries cannot be edited".into())),
+            _ => {}
+        }
+        if !(1..=24 * 60).contains(&duration_minutes) {
+            return Err(Error::State("duration must be between 1 minute and 24 hours".into()));
+        }
+        let end = start_time + chrono::Duration::minutes(duration_minutes);
+        self.conn.execute(
+            "UPDATE time_entries SET vorgang_nr = ?2, leistungsart = ?3, start_time = ?4, end_time = ?5,
+                    duration_minutes = ?6, description = ?7 WHERE id = ?1",
+            params![id, vorgang_nr, leistungsart, ts(start_time), ts(end), duration_minutes, description],
+        )?;
+        self.time_entry(id)
+    }
+
     pub fn delete_time_entry(&self, id: i64) -> Result<()> {
         self.conn.execute("DELETE FROM time_entries WHERE id = ?1", [id])?;
         Ok(())
@@ -393,18 +540,16 @@ impl Database {
         if status == StatusFlag::Running {
             return Err(Error::State("entries cannot be set to running".into()));
         }
-        let tx = self.conn.unchecked_transaction()?;
-        let mut n = 0;
-        {
-            let mut st = tx.prepare_cached(
+        self.atomic(|| {
+            let mut n = 0;
+            let mut st = self.conn.prepare_cached(
                 "UPDATE time_entries SET status_flag = ?2 WHERE id = ?1 AND status_flag <> 'running'",
             )?;
             for id in ids {
                 n += st.execute(params![id, status.as_str()])?;
             }
-        }
-        tx.commit()?;
-        Ok(n)
+            Ok(n)
+        })
     }
 
     pub fn list_time_entries(&self, f: &EntryFilter) -> Result<Vec<TimeEntryRow>> {
@@ -447,6 +592,10 @@ impl Database {
     // ------------------------------------------------------------------ pages
 
     pub fn create_page(&self, parent_id: Option<i64>, title: &str, icon: Option<&str>) -> Result<Page> {
+        let title = title.trim();
+        if title.is_empty() {
+            return Err(Error::State("title must not be empty".into()));
+        }
         let position: i64 = self.conn.query_row(
             "SELECT COALESCE(MAX(position) + 1, 0) FROM pages WHERE parent_id IS ?1",
             [parent_id],
@@ -456,19 +605,13 @@ impl Database {
             "INSERT INTO pages (parent_id, title, icon, position) VALUES (?1, ?2, ?3, ?4)",
             params![parent_id, title, icon, position],
         )?;
-        Ok(Page {
-            id: self.conn.last_insert_rowid(),
-            parent_id,
-            title: title.into(),
-            icon: icon.map(Into::into),
-            position,
-        })
+        self.page(self.conn.last_insert_rowid())
     }
 
     pub fn rename_page(&self, id: i64, title: &str) -> Result<()> {
         self.conn.execute(
             "UPDATE pages SET title = ?2, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?1",
-            params![id, title],
+            params![id, title.trim()],
         )?;
         Ok(())
     }
@@ -479,13 +622,8 @@ impl Database {
     }
 
     pub fn list_pages(&self) -> Result<Vec<Page>> {
-        let mut st =
-            self.conn.prepare_cached("SELECT id, parent_id, title, icon, position FROM pages ORDER BY position, id")?;
-        let rows = st
-            .query_map([], |r| {
-                Ok(Page { id: r.get(0)?, parent_id: r.get(1)?, title: r.get(2)?, icon: r.get(3)?, position: r.get(4)? })
-            })?
-            .collect::<rusqlite::Result<_>>()?;
+        let mut st = self.conn.prepare_cached(&format!("SELECT {PAGE_COLS} FROM pages ORDER BY position, id"))?;
+        let rows = st.query_map([], map_page)?.collect::<rusqlite::Result<_>>()?;
         Ok(rows)
     }
 
@@ -499,69 +637,6 @@ impl Database {
                 .collect()
         }
         Ok(build(None, &self.list_pages()?))
-    }
-
-    // ----------------------------------------------------------------- blocks
-
-    fn map_block(r: &Row) -> rusqlite::Result<Block> {
-        Ok(Block {
-            id: r.get(0)?,
-            page_id: r.get(1)?,
-            position: r.get(2)?,
-            block_type: r.get(3)?,
-            content_markdown: r.get(4)?,
-            has_embedding: r.get(5)?,
-        })
-    }
-
-    pub fn add_block(&self, page_id: i64, block_type: &str, content_markdown: &str) -> Result<Block> {
-        let position: i64 = self.conn.query_row(
-            "SELECT COALESCE(MAX(position) + 1, 0) FROM notes_blocks WHERE page_id = ?1",
-            [page_id],
-            |r| r.get(0),
-        )?;
-        self.conn.execute(
-            "INSERT INTO notes_blocks (page_id, position, block_type, content_markdown) VALUES (?1, ?2, ?3, ?4)",
-            params![page_id, position, block_type, content_markdown],
-        )?;
-        self.block(self.conn.last_insert_rowid())
-    }
-
-    pub fn block(&self, id: i64) -> Result<Block> {
-        self.conn
-            .query_row(
-                "SELECT id, page_id, position, block_type, content_markdown, vector_embedding IS NOT NULL
-                 FROM notes_blocks WHERE id = ?1",
-                [id],
-                Self::map_block,
-            )
-            .optional()?
-            .ok_or_else(|| Error::not_found("block", id.to_string()))
-    }
-
-    pub fn update_block(&self, id: i64, block_type: &str, content_markdown: &str) -> Result<Block> {
-        let n = self.conn.execute(
-            "UPDATE notes_blocks SET block_type = ?2, content_markdown = ?3 WHERE id = ?1",
-            params![id, block_type, content_markdown],
-        )?;
-        if n == 0 {
-            return Err(Error::not_found("block", id.to_string()));
-        }
-        self.block(id)
-    }
-
-    pub fn delete_block(&self, id: i64) -> Result<()> {
-        self.conn.execute("DELETE FROM notes_blocks WHERE id = ?1", [id])?;
-        Ok(())
-    }
-
-    pub fn list_blocks(&self, page_id: i64) -> Result<Vec<Block>> {
-        let mut st = self.conn.prepare_cached(
-            "SELECT id, page_id, position, block_type, content_markdown, vector_embedding IS NOT NULL
-             FROM notes_blocks WHERE page_id = ?1 ORDER BY position, id",
-        )?;
-        let rows = st.query_map([page_id], Self::map_block)?.collect::<rusqlite::Result<_>>()?;
-        Ok(rows)
     }
 
     // --------------------------------------------------------------- ai usage
@@ -629,6 +704,54 @@ mod tests {
     }
 
     #[test]
+    fn v1_blocks_are_migrated_into_documents() {
+        let path = std::env::temp_dir().join(format!("aether-mig-{}.db", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        {
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(MIGRATIONS[0]).unwrap();
+            c.pragma_update(None, "user_version", 1i64).unwrap();
+            c.execute("INSERT INTO pages (id, title) VALUES (1, 'Alt')", []).unwrap();
+            c.execute("INSERT INTO pages (id, title) VALUES (2, 'Ziel')", []).unwrap();
+            c.execute(
+                "INSERT INTO notes_blocks (page_id, position, content_markdown) VALUES (1, 1, 'zweiter Absatz [[Ziel]]'), (1, 0, '# Kopf')",
+                [],
+            )
+            .unwrap();
+        }
+        let db = Database::open(&path).unwrap();
+        assert_eq!(db.schema_version().unwrap(), MIGRATIONS.len());
+        assert_eq!(db.page_doc(1).unwrap().content, "# Kopf\n\nzweiter Absatz [[Ziel]]");
+        assert_eq!(db.page_doc(2).unwrap().backlinks.len(), 1);
+        assert!(!crate::search::search(&db, "Absatz", 5).unwrap().is_empty());
+        drop(db);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn deleting_booked_wbs_is_refused_and_entries_are_editable() {
+        let (db, np) = seeded();
+        let t0 = Utc.with_ymd_and_hms(2026, 9, 1, 8, 0, 0).unwrap();
+        let e = db
+            .insert_time_entry(&NewTimeEntry {
+                netzplan_id: np.id,
+                vorgang_nr: None,
+                leistungsart: Some("DEV".into()),
+                start_time: t0,
+                duration_minutes: 60,
+                description: "x".into(),
+                source: EntrySource::Manual,
+            })
+            .unwrap();
+        assert!(db.delete_netzplan(np.id).unwrap_err().to_string().contains("gebuchte Zeiten"));
+        assert!(db.delete_leistungsart("DEV").is_err());
+        let e2 = db.update_time_entry(e.id, Some("1020"), Some("PM"), t0, 90, "y").unwrap();
+        assert_eq!((e2.duration_minutes, e2.vorgang_nr.as_deref()), (Some(90), Some("1020")));
+        db.set_entry_status(&[e.id], StatusFlag::Exported).unwrap();
+        assert!(db.update_time_entry(e.id, None, None, t0, 30, "z").is_err());
+    }
+
+    #[test]
     fn page_tree_nests_children() {
         let db = Database::open_in_memory().unwrap();
         let root = db.create_page(None, "Workspace", None).unwrap();
@@ -637,16 +760,5 @@ mod tests {
         let tree = db.page_tree().unwrap();
         assert_eq!(tree.len(), 1);
         assert_eq!(tree[0].children[0].children[0].page.title, "2026-09-23");
-    }
-
-    #[test]
-    fn editing_a_block_invalidates_its_embedding() {
-        let db = Database::open_in_memory().unwrap();
-        let page = db.create_page(None, "P", None).unwrap();
-        let b = db.add_block(page.id, "paragraph", "hello").unwrap();
-        crate::ai::rag::store_embedding(&db, b.id, &[0.1, 0.2]).unwrap();
-        assert!(db.block(b.id).unwrap().has_embedding);
-        db.update_block(b.id, "paragraph", "hello world").unwrap();
-        assert!(!db.block(b.id).unwrap().has_embedding);
     }
 }

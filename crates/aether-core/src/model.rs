@@ -134,8 +134,13 @@ pub struct Page {
     pub id: i64,
     pub parent_id: Option<i64>,
     pub title: String,
+    /// Lucide icon name, e.g. `file-text`.
     pub icon: Option<String>,
     pub position: i64,
+    pub updated_at: String,
+    pub favorite: bool,
+    /// Set for daily notes (`YYYY-MM-DD`).
+    pub daily_date: Option<String>,
 }
 
 /// A page with its children, for the sidebar tree.
@@ -144,14 +149,4 @@ pub struct PageNode {
     #[serde(flatten)]
     pub page: Page,
     pub children: Vec<PageNode>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Block {
-    pub id: i64,
-    pub page_id: i64,
-    pub position: i64,
-    pub block_type: String,
-    pub content_markdown: String,
-    pub has_embedding: bool,
 }

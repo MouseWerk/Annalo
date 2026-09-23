@@ -1,0 +1,544 @@
+//! Markdown documents: saving, chunk index, [[wiki links]], backlinks, tags,
+//! renames that keep links intact, daily notes and the page tree.
+
+use std::collections::HashMap;
+
+use chrono::NaiveDate;
+use rusqlite::{OptionalExtension, params};
+use serde::{Deserialize, Serialize};
+
+use crate::db::Database;
+use crate::error::{Error, Result};
+use crate::model::Page;
+
+/// Target size of a search/RAG chunk in characters.
+const CHUNK_CHARS: usize = 1200;
+/// Parent page that holds daily notes.
+pub const JOURNAL_TITLE: &str = "Journal";
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Backlink {
+    pub page_id: i64,
+    pub title: String,
+    pub icon: Option<String>,
+    /// The line of the source page that contains the link.
+    pub context: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PageDoc {
+    #[serde(flatten)]
+    pub page: Page,
+    pub content: String,
+    pub tags: Vec<String>,
+    pub backlinks: Vec<Backlink>,
+    /// Outgoing links whose target page does not exist yet.
+    pub unresolved_links: Vec<String>,
+}
+
+// ------------------------------------------------------------------ parsing
+
+/// Lines outside fenced code blocks, with their fence state resolved.
+fn prose_lines(markdown: &str) -> impl Iterator<Item = &str> {
+    let mut in_fence = false;
+    markdown.lines().filter(move |l| {
+        if l.trim_start().starts_with("```") {
+            in_fence = !in_fence;
+            return false;
+        }
+        !in_fence
+    })
+}
+
+/// Removes `inline code` spans so links/tags inside them are ignored.
+fn strip_inline_code(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut in_code = false;
+    for c in line.chars() {
+        if c == '`' {
+            in_code = !in_code;
+        } else if !in_code {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Link targets of `[[Target]]`, `[[Target|Alias]]` and `[[Target#Heading]]`.
+pub fn wiki_links(markdown: &str) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    for line in prose_lines(markdown) {
+        let line = strip_inline_code(line);
+        let mut rest = line.as_str();
+        while let Some(start) = rest.find("[[") {
+            let after = &rest[start + 2..];
+            let Some(end) = after.find("]]") else { break };
+            let inner = &after[..end];
+            let target = inner.split(['|', '#']).next().unwrap_or("").trim();
+            if !target.is_empty() && !out.iter().any(|t| t.eq_ignore_ascii_case(target)) {
+                out.push(target.to_owned());
+            }
+            rest = &after[end + 2..];
+        }
+    }
+    out
+}
+
+fn is_tag_char(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '_' | '-' | '/')
+}
+
+/// `#tags` in prose (not headings, not code, not purely numeric like `#1`).
+pub fn tags(markdown: &str) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    for line in prose_lines(markdown) {
+        let line = strip_inline_code(line);
+        let chars: Vec<char> = line.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            let boundary = i == 0 || chars[i - 1].is_whitespace() || chars[i - 1] == '(';
+            if chars[i] == '#' && boundary && i + 1 < chars.len() && is_tag_char(chars[i + 1]) {
+                let mut j = i + 1;
+                while j < chars.len() && is_tag_char(chars[j]) {
+                    j += 1;
+                }
+                let tag: String = chars[i + 1..j].iter().collect::<String>().trim_end_matches(['-', '/']).to_owned();
+                if !tag.is_empty() && !tag.chars().all(|c| c.is_ascii_digit()) {
+                    let lower = tag.to_lowercase();
+                    if !out.contains(&lower) {
+                        out.push(lower);
+                    }
+                }
+                i = j;
+            } else {
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// Splits a document into search/RAG chunks: a new chunk starts at every
+/// heading, and long sections are split at paragraph boundaries. Fenced code
+/// blocks are never split.
+pub fn chunks(markdown: &str) -> Vec<String> {
+    let mut out = vec![];
+    let mut cur = String::new();
+    let mut para = String::new();
+    let mut in_fence = false;
+
+    let flush_para = |cur: &mut String, para: &mut String, out: &mut Vec<String>| {
+        if para.trim().is_empty() {
+            para.clear();
+            return;
+        }
+        if !cur.is_empty() && cur.len() + para.len() > CHUNK_CHARS {
+            out.push(std::mem::take(cur).trim().to_owned());
+        }
+        if !cur.is_empty() {
+            cur.push_str("\n\n");
+        }
+        cur.push_str(para.trim_end());
+        para.clear();
+    };
+
+    for line in markdown.lines() {
+        let fence = line.trim_start().starts_with("```");
+        if !in_fence && !fence && line.starts_with('#') && line.trim_start_matches('#').starts_with(' ') {
+            flush_para(&mut cur, &mut para, &mut out);
+            if !cur.trim().is_empty() {
+                out.push(std::mem::take(&mut cur).trim().to_owned());
+            }
+            cur.clear();
+        }
+        if fence {
+            in_fence = !in_fence;
+        }
+        if !in_fence && !fence && line.trim().is_empty() {
+            flush_para(&mut cur, &mut para, &mut out);
+        } else {
+            para.push_str(line);
+            para.push('\n');
+        }
+    }
+    flush_para(&mut cur, &mut para, &mut out);
+    if !cur.trim().is_empty() {
+        out.push(cur.trim().to_owned());
+    }
+    out
+}
+
+// ---------------------------------------------------------------- documents
+
+fn now_ts() -> String {
+    crate::db::ts(chrono::Utc::now())
+}
+
+impl Database {
+    /// Saves a page's Markdown and refreshes its chunks, links and tags.
+    pub fn save_page_content(&self, id: i64, content: &str) -> Result<()> {
+        self.atomic(|| {
+            let n = self.conn().execute(
+                "UPDATE pages SET content = ?2, updated_at = ?3 WHERE id = ?1",
+                params![id, content, now_ts()],
+            )?;
+            if n == 0 {
+                return Err(Error::not_found("page", id.to_string()));
+            }
+            self.reindex_page(id, content)
+        })
+    }
+
+    /// Rebuilds chunk rows, links and tags of one page. Embeddings of chunks
+    /// whose text did not change are kept, so editing a long note only
+    /// re-embeds the edited section.
+    pub(crate) fn reindex_page(&self, id: i64, content: &str) -> Result<()> {
+        let conn = self.conn();
+        let mut old: HashMap<String, Vec<u8>> = HashMap::new();
+        {
+            let mut st = conn.prepare_cached(
+                "SELECT content_markdown, vector_embedding FROM notes_blocks WHERE page_id = ?1 AND vector_embedding IS NOT NULL",
+            )?;
+            for row in st.query_map([id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?)))? {
+                let (text, emb) = row?;
+                old.insert(text, emb);
+            }
+        }
+        conn.execute("DELETE FROM notes_blocks WHERE page_id = ?1", [id])?;
+        {
+            let mut ins = conn.prepare_cached(
+                "INSERT INTO notes_blocks (page_id, position, block_type, content_markdown, vector_embedding)
+                 VALUES (?1, ?2, 'chunk', ?3, ?4)",
+            )?;
+            for (i, chunk) in chunks(content).into_iter().enumerate() {
+                let emb = old.get(&chunk);
+                ins.execute(params![id, i as i64, chunk, emb])?;
+            }
+        }
+        conn.execute("DELETE FROM page_links WHERE from_page = ?1", [id])?;
+        for target in wiki_links(content) {
+            conn.execute(
+                "INSERT OR IGNORE INTO page_links (from_page, target) VALUES (?1, ?2)",
+                params![id, target.to_lowercase()],
+            )?;
+        }
+        conn.execute("DELETE FROM page_tags WHERE page_id = ?1", [id])?;
+        for tag in tags(content) {
+            conn.execute("INSERT OR IGNORE INTO page_tags (page_id, tag) VALUES (?1, ?2)", params![id, tag])?;
+        }
+        Ok(())
+    }
+
+    /// Rebuilds the derived indexes of every page (used after migrating).
+    pub fn reindex_all(&self) -> Result<()> {
+        let pages: Vec<(i64, String)> = {
+            let mut st = self.conn().prepare("SELECT id, content FROM pages")?;
+            st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
+        };
+        self.atomic(|| {
+            for (id, content) in &pages {
+                self.reindex_page(*id, content)?;
+            }
+            Ok(())
+        })
+    }
+
+    pub fn page(&self, id: i64) -> Result<Page> {
+        self.conn()
+            .query_row(&format!("SELECT {} FROM pages WHERE id = ?1", crate::db::PAGE_COLS), [id], crate::db::map_page)
+            .optional()?
+            .ok_or_else(|| Error::not_found("page", id.to_string()))
+    }
+
+    pub fn page_by_title(&self, title: &str) -> Result<Option<Page>> {
+        Ok(self
+            .conn()
+            .query_row(
+                &format!(
+                    "SELECT {} FROM pages WHERE title = ?1 COLLATE NOCASE ORDER BY id LIMIT 1",
+                    crate::db::PAGE_COLS
+                ),
+                [title.trim()],
+                crate::db::map_page,
+            )
+            .optional()?)
+    }
+
+    pub fn page_doc(&self, id: i64) -> Result<PageDoc> {
+        let page = self.page(id)?;
+        let conn = self.conn();
+        let content: String = conn.query_row("SELECT content FROM pages WHERE id = ?1", [id], |r| r.get(0))?;
+        let tags = {
+            let mut st = conn.prepare_cached("SELECT tag FROM page_tags WHERE page_id = ?1 ORDER BY tag")?;
+            st.query_map([id], |r| r.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?
+        };
+        let backlinks = {
+            let mut st = conn.prepare_cached(
+                "SELECT p.id, p.title, p.icon, p.content FROM page_links l JOIN pages p ON p.id = l.from_page
+                 WHERE l.target = ?1 AND p.id <> ?2 ORDER BY p.updated_at DESC",
+            )?;
+            let needle = page.title.to_lowercase();
+            st.query_map(params![needle, id], |r| {
+                let content: String = r.get(3)?;
+                let context = content
+                    .lines()
+                    .find(|l| {
+                        let l = l.to_lowercase();
+                        l.contains(&format!("[[{needle}]]"))
+                            || l.contains(&format!("[[{needle}|"))
+                            || l.contains(&format!("[[{needle}#"))
+                    })
+                    .unwrap_or("")
+                    .trim()
+                    .to_owned();
+                Ok(Backlink { page_id: r.get(0)?, title: r.get(1)?, icon: r.get(2)?, context })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        let unresolved_links =
+            wiki_links(&content).into_iter().filter(|t| self.page_by_title(t).ok().flatten().is_none()).collect();
+        Ok(PageDoc { page, content, tags, backlinks, unresolved_links })
+    }
+
+    /// Renames a page. With `update_links`, `[[Old]]` links in other pages are
+    /// rewritten to the new title (aliases and heading anchors are kept).
+    pub fn rename_page_linked(&self, id: i64, title: &str, update_links: bool) -> Result<usize> {
+        let title = title.trim();
+        if title.is_empty() {
+            return Err(Error::State("title must not be empty".into()));
+        }
+        let old = self.page(id)?.title;
+        self.rename_page(id, title)?;
+        if !update_links || old.eq_ignore_ascii_case(title) && old == title {
+            return Ok(0);
+        }
+        let sources: Vec<(i64, String)> = {
+            let mut st = self.conn().prepare(
+                "SELECT p.id, p.content FROM page_links l JOIN pages p ON p.id = l.from_page WHERE l.target = ?1",
+            )?;
+            st.query_map([old.to_lowercase()], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
+        };
+        let mut changed = 0;
+        for (pid, content) in sources {
+            let updated = replace_link_target(&content, &old, title);
+            if updated != content {
+                self.save_page_content(pid, &updated)?;
+                changed += 1;
+            }
+        }
+        Ok(changed)
+    }
+
+    /// Moves a page under a new parent at `position` (0-based among siblings).
+    pub fn move_page(&self, id: i64, parent_id: Option<i64>, position: i64) -> Result<()> {
+        // Refuse to move a page into its own subtree.
+        let mut cursor = parent_id;
+        while let Some(p) = cursor {
+            if p == id {
+                return Err(Error::State("a page cannot be moved into itself".into()));
+            }
+            cursor = self.page(p)?.parent_id;
+        }
+        self.atomic(|| {
+            let conn = self.conn();
+            let siblings: Vec<i64> = {
+                let mut st =
+                    conn.prepare("SELECT id FROM pages WHERE parent_id IS ?1 AND id <> ?2 ORDER BY position, id")?;
+                st.query_map(params![parent_id, id], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?
+            };
+            let pos = position.clamp(0, siblings.len() as i64) as usize;
+            let mut order = siblings;
+            order.insert(pos, id);
+            for (i, pid) in order.iter().enumerate() {
+                conn.execute("UPDATE pages SET position = ?2 WHERE id = ?1", params![pid, i as i64])?;
+            }
+            conn.execute("UPDATE pages SET parent_id = ?2 WHERE id = ?1", params![id, parent_id])?;
+            Ok(())
+        })
+    }
+
+    pub fn set_favorite(&self, id: i64, favorite: bool) -> Result<()> {
+        self.conn().execute("UPDATE pages SET favorite = ?2 WHERE id = ?1", params![id, favorite])?;
+        Ok(())
+    }
+
+    pub fn set_page_icon(&self, id: i64, icon: Option<&str>) -> Result<()> {
+        self.conn().execute("UPDATE pages SET icon = ?2 WHERE id = ?1", params![id, icon])?;
+        Ok(())
+    }
+
+    pub fn recent_pages(&self, limit: usize) -> Result<Vec<Page>> {
+        let mut st = self.conn().prepare_cached(&format!(
+            "SELECT {} FROM pages WHERE content <> '' ORDER BY updated_at DESC, id DESC LIMIT ?1",
+            crate::db::PAGE_COLS
+        ))?;
+        let rows = st.query_map([limit as i64], crate::db::map_page)?.collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
+    }
+
+    /// All tags with the number of pages using them, most used first.
+    pub fn tag_counts(&self) -> Result<Vec<(String, i64)>> {
+        let mut st = self
+            .conn()
+            .prepare_cached("SELECT tag, COUNT(*) FROM page_tags GROUP BY tag ORDER BY COUNT(*) DESC, tag")?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
+    }
+
+    pub fn pages_with_tag(&self, tag: &str) -> Result<Vec<Page>> {
+        let mut st = self.conn().prepare_cached(&format!(
+            "SELECT {} FROM pages WHERE id IN (SELECT page_id FROM page_tags WHERE tag = ?1) ORDER BY updated_at DESC",
+            crate::db::PAGE_COLS
+        ))?;
+        let rows = st.query_map([tag.to_lowercase()], crate::db::map_page)?.collect::<rusqlite::Result<_>>()?;
+        Ok(rows)
+    }
+
+    /// Returns the daily note for `date`, creating it (and the Journal parent) if needed.
+    pub fn daily_note(&self, date: NaiveDate) -> Result<Page> {
+        let key = date.format("%Y-%m-%d").to_string();
+        if let Some(p) = self
+            .conn()
+            .query_row(
+                &format!("SELECT {} FROM pages WHERE daily_date = ?1", crate::db::PAGE_COLS),
+                [&key],
+                crate::db::map_page,
+            )
+            .optional()?
+        {
+            return Ok(p);
+        }
+        let journal = match self
+            .conn()
+            .query_row(
+                &format!("SELECT {} FROM pages WHERE parent_id IS NULL AND title = ?1", crate::db::PAGE_COLS),
+                [JOURNAL_TITLE],
+                crate::db::map_page,
+            )
+            .optional()?
+        {
+            Some(j) => j,
+            None => self.create_page(None, JOURNAL_TITLE, Some("calendar-days"))?,
+        };
+        let page = self.create_page(Some(journal.id), &key, Some("calendar"))?;
+        // Newest day first under the Journal.
+        self.move_page(page.id, Some(journal.id), 0)?;
+        self.conn().execute("UPDATE pages SET daily_date = ?2 WHERE id = ?1", params![page.id, key])?;
+        // The UI shows the weekday and date under the title, so the body starts with the sections.
+        self.save_page_content(page.id, "## Fokus\n\n- [ ] \n\n## Notizen\n\n")?;
+        self.page(page.id)
+    }
+}
+
+/// Rewrites `[[old]]`, `[[old|alias]]` and `[[old#heading]]` (case-insensitive) to `new`.
+pub fn replace_link_target(content: &str, old: &str, new: &str) -> String {
+    let mut out = String::with_capacity(content.len());
+    let mut rest = content;
+    while let Some(start) = rest.find("[[") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        let Some(end) = after.find("]]") else {
+            out.push_str(&rest[start..]);
+            return out;
+        };
+        let inner = &after[..end];
+        let split = inner.find(['|', '#']).unwrap_or(inner.len());
+        let (target, suffix) = inner.split_at(split);
+        if target.trim().eq_ignore_ascii_case(old) {
+            out.push_str("[[");
+            out.push_str(new);
+            out.push_str(suffix);
+            out.push_str("]]");
+        } else {
+            out.push_str(&rest[start..start + 2 + end + 2]);
+        }
+        rest = &after[end + 2..];
+    }
+    out.push_str(rest);
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_links_and_tags_outside_code() {
+        let md = "# Titel\nSiehe [[Architektur]] und [[Jour fixe|JF]] #projekt #1 #Rollout/phase-2\n\
+                  `#nope [[Nope]]`\n```\n#code [[Code]]\n```\n## Überschrift ohne Tag";
+        assert_eq!(wiki_links(md), vec!["Architektur", "Jour fixe"]);
+        assert_eq!(tags(md), vec!["projekt", "rollout/phase-2"]);
+    }
+
+    #[test]
+    fn chunks_split_at_headings_and_keep_code_together() {
+        let md = format!("Intro\n\n# A\n\n{}\n\n{}\n\n# B\n\n```\nx\n\ny\n```\n", "a".repeat(800), "b".repeat(800));
+        let c = chunks(&md);
+        assert_eq!(c.len(), 4, "{c:#?}");
+        assert_eq!(c[0], "Intro");
+        assert!(c[1].starts_with("# A"));
+        assert!(c[3].starts_with("# B") && c[3].contains("x\n\ny"));
+    }
+
+    #[test]
+    fn link_rewriting_keeps_alias_and_anchor() {
+        let md = "[[Alt]] [[alt|Alias]] [[Alt#Kapitel]] [[Andere]] [[offen";
+        assert_eq!(replace_link_target(md, "Alt", "Neu"), "[[Neu]] [[Neu|Alias]] [[Neu#Kapitel]] [[Andere]] [[offen");
+    }
+
+    #[test]
+    fn save_backlinks_rename_and_tags() {
+        let db = Database::open_in_memory().unwrap();
+        let a = db.create_page(None, "Architektur", None).unwrap();
+        let b = db.create_page(None, "Meeting", None).unwrap();
+        db.save_page_content(b.id, "Heute: siehe [[Architektur]] #jourfixe\n\n[[Fehlt]]").unwrap();
+
+        let doc = db.page_doc(a.id).unwrap();
+        assert_eq!(doc.backlinks.len(), 1);
+        assert_eq!(doc.backlinks[0].context, "Heute: siehe [[Architektur]] #jourfixe");
+        assert_eq!(db.page_doc(b.id).unwrap().unresolved_links, vec!["Fehlt"]);
+        assert_eq!(db.tag_counts().unwrap(), vec![("jourfixe".to_string(), 1)]);
+
+        assert_eq!(db.rename_page_linked(a.id, "Systemarchitektur", true).unwrap(), 1);
+        assert!(db.page_doc(b.id).unwrap().content.contains("[[Systemarchitektur]]"));
+        assert_eq!(db.page_doc(a.id).unwrap().backlinks.len(), 1, "backlink follows the rename");
+    }
+
+    #[test]
+    fn embeddings_survive_unrelated_edits() {
+        let db = Database::open_in_memory().unwrap();
+        let p = db.create_page(None, "P", None).unwrap();
+        db.save_page_content(p.id, "# Eins\n\nerster\n\n# Zwei\n\nzweiter").unwrap();
+        for (id, _) in crate::ai::rag::pending_blocks(&db, 10).unwrap() {
+            crate::ai::rag::store_embedding(&db, id, &[1.0]).unwrap();
+        }
+        db.save_page_content(p.id, "# Eins\n\nerster\n\n# Zwei\n\nzweiter, geändert").unwrap();
+        let pending = crate::ai::rag::pending_blocks(&db, 10).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert!(pending[0].1.contains("geändert"));
+    }
+
+    #[test]
+    fn move_page_reorders_and_rejects_cycles() {
+        let db = Database::open_in_memory().unwrap();
+        let a = db.create_page(None, "A", None).unwrap();
+        let b = db.create_page(None, "B", None).unwrap();
+        let c = db.create_page(Some(a.id), "C", None).unwrap();
+        assert!(db.move_page(a.id, Some(c.id), 0).is_err());
+        db.move_page(b.id, Some(a.id), 0).unwrap();
+        let tree = db.page_tree().unwrap();
+        let kids: Vec<_> = tree[0].children.iter().map(|n| n.page.title.as_str()).collect();
+        assert_eq!(kids, ["B", "C"]);
+    }
+
+    #[test]
+    fn daily_note_is_created_once_under_journal() {
+        let db = Database::open_in_memory().unwrap();
+        let d = NaiveDate::from_ymd_opt(2026, 9, 23).unwrap();
+        let p = db.daily_note(d).unwrap();
+        assert_eq!(p.title, "2026-09-23");
+        assert_eq!(db.daily_note(d).unwrap().id, p.id);
+        assert!(db.page_doc(p.id).unwrap().content.starts_with("## Fokus"));
+        assert_eq!(db.page(p.parent_id.unwrap()).unwrap().title, JOURNAL_TITLE);
+    }
+}

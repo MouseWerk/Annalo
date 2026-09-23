@@ -1,0 +1,110 @@
+/* Design tokens. Dark is the default look; light follows the same scale. */
+
+:root {
+  --font-ui: "Inter Variable", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", "Cascadia Code", Consolas, ui-monospace, monospace;
+
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 15px;
+  --fs-xl: 20px;
+  --fs-title: 34px;
+
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 12px;
+
+  --sidebar-w: 256px;
+  --panel-w: 360px;
+  --tabbar-h: 40px;
+  --statusbar-h: 28px;
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast: 120ms;
+  --dur: 200ms;
+}
+
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg-app: #0e0f11;
+  --bg-sidebar: #121316;
+  --bg-canvas: #16171a;
+  --bg-raised: #1c1d21;
+  --bg-overlay: #202126;
+  --bg-input: #1a1b1f;
+  --bg-hover: rgb(255 255 255 / 0.045);
+  --bg-active: rgb(255 255 255 / 0.075);
+  --bg-selected: rgb(129 140 248 / 0.14);
+
+  --border: rgb(255 255 255 / 0.07);
+  --border-strong: rgb(255 255 255 / 0.12);
+  --border-focus: #818cf8;
+
+  --text: #ececef;
+  --text-2: #a7a9b1;
+  --text-3: #71747d;
+  --text-inverse: #0e0f11;
+
+  --accent: #818cf8;
+  --accent-strong: #6366f1;
+  --accent-soft: rgb(129 140 248 / 0.14);
+  --accent-text: #a5b4fc;
+
+  --success: #4ade80;
+  --success-soft: rgb(74 222 128 / 0.12);
+  --warning: #fbbf24;
+  --warning-soft: rgb(251 191 36 / 0.12);
+  --danger: #f87171;
+  --danger-soft: rgb(248 113 113 / 0.12);
+  --info: #38bdf8;
+  --info-soft: rgb(56 189 248 / 0.12);
+
+  --mark: rgb(250 204 21 / 0.22);
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-md: 0 8px 24px rgb(0 0 0 / 0.45), 0 0 0 1px rgb(255 255 255 / 0.06);
+  --shadow-lg: 0 24px 64px rgb(0 0 0 / 0.55), 0 0 0 1px rgb(255 255 255 / 0.07);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg-app: #f4f4f5;
+  --bg-sidebar: #f7f7f8;
+  --bg-canvas: #ffffff;
+  --bg-raised: #ffffff;
+  --bg-overlay: #ffffff;
+  --bg-input: #ffffff;
+  --bg-hover: rgb(15 15 20 / 0.04);
+  --bg-active: rgb(15 15 20 / 0.07);
+  --bg-selected: rgb(99 102 241 / 0.1);
+
+  --border: rgb(15 15 20 / 0.08);
+  --border-strong: rgb(15 15 20 / 0.14);
+  --border-focus: #6366f1;
+
+  --text: #18181b;
+  --text-2: #52525b;
+  --text-3: #8b8b94;
+  --text-inverse: #ffffff;
+
+  --accent: #6366f1;
+  --accent-strong: #4f46e5;
+  --accent-soft: rgb(99 102 241 / 0.1);
+  --accent-text: #4f46e5;
+
+  --success: #16a34a;
+  --success-soft: rgb(22 163 74 / 0.1);
+  --warning: #b45309;
+  --warning-soft: rgb(217 119 6 / 0.12);
+  --danger: #dc2626;
+  --danger-soft: rgb(220 38 38 / 0.09);
+  --info: #0284c7;
+  --info-soft: rgb(2 132 199 / 0.1);
+
+  --mark: rgb(250 204 21 / 0.35);
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.06);
+  --shadow-md: 0 8px 24px rgb(0 0 0 / 0.1), 0 0 0 1px rgb(0 0 0 / 0.06);
+  --shadow-lg: 0 24px 64px rgb(0 0 0 / 0.16), 0 0 0 1px rgb(0 0 0 / 0.07);
+}

@@ -59,50 +59,72 @@ pub fn seed(db: &Database, now: DateTime<Utc>) -> Result<bool> {
         })?;
     }
 
-    let ws = db.create_page(None, "Workspace", Some("🏠"))?;
-    let proj = db.create_page(Some(ws.id), "PRJ-2026-X Rollout", Some("📁"))?;
-    let arch = db.create_page(Some(proj.id), "Architektur", Some("🧩"))?;
-    let meet = db.create_page(Some(proj.id), "Meeting Notes", Some("🗒️"))?;
-    db.create_page(Some(ws.id), "Wissensbasis", Some("📚"))?;
-
-    db.add_block(arch.id, "heading", "# Architektur der Systemintegration")?;
-    db.add_block(
-        arch.id,
-        "paragraph",
-        "Die Middleware verbindet das ERP über IDocs mit dem Auftragsportal. Siehe [[Meeting Notes]].",
-    )?;
-    db.add_block(
-        arch.id,
-        "callout",
-        "> **Risiko:** Vorgang 1020 liegt auf dem kritischen Pfad. Verzug verschiebt die Abnahme.",
-    )?;
-    db.add_block(arch.id, "code", "```powershell\nGet-Service -Name 'Aether*' | Restart-Service\n```")?;
-    db.add_block(arch.id, "view", "netzplan")?;
-    db.add_block(meet.id, "heading", "# Jour fixe 22.09.")?;
-    db.add_block(
-        meet.id,
-        "todo",
-        "- [x] Budget NP-8801 prüfen\n- [ ] Testdaten für 1040 bereitstellen\n- [ ] Schulungstermine 2010 fixieren",
-    )?;
-    db.add_block(
-        meet.id,
-        "paragraph",
-        "Delta-Load läuft stabil; nächster Schritt ist der Integrationstest. Zurück zur [[Architektur]].",
+    let start = db.create_page(None, "Willkommen", Some("sparkles"))?;
+    db.save_page_content(
+        start.id,
+        "AETHER OS ist dein lokaler Arbeitsbereich für Notizen, Projekte und Zeiterfassung.\n\n\
+         ## So arbeitest du hier\n\n\
+         - Notizen sind Markdown. Verlinke Seiten mit `[[Seitenname]]` und verschlagworte mit `#tag`.\n\
+         - Zeit buchst du direkt im Text: tippe `/zeit NP-8801/1020 1.5h Review` und drücke Enter.\n\
+         - `Ctrl K` öffnet die Befehlspalette, `Ctrl O` den Schnellwechsler, `Alt Space` funktioniert global.\n\
+         - Der Assistent rechts kennt deine Notizen und Zeitlogs. Server und Token stellst du in den Einstellungen ein.\n\n\
+         ## Einstieg\n\n\
+         - [ ] LiteLLM-Server in den Einstellungen verbinden\n\
+         - [ ] Obsidian-Vault importieren\n\
+         - [ ] Erstes Projekt unter [[PRJ-2026-X Rollout]] ansehen\n",
     )?;
 
-    db.add_block(ws.id, "heading", "# Willkommen in AETHER OS")?;
-    db.add_block(
-        ws.id,
-        "paragraph",
-        "Lokaler Workspace mit **Notizen**, **Zeiterfassung auf Netzplan-Elementen** und einem integrierten \
-         KI-Assistenten. Drücke `Alt+Space` für die Befehlspalette.",
+    let projects = db.create_page(None, "Projekte", Some("folder-kanban"))?;
+    let proj = db.create_page(Some(projects.id), "PRJ-2026-X Rollout", Some("briefcase"))?;
+    db.save_page_content(
+        proj.id,
+        "Einführung der ERP-Middleware bei Kunde X. #projekt #rollout\n\n\
+         ## Ziele\n\n\
+         1. IDoc-Schnittstellen für Material- und Auftragsdaten produktiv\n\
+         2. Key-User geschult, Go-Live bis Ende Oktober\n\n\
+         ## Netzpläne\n\n\
+         | Netzplan | Inhalt | Plan |\n|---|---|---|\n\
+         | NP-8801 | Systemintegration ERP | 120 h |\n\
+         | NP-8802 | Schulung & Go-Live | 40 h |\n\n\
+         Technische Details in [[Architektur]], Abstimmungen im [[Jour fixe 22.09.]].\n",
     )?;
-    db.add_block(
-        ws.id,
-        "paragraph",
-        "Zeit direkt im Text buchen: tippe `/zeit NP-8801/1020 1.5h 'Review'` in einen Block und drücke Enter.",
+    let arch = db.create_page(Some(proj.id), "Architektur", Some("blocks"))?;
+    db.save_page_content(
+        arch.id,
+        "Die Middleware verbindet das ERP über IDocs mit dem Auftragsportal. #architektur\n\n\
+         ## Komponenten\n\n\
+         - **Inbound**: IDoc-Empfang, Mapping auf das kanonische Datenmodell\n\
+         - **Queue**: persistente Verarbeitung mit Retry\n\
+         - **Outbound**: REST-Schnittstelle Auftragsdaten (OpenAPI 3.1)\n\n\
+         > **Risiko:** Vorgang 1020 liegt auf dem kritischen Pfad. Verzug verschiebt die Abnahme.\n\n\
+         ## Betrieb\n\n\
+         ```powershell\nGet-Service -Name 'Aether*' | Restart-Service\n```\n",
     )?;
-    db.add_block(ws.id, "view", "kanban")?;
+    let jf = db.create_page(Some(proj.id), "Jour fixe 22.09.", Some("users"))?;
+    db.save_page_content(
+        jf.id,
+        "Teilnehmer: Fachbereich, IT-Betrieb, Projektleitung #meeting\n\n\
+         ## Ergebnisse\n\n\
+         - Delta-Load läuft stabil, nächster Schritt ist der Integrationstest (siehe [[Architektur]])\n\
+         - Schulungstermine für NP-8802 werden bis Freitag fixiert\n\n\
+         ## Aufgaben\n\n\
+         - [x] Budget NP-8801 prüfen\n\
+         - [ ] Testdaten für 1040 bereitstellen\n\
+         - [ ] Schulungstermine 2010 fixieren\n",
+    )?;
+    let kb = db.create_page(None, "Wissensbasis", Some("book-open"))?;
+    let cats = db.create_page(Some(kb.id), "SAP CATS Leitfaden", Some("file-text"))?;
+    db.save_page_content(
+        cats.id,
+        "Zeiten werden wöchentlich in CATS übertragen. #sap #zeiterfassung\n\n\
+         1. Einträge der Woche prüfen und **freigeben**\n\
+         2. Export im Format *SAP CATS* erzeugen\n\
+         3. Datei in der CATS-Upload-Transaktion einlesen\n\n\
+         Leistungsarten: `DEV`, `CONSULTING`, `PM`, `TEST`.\n",
+    )?;
+    db.set_favorite(proj.id, true)?;
+    db.set_favorite(arch.id, true)?;
+    db.daily_note(now.date_naive())?;
     Ok(true)
 }
 
@@ -119,6 +141,7 @@ mod tests {
         let s = crate::netzplan::schedule(&db.list_vorgaenge(np.id).unwrap()).unwrap();
         assert_eq!(s.duration, 12.0);
         assert_eq!(db.list_time_entries(&Default::default()).unwrap().len(), 10);
-        assert!(!crate::graph::page_graph(&db).unwrap().edges.is_empty());
+        let arch = db.page_by_title("Architektur").unwrap().unwrap();
+        assert_eq!(db.page_doc(arch.id).unwrap().backlinks.len(), 2);
     }
 }

@@ -3,7 +3,7 @@
 ## Layers
 
 ```
- ui/ (ES modules, WebView2)          ── invoke()/listen() ──▶  src-tauri (IPC commands, state, sampler)
+ ui/ (React + TipTap, WebView2)      ── invoke()/listen() ──▶  src-tauri (IPC commands, state, secrets, sampler)
                                                                     │
  crates/aether-cli ─────────────────────────────────────────────────┤
                                                                     ▼
@@ -28,12 +28,26 @@ events and OS integration. The UI never talks to the network or the filesystem d
 | `vorgaenge` + `vorgang_links` | Level 3: activities with duration, plan hours, optional manual remaining estimate, and precedence links for CPM |
 | `leistungsarten` | Level 4: activity types (`DEV`, `CONSULTING`, `PM`, `TEST`) |
 | `time_entries` | `netzplan_id`, `vorgang_nr`, `leistungsart`, `start_time`, `end_time`, `duration_minutes`, `description`, `status_flag` (`running`/`draft`/`released`/`exported`), `source`. A partial unique index allows only one running timer |
-| `pages`, `notes_blocks` | Page tree and Markdown blocks. `vector_embedding` is a little-endian `f32` BLOB, cleared by a trigger when the text changes |
+| `pages` | Page tree; `content` holds the page as one Markdown document (v2). `daily_date` marks daily notes, `favorite` pins pages |
+| `notes_blocks` | Derived chunk index (split at headings, ~1200 chars) rebuilt on every save; `vector_embedding` is a little-endian `f32` BLOB. Unchanged chunks keep their embedding |
+| `page_links`, `page_tags` | Outgoing `[[links]]` (lower-cased targets, so links to not-yet-existing pages resolve later) and `#tags`, for backlinks and the tag view |
+| `pages_fts` | FTS5 over page titles (title hits rank first in search) |
+| `settings` | Application settings as JSON. The LiteLLM API key is **not** stored here; the shell keeps it in the Windows Credential Manager |
 | `notes_blocks_fts`, `time_entries_fts` | FTS5 external-content indexes (unicode61, diacritics removed), kept in sync by triggers |
 | `ai_usage` | Per-request tokens, cost, TTFT and tokens/s |
 
 Migrations are numbered and tracked through `PRAGMA user_version`; a database newer than
 the binary is refused rather than modified.
+
+Migration v2 converts the old block model: blocks are concatenated into
+`pages.content`, then every page is re-indexed (chunks, links, tags).
+
+## Notes model
+
+- The editor (TipTap/ProseMirror) loads and saves Markdown via `@tiptap/markdown`. Custom nodes serialize to portable syntax:
+  `[[Target#Heading|Alias]]` for links and `<time-entry id=… hours=… target=…>text</time-entry>` for booked time.
+- YAML frontmatter is split off before editing and re-attached on save, so imported Obsidian notes keep their properties.
+- Autosave runs 450 ms after the last change and on window blur. Renames rewrite `[[links]]` in every referencing page.
 
 ## Key algorithms
 
@@ -65,14 +79,13 @@ the binary is refused rather than modified.
 | Win32 hooks for idle and active window | `GetLastInputInfo` and `GetForegroundWindow` sampled every 5 s | No global keyboard/mouse hooks: same result, far less invasive |
 | Export SAP PS (CATS), Jira, JSON, CSV | `export.rs` | CATS as an upload file (CATSDB field names). Jira as payloads for `POST /rest/api/3/issue/{key}/worklog`. Nothing is uploaded automatically |
 | Function calling: PowerShell, Git, REST | `ai/tools.rs` | Every system call needs explicit user approval. git is limited to read-only subcommands, and options that execute programs are rejected |
-| Database views: Table, Kanban, Timeline/Gantt, Netzplan, Graph | `ui/js/views.js` | Every view can also be embedded in a page as a block (`/` → "Ansicht: …") |
+| Database views | Timesheet (week grid + entries), Projects (tables with budget, ETC, critical path) | Graphical network diagrams and graph views were dropped in favour of tables |
 
 ## Verification status
 
-- `aether-core`: 43 unit and integration tests (including a fake LiteLLM SSE server).
-  `cargo clippy` is clean.
-- `src-tauri`: compiles on Linux (WebKitGTK). The Windows-only Win32 probe was type-checked
-  against `x86_64-pc-windows-gnu`. The Windows installer build runs in CI (`.github/workflows/ci.yml`)
-  and has not been run locally.
-- UI: every view has been exercised in headless Chromium against the preview backend
-  (no console errors), in dark and light themes.
+- `aether-core`: unit and integration tests (including a fake LiteLLM SSE server); `cargo clippy` clean.
+- End-to-end: `e2e/run.sh` builds the desktop app with the production frontend embedded and drives it through
+  WebDriver (`tauri-driver` + WebKitWebDriver under Xvfb): notes, links, rename, tags, palette, tabs, find,
+  daily notes, `/zeit`, timer, timesheet, export, projects, settings (LiteLLM URL, token, models), the assistant
+  (streaming, tool calls, approvals, cancel), embeddings, vault import/export, and screenshots in both themes.
+- The Windows build (WebView2, Credential Manager, Win32 idle probe) is built in CI on `windows-latest`.

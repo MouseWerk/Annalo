@@ -17,7 +17,7 @@ pub enum Tier {
     Reasoning,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RouterConfig {
     pub local_model: String,
     pub standard_model: String,

@@ -59,7 +59,7 @@ async fn streams_deltas_and_reports_usage_and_cost() {
     };
     let mut deltas = vec![];
     let c = client
-        .chat_stream(&req, |e| {
+        .chat_stream(&req, None, |e| {
             if let StreamEvent::Delta { text, .. } = e {
                 deltas.push(text)
             }
@@ -97,6 +97,7 @@ async fn surfaces_provider_errors() {
     let err = client
         .chat_stream(
             &ChatRequest { model: "nope".into(), messages: vec![ChatMessage::user("hi")], ..Default::default() },
+            None,
             |_| {},
         )
         .await

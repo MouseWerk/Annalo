@@ -59,6 +59,8 @@ pub fn pending_blocks(db: &Database, limit: usize) -> Result<Vec<(i64, String)>>
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContextChunk {
     pub source: String,
+    /// Page the chunk belongs to, for citations in the UI.
+    pub page_id: Option<i64>,
     pub text: String,
     pub score: f64,
     pub block_id: Option<i64>,
@@ -78,6 +80,20 @@ pub fn vector_top_k(db: &Database, query: &[f32], k: usize) -> Result<Vec<(i64, 
     scored.sort_by(|a, b| b.1.total_cmp(&a.1));
     scored.truncate(k);
     Ok(scored)
+}
+
+/// The best-matching chunk of a page for a keyword query.
+fn best_chunk(db: &Database, page_id: i64, query_text: &str) -> Result<Option<i64>> {
+    let Some(q) = search::fts_query(query_text) else { return Ok(None) };
+    Ok(db
+        .conn()
+        .query_row(
+            "SELECT b.id FROM notes_blocks_fts JOIN notes_blocks b ON b.id = notes_blocks_fts.rowid
+             WHERE notes_blocks_fts MATCH ?1 AND b.page_id = ?2 ORDER BY bm25(notes_blocks_fts) LIMIT 1",
+            params![q, page_id],
+            |r| r.get(0),
+        )
+        .optional()?)
 }
 
 /// Hybrid retrieval: vector similarity (when a query embedding is given) fused
@@ -103,7 +119,12 @@ pub fn retrieve(
     }
     for (rank, hit) in search::search(db, query_text, k * 2)?.into_iter().enumerate() {
         let key = match hit {
-            SearchHit::Block { id, .. } => Key::Block(id),
+            // Title hits carry no passage; the page's chunks are found via content.
+            SearchHit::Page { .. } => continue,
+            SearchHit::Note { page_id, .. } => match best_chunk(db, page_id, query_text)? {
+                Some(id) => Key::Block(id),
+                None => continue,
+            },
             SearchHit::TimeEntry { id, .. } => Key::Entry(id),
         };
         *fused.entry(key).or_default() += 1.0 / (RRF_K + rank as f64 + 1.0);
@@ -119,12 +140,19 @@ pub fn retrieve(
         let chunk = match key {
             Key::Block(id) => conn
                 .query_row(
-                    "SELECT p.title, b.content_markdown FROM notes_blocks b JOIN pages p ON p.id = b.page_id WHERE b.id = ?1",
+                    "SELECT p.title, b.content_markdown, p.id FROM notes_blocks b JOIN pages p ON p.id = b.page_id WHERE b.id = ?1",
                     [id],
-                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?)),
                 )
                 .optional()?
-                .map(|(title, text)| ContextChunk { source: format!("Seite: {title}"), text, score, block_id: Some(id), time_entry_id: None }),
+                .map(|(title, text, page_id)| ContextChunk {
+                    source: format!("Seite: {title}"),
+                    page_id: Some(page_id),
+                    text,
+                    score,
+                    block_id: Some(id),
+                    time_entry_id: None,
+                }),
             Key::Entry(id) => conn
                 .query_row(
                     "SELECT n.netzplan_nr, e.vorgang_nr, e.start_time, e.duration_minutes, e.description
@@ -142,7 +170,14 @@ pub fn retrieve(
                     },
                 )
                 .optional()?
-                .map(|text| ContextChunk { source: "Zeiterfassung".into(), text, score, block_id: None, time_entry_id: Some(id) }),
+                .map(|text| ContextChunk {
+                    source: "Zeiterfassung".into(),
+                    page_id: None,
+                    text,
+                    score,
+                    block_id: None,
+                    time_entry_id: Some(id),
+                }),
         };
         out.extend(chunk);
     }
@@ -175,23 +210,25 @@ mod tests {
     fn hybrid_retrieval_fuses_vector_and_keyword_hits() {
         let db = Database::open_in_memory().unwrap();
         let page = db.create_page(None, "Architektur", None).unwrap();
-        let a = db.add_block(page.id, "paragraph", "Der Datenbank-Layer nutzt SQLite mit WAL.").unwrap();
-        let b = db.add_block(page.id, "paragraph", "Netzplan NP-8801 wird im Oktober freigegeben.").unwrap();
-        let c = db.add_block(page.id, "paragraph", "Kaffeemaschine im 3. OG ist defekt.").unwrap();
-        db.add_block(page.id, "paragraph", "   ").unwrap();
+        db.save_page_content(
+            page.id,
+            "# Datenbank\n\nDer Datenbank-Layer nutzt SQLite mit WAL.\n\n# Netzplan\n\nNetzplan NP-8801 wird im Oktober freigegeben.\n\n# Sonstiges\n\nKaffeemaschine im 3. OG ist defekt.",
+        )
+        .unwrap();
 
         let pending = pending_blocks(&db, 10).unwrap();
-        assert_eq!(pending.iter().map(|p| p.0).collect::<Vec<_>>(), [a.id, b.id, c.id]);
-        store_embedding(&db, a.id, &[1.0, 0.0, 0.0]).unwrap();
-        store_embedding(&db, b.id, &[0.0, 1.0, 0.0]).unwrap();
-        store_embedding(&db, c.id, &[0.0, 0.0, 1.0]).unwrap();
+        assert_eq!(pending.len(), 3);
+        let (a, b, c) = (pending[0].0, pending[1].0, pending[2].0);
+        store_embedding(&db, a, &[1.0, 0.0, 0.0]).unwrap();
+        store_embedding(&db, b, &[0.0, 1.0, 0.0]).unwrap();
+        store_embedding(&db, c, &[0.0, 0.0, 1.0]).unwrap();
         assert!(pending_blocks(&db, 10).unwrap().is_empty());
 
         // Vector points at the database block, keywords at the Netzplan block:
         // both must be in the top 2, the unrelated block must not.
         let chunks = retrieve(&db, "NP-8801", Some(&[0.9, 0.1, 0.0]), 2).unwrap();
         let ids: Vec<_> = chunks.iter().filter_map(|c| c.block_id).collect();
-        assert!(ids.contains(&a.id) && ids.contains(&b.id), "{chunks:?}");
+        assert!(ids.contains(&a) && ids.contains(&b), "{chunks:?}");
         assert!(format_context(&chunks).contains("[1] (Seite: Architektur)"));
     }
 }

@@ -83,7 +83,7 @@ fn local_to_utc(offset: FixedOffset, dt: chrono::NaiveDateTime) -> Result<DateTi
 
 // ------------------------------------------------------------------- budgets
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Thresholds {
     /// Consumed share of the plan that raises a warning (e.g. 0.75).
     pub warning: f64,

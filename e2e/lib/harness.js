@@ -1,0 +1,160 @@
+// Starts the real AETHER OS desktop binary under tauri-driver and returns a
+// WebdriverIO session. Each call uses a fresh, isolated data directory.
+
+import { spawn, execSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { remote } from "webdriverio";
+
+const ROOT = path.resolve(import.meta.dirname, "../..");
+export const APP = process.env.AETHER_APP ?? path.join(ROOT, "target/debug/aether-os");
+export const SHOTS = process.env.AETHER_SHOTS ?? path.join(ROOT, "e2e/screenshots");
+const DISPLAY = process.env.DISPLAY ?? ":99";
+
+function ensureXvfb() {
+  try {
+    execSync(`xdpyinfo -display ${DISPLAY}`, { stdio: "ignore" });
+  } catch {
+    const x = spawn("Xvfb", [DISPLAY, "-screen", "0", "1600x1000x24", "-nolisten", "tcp"], { stdio: "ignore", detached: true });
+    x.unref();
+    execSync("sleep 1");
+  }
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function waitForPort(port, timeout = 15000) {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    try {
+      const r = await fetch(`http://127.0.0.1:${port}/status`);
+      if (r.ok) return;
+    } catch {
+      /* not up yet */
+    }
+    await sleep(150);
+  }
+  throw new Error(`port ${port} did not open`);
+}
+
+export async function launch({ demo = true, width = 1480, height = 920 } = {}) {
+  ensureXvfb();
+  fs.mkdirSync(SHOTS, { recursive: true });
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "aether-e2e-"));
+  const port = 4444 + Math.floor(Math.random() * 500);
+  const env = {
+    ...process.env,
+    DISPLAY,
+    AETHER_DATA_DIR: dataDir,
+    // Isolate WebView storage (localStorage, caches) per run.
+    XDG_DATA_HOME: path.join(dataDir, "xdg-data"),
+    XDG_CACHE_HOME: path.join(dataDir, "xdg-cache"),
+    AETHER_STARTUP: JSON.stringify({ demo }),
+    WEBKIT_DISABLE_COMPOSITING_MODE: "1",
+    GDK_BACKEND: "x11",
+    NO_AT_BRIDGE: "1",
+  };
+  const driver = spawn("tauri-driver", ["--port", String(port), "--native-port", String(port + 1000)], { env, stdio: ["ignore", "ignore", "pipe"] });
+  let driverErr = "";
+  driver.stderr.on("data", (d) => (driverErr += d));
+  await waitForPort(port);
+
+  const browser = await remote({
+    hostname: "127.0.0.1",
+    port,
+    logLevel: "error",
+    capabilities: { "wdio:enforceWebDriverClassic": true, "tauri:options": { application: APP } },
+  });
+  await browser.setWindowSize(width, height).catch(() => {});
+  // Wait for the UI to be ready.
+  await browser.waitUntil(async () => (await browser.execute(() => document.body.classList.contains("ready"))) === true, {
+    timeout: 20000,
+    timeoutMsg: "app did not become ready",
+  });
+
+  const app = {
+    browser,
+    dataDir,
+    async shot(name) {
+      await sleep(250);
+      await browser.saveScreenshot(path.join(SHOTS, `${name}.png`));
+    },
+    $: (sel) => browser.$(sel),
+    $$: (sel) => browser.$$(sel),
+    async click(sel) {
+      const el = await browser.$(sel);
+      await el.waitForClickable({ timeout: 8000 });
+      await el.click();
+      return el;
+    },
+    async text(sel) {
+      return app.textOf(await browser.$(sel));
+    },
+    /** innerText via script (WebKit's getText() is empty under user-select: none). */
+    async textOf(el) {
+      return (await browser.execute((e) => e.innerText, el)).trim();
+    },
+    async keys(k) {
+      await browser.keys(k);
+    },
+    async type(text) {
+      for (const ch of text) await browser.keys(ch);
+    },
+    /** Invokes a Tauri command directly (for setup and assertions). */
+    async invoke(cmd, args = {}) {
+      return browser.executeAsync(
+        (c, a, done) => window.__TAURI_INTERNALS__.invoke(c, a).then((r) => done({ ok: r }), (e) => done({ err: String(e) })),
+        cmd,
+        args,
+      ).then((r) => {
+        if (r.err) throw new Error(r.err);
+        return r.ok;
+      });
+    },
+    /** Sets a <select> value and notifies React (native click on options is unreliable in WebKit). */
+    async select(sel, value) {
+      const ok = await browser.execute(
+        (s, v) => {
+          const el = document.querySelector(s);
+          if (!el || ![...el.options].some((o) => o.value === v)) return false;
+          const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set;
+          setter.call(el, v);
+          el.dispatchEvent(new Event("change", { bubbles: true }));
+          return true;
+        },
+        sel,
+        value,
+      );
+      if (!ok) throw new Error(`cannot select ${value} in ${sel}`);
+    },
+    async waitFor(sel, timeout = 8000) {
+      const el = await browser.$(sel);
+      await el.waitForDisplayed({ timeout });
+      return el;
+    },
+    async waitText(sel, pattern, timeout = 8000) {
+      await browser.waitUntil(async () => {
+        const els = await browser.$$(sel);
+        for (const e of els) if (pattern.test(await app.textOf(e))) return true;
+        return false;
+      }, { timeout, timeoutMsg: `no ${sel} matching ${pattern}` });
+    },
+    async consoleErrors() {
+      return browser.execute(() => window.__aetherErrors ?? []);
+    },
+    async close() {
+      await browser.deleteSession().catch(() => {});
+      driver.kill("SIGTERM");
+      await sleep(300);
+      try {
+        execSync(`pkill -f "${APP}"`, { stdio: "ignore" });
+      } catch {
+        /* already gone */
+      }
+      fs.rmSync(dataDir, { recursive: true, force: true });
+      if (driverErr.includes("panicked")) throw new Error(driverErr);
+    },
+  };
+  return app;
+}

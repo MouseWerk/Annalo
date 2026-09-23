@@ -1,0 +1,74 @@
+// Minimal LiteLLM-compatible server for end-to-end tests.
+// Streams chat completions (SSE), supports tool calls, embeddings and model listing,
+// and records every request so tests can assert on headers and payloads.
+
+import http from "node:http";
+
+export function startFakeLiteLLM({ port = 4999, apiKey = "sk-test-aether" } = {}) {
+  const requests = [];
+  const server = http.createServer(async (req, res) => {
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    const json = body ? JSON.parse(body) : null;
+    requests.push({ method: req.method, url: req.url, headers: req.headers, body: json });
+
+    if (req.headers.authorization !== `Bearer ${apiKey}`) {
+      res.writeHead(401, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ error: { message: "Authentication Error, invalid API key" } }));
+    }
+    if (req.url === "/v1/models") {
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ data: ["firma-schnell", "firma-standard", "firma-reasoning", "firma-embed"].map((id) => ({ id, object: "model" })) }));
+    }
+    if (req.url === "/v1/embeddings") {
+      const vec = (t) => Array.from({ length: 8 }, (_, i) => ((t.charCodeAt(i % t.length) || 1) % 7) / 7 + (t.length % (i + 2)) / 10);
+      res.writeHead(200, { "content-type": "application/json" });
+      return res.end(JSON.stringify({ data: json.input.map((t, index) => ({ index, embedding: vec(t) })) }));
+    }
+    if (req.url === "/v1/chat/completions") {
+      const msgs = json.messages;
+      const last = msgs[msgs.length - 1];
+      const lastUser = [...msgs].reverse().find((m) => m.role === "user")?.content ?? "";
+      res.writeHead(200, { "content-type": "text/event-stream", "x-litellm-response-cost": "0.0012" });
+      const send = (obj) => res.write(`data: ${JSON.stringify(obj)}\n\n`);
+      const words = (text) => text.match(/\S+\s*/g) ?? [];
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+      let text;
+      let toolCall = null;
+      const booking = lastUser.match(/buche\s+([\d.,]+)\s*h\s+auf\s+(\S+)/i);
+      if (last.role === "tool") {
+        text = `Erledigt: Die Zeit ist gebucht. Details stehen in der **Zeiterfassung**.`;
+      } else if (booking && json.tools?.length) {
+        toolCall = { name: "log_time", arguments: JSON.stringify({ command: `/zeit ${booking[2]} ${booking[1].replace(",", ".")}h #DEV Gebucht vom Assistenten` }) };
+      } else if (/git status/i.test(lastUser) && json.tools?.length) {
+        toolCall = { name: "git", arguments: JSON.stringify({ args: ["status", "--short"], repo: "." }) };
+      } else if (/langsam/i.test(lastUser)) {
+        text = Array.from({ length: 200 }, (_, i) => `Wort${i}`).join(" ");
+      } else {
+        const sys = msgs.filter((m) => m.role === "system").map((m) => m.content).join("\n");
+        const page = sys.match(/Aktuell geöffnete Seite „([^“]+)“/)?.[1];
+        text = `## Zusammenfassung\n\nDu hast gefragt: *${lastUser}*.\n\n- Kontext: ${page ? `[[${page}]]` : "keine Seite"}\n- Siehe auch [[Architektur]]\n\n\`\`\`bash\necho aether\n\`\`\``;
+      }
+
+      await sleep(60);
+      if (toolCall) {
+        send({ choices: [{ delta: { role: "assistant", tool_calls: [{ index: 0, id: "call_1", type: "function", function: { name: toolCall.name, arguments: "" } }] } }] });
+        send({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: toolCall.arguments } }] }, finish_reason: "tool_calls" }] });
+      } else {
+        for (const w of words(text)) {
+          send({ choices: [{ delta: { content: w } }] });
+          await sleep(/langsam/i.test(lastUser) ? 60 : 8);
+          if (res.destroyed) return;
+        }
+        send({ choices: [{ delta: {}, finish_reason: "stop" }] });
+      }
+      send({ choices: [], usage: { prompt_tokens: 420, completion_tokens: toolCall ? 12 : words(text).length } });
+      res.write("data: [DONE]\n\n");
+      return res.end();
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  return new Promise((resolve) => server.listen(port, "127.0.0.1", () => resolve({ server, requests, url: `http://127.0.0.1:${port}`, apiKey, close: () => new Promise((r) => server.close(r)) })));
+}
