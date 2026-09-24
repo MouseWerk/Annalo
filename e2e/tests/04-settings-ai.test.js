@@ -104,6 +104,9 @@ test("assistant books time through a tool call", async () => {
 });
 
 test("system tools need approval; rejecting does not run them", async () => {
+  // System tools are off by default (Settings → KI → Werkzeuge): allow git first.
+  const view = await app.invoke("settings_get");
+  await app.invoke("settings_save", { settings: { ...view.settings, ai: { ...view.settings.ai, allowed_tools: [...view.settings.ai.allowed_tools, "git"] } } });
   const ta = await app.$(".composer textarea");
   await ta.setValue("Zeig mir git status");
   await app.keys(["Enter"]);

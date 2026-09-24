@@ -30,7 +30,7 @@ test("empty workspace shows the welcome choice", async () => {
 
 test("imports an Obsidian vault from a path", async () => {
   await app.keys(["Control", ","]);
-  await app.click(".settings-nav-item:nth-child(4)");
+  await app.click(".settings-nav-item[data-section=\"notes\"]");
   const input = await app.$('input[aria-label="Vault-Pfad"]');
   await input.setValue(vault);
   const rows = await app.$$(".set-row");

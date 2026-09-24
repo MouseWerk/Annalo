@@ -1271,7 +1271,7 @@ function AboutSection({ draft, update }: { draft: Settings; update: (p: Partial<
       <Group title={t("set.about.shortcuts")}>
         <div className="shortcut-list">
           {shortcuts.map(([k, d]) => (
-            <div key={k} className="shortcut">
+            <div key={`${k}-${d}`} className="shortcut">
               <span>{d}</span>
               <span className="keys">
                 {k.split(" ").map((x) => (

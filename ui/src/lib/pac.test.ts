@@ -83,9 +83,9 @@ describe("FindProxyForURL", () => {
     expect(hostOf("https://[::1]:4000/x")).toBe("::1");
     expect(hostOf("kaputt")).toBe(null);
     expect(pacTargets("https://llm.firma.de", ["https://github.com/a.git", "https://github.com/b", "git@x:y"])).toEqual([
-      { key: "*", url: "https://llm.firma.de" },
+      { key: "*", url: "https://llm.firma.de/" },
       { key: "github.com", url: "https://github.com/a.git" },
-      { key: "llm.firma.de", url: "https://llm.firma.de" },
+      { key: "llm.firma.de", url: "https://llm.firma.de/" },
     ]);
   });
 });

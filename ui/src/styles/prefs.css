@@ -103,6 +103,7 @@
 .keys-conflict { font-weight: 500; }
 
 /* network */
+.net-system, .set-row-desc .mono, .pac-result .mono { overflow-wrap: anywhere; min-width: 0; }
 .pac-results { display: grid; gap: 4px; padding: 8px 0; }
 .pac-result { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
 .net-ca { display: grid; gap: 2px; }
@@ -125,3 +126,7 @@
 .diff-from { color: var(--text-3); text-decoration: line-through; overflow-wrap: anywhere; }
 .diff-to { color: var(--text); overflow-wrap: anywhere; }
 .w-200 { width: 200px; max-width: 100%; }
+.segmented button { white-space: nowrap; }
+.set-group .map-row { flex-wrap: wrap; }
+.set-group .map-row > .grow { flex: 1 1 160px; min-width: 0; }
+.set-row-control { min-width: 0; }

@@ -118,7 +118,7 @@ export function NetworkSection({ draft, update }: SectionProps) {
                   {sys.https || sys.http || sys.socks ? (
                     <>
                       <span className="mono">{[...new Set([sys.http, sys.https, sys.socks].filter(Boolean))].join(" · ")}</span>
-                      {sys.bypass && <span className="faint"> · {t("net.exceptions")}: {sys.bypass}</span>}
+                      {sys.bypass && <span className="faint"> · {t("net.exceptions")}: {sys.bypass.split(/[,;\s]+/).filter(Boolean).join(", ")}</span>}
                     </>
                   ) : (
                     <span>{t("net.systemDirect")}</span>

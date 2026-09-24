@@ -154,7 +154,7 @@ export function TimePrefGroups({ draft, update }: SectionProps) {
               </div>
             ))}
             <div className="map-row">
-              <Select value={np} onChange={(e) => setNp(e.target.value)} aria-label={t("set.time.netzplan")} className="w-200">
+              <Select value={np} onChange={(e) => setNp(e.target.value)} aria-label={t("set.time.netzplan")} className="grow">
                 <option value="">{t("set.time.netzplan")}</option>
                 {nps.map((n) => (
                   <option key={n} value={n}>
@@ -163,7 +163,7 @@ export function TimePrefGroups({ draft, update }: SectionProps) {
                 ))}
               </Select>
               <span className="faint">→</span>
-              <Select value={la} onChange={(e) => setLa(e.target.value)} aria-label={t("set.time.leistungsart")} className="w-200">
+              <Select value={la} onChange={(e) => setLa(e.target.value)} aria-label={t("set.time.leistungsart")} className="grow">
                 <option value="">{t("set.time.leistungsart")}</option>
                 {las.map(([code, desc]) => (
                   <option key={code} value={code}>
@@ -200,7 +200,7 @@ export function TimePrefGroups({ draft, update }: SectionProps) {
           />
         </Row>
         <Row label={t("set.time.catsColumns")} description={t("set.time.catsColumnsDesc")}>
-          <Select value={tp.cats_columns} onChange={(e) => set({ cats_columns: e.target.value as TimePrefs["cats_columns"] })} aria-label={t("set.time.catsColumns")} className="w-360">
+          <Select value={tp.cats_columns} onChange={(e) => set({ cats_columns: e.target.value as TimePrefs["cats_columns"] })} aria-label={t("set.time.catsColumns")}>
             <option value="standard">PERNR, WORKDATE, RPROJ, RNPLNR, VORNR, LSTAR, CATSHOURS, MEINH, LTXA1</option>
             <option value="without_wbs">{t("set.time.colsWithoutWbs")}</option>
             <option value="date_first">{t("set.time.colsDateFirst")}</option>

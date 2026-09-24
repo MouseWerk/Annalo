@@ -116,6 +116,16 @@ export function evaluatePac(pac: string, url: string): string {
 
 /** The URLs whose PAC answers are stored: `*` = the LiteLLM URL (default for other hosts). */
 export function pacTargets(litellmUrl: string, others: string[]): { key: string; url: string }[] {
+  // As a browser would pass it: normalized, with a path ("http://host:4000/").
+  const norm = (u: string) => {
+    try {
+      return new URL(u).href;
+    } catch {
+      return u;
+    }
+  };
+  litellmUrl = norm(litellmUrl);
+  others = others.map(norm);
   const out: { key: string; url: string }[] = [{ key: "*", url: litellmUrl }];
   for (const u of others) {
     const h = hostOf(u);

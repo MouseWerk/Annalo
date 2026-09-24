@@ -66,11 +66,19 @@ fn status_of(state: &AppState, settings: &Settings) -> NetworkStatus {
     };
     NetworkStatus {
         password_set: state.proxy_secret.get().is_some(),
-        system: core::system_proxy(),
+        system: without_credentials(core::system_proxy()),
         ca,
         ca_error,
         platform: std::env::consts::OS,
     }
+}
+
+/// The system proxy for display: user names and passwords (e.g. in `HTTPS_PROXY`) are removed.
+fn without_credentials(mut sp: SystemProxy) -> SystemProxy {
+    for p in [&mut sp.http, &mut sp.https, &mut sp.socks] {
+        *p = p.as_deref().map(core::display_proxy);
+    }
+    sp
 }
 
 #[tauri::command(async)]
