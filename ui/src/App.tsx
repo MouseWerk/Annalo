@@ -10,6 +10,7 @@ import { Workspace } from "./components/Workspace";
 import { Resizer, readSize } from "./components/Resizer";
 import { LinkPreview } from "./components/LinkPreview";
 import { CommandPalette } from "./components/CommandPalette";
+import { CalendarPopover, openCalendar } from "./components/CalendarPopover";
 import { RightPanel } from "./panels/RightPanel";
 import { createSubpage } from "./views/PageView";
 import { requestAddProperty } from "./views/PageProperties";
@@ -120,6 +121,7 @@ export function App() {
       else if (mod && !e.shiftKey && k === "n") run(() => createSubpage(null));
       else if (mod && e.shiftKey && k === "d") run(() => openToday());
       else if (mod && e.shiftKey && k === "a") run(() => st.openTab({ kind: "tasks" }));
+      else if (mod && e.shiftKey && k === "c") run(() => (st.calendar ? st.set({ calendar: null }) : openCalendar()));
       else if (mod && e.shiftKey && k === "f")
         run(() => {
           if (!st.sidebarOpen) {
@@ -270,6 +272,7 @@ export function App() {
       )}
       <CommandPalette />
       <LinkPreview />
+      <CalendarPopover />
       <Toasts />
       <ConfirmHost />
       <TemplateHost />

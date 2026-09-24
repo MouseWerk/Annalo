@@ -53,6 +53,11 @@ Migration v2 converts the old block model: blocks are concatenated into
 - **Backups** (`backup.rs`): `VACUUM INTO` writes a consistent snapshot `aether-YYYYMMDD-HHMMSS.db`;
   older files beyond `backup_keep` (default 14) are deleted. The shell backs up on start when the newest
   backup is older than 24 h and re-checks hourly, into `backup_dir` or `<data dir>/backups`.
+- **Markdown mirror** (`mirror.rs`): after each successful backup (with `markdown_mirror`, default on) the shell
+  writes the vault export plus `Zeiterfassung/YYYY-MM.csv` (BOM, `;`, decimal comma) and a `README.txt` marker into
+  `markdown_mirror_dir` or `<backup dir>/markdown`. It is built in `.markdown.staging` and swapped in by renaming the old
+  folder to `.markdown.old`; an interrupted swap is recovered on the next run. A non-empty folder without the marker is
+  never replaced. Failures are recorded (`mirror.error` meta row) and shown in the settings; they do not fail the backup.
 - **Versions** (`versions.rs`): a save stores the page's previous content as a snapshot when the newest
   snapshot is at least 10 minutes old (one per editing session, not per autosave). Restoring a version and
   rename link rewrites in other pages always snapshot first; „Jetzt Version sichern“ (`page_snapshot`)

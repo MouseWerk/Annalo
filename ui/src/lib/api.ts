@@ -31,6 +31,8 @@ export const api = {
   resolvePage: (title: string, create: boolean) => call<T.Page | null>("page_resolve", { title, create }),
   recentPages: (limit = 8) => call<T.Page[]>("recent_pages", { limit }),
   dailyNote: (date?: string) => call<T.Page>("daily_note", { date: date ?? null }),
+  /** Per day `from..=to` (YYYY-MM-DD, local): daily note, booked minutes, open tasks due. */
+  dailyOverview: (from: string, to: string) => call<T.DayOverview[]>("daily_overview", { from, to }),
   tags: () => call<[string, number][]>("tags_list"),
   tagPages: (tag: string) => call<T.Page[]>("tag_pages", { tag }),
   tasks: (filter: T.TaskFilter = {}) => call<T.Task[]>("tasks_list", { filter }),
@@ -97,6 +99,8 @@ export const api = {
   finishOnboarding: (samples: boolean) => call<void>("onboarding_finish", { samples }),
   backupNow: () => call<T.BackupInfo>("backup_now"),
   backups: () => call<T.BackupInfo[]>("backup_list"),
+  mirrorStatus: () => call<T.MirrorStatus>("mirror_status"),
+  openMirror: () => call<void>("mirror_open"),
   appInfo: () => call<{ version: string; data_dir: string; platform: string }>("app_info"),
   dataDirStatus: () => call<T.DataDirStatus>("data_dir_status"),
   inspectDataDir: (path: string) => call<T.DataDirTarget>("data_dir_inspect", { path }),

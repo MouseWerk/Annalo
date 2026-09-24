@@ -182,6 +182,10 @@ export interface Settings {
   workdays: number[];
   backup_dir: string | null;
   backup_keep: number;
+  /** After every backup, write the workspace as Markdown files (+ time entries as CSV). */
+  markdown_mirror: boolean;
+  /** Mirror folder; null = `markdown` in the backup folder. */
+  markdown_mirror_dir: string | null;
   /** Template page for new daily notes. */
   daily_template: number | null;
   /** Closing the main window hides it to the tray. */
@@ -224,6 +228,21 @@ export interface BackupInfo {
   file_name: string;
   created_at: string;
   size_bytes: number;
+}
+export interface MirrorStatus {
+  enabled: boolean;
+  /** Effective mirror folder. */
+  path: string;
+  last_at: string | null;
+  error: string | null;
+}
+/** One day of the daily-note calendar. */
+export interface DayOverview {
+  date: string;
+  note_id: number | null;
+  has_note: boolean;
+  booked_minutes: number;
+  open_tasks: number;
 }
 export interface ConnectionTest {
   ok: boolean;

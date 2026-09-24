@@ -80,6 +80,8 @@ interface State {
   paletteOpen: boolean;
   paletteQuery: string;
   paletteMode: "all" | "pages";
+  /** Daily-note calendar: open at a point (below a button), or centered when x/y are missing. */
+  calendar: CalendarAnchor | null;
   timer: TimerStatus | null;
   meter: SessionMeter | null;
   settings: SettingsView | null;
@@ -122,6 +124,13 @@ interface State {
   dismissToast: (id: number) => void;
   error: (title: string, e: unknown) => void;
   alerts: (alerts: BudgetStatus[]) => void;
+}
+
+export interface CalendarAnchor {
+  x?: number;
+  y?: number;
+  /** Month and day to show first (YYYY-MM-DD); default today. */
+  date?: string;
 }
 
 export interface OpenOpts {
@@ -243,6 +252,7 @@ export const useApp = create<State>((set, get) => ({
   paletteOpen: false,
   paletteQuery: "",
   paletteMode: "all",
+  calendar: null,
   timer: null,
   meter: null,
   settings: null,

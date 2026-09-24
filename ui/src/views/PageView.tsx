@@ -1,7 +1,7 @@
 // A note: title, icon, properties, editor and backlinks.
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, Columns2, History, Printer, CornerDownRight, FileText, Hash, Link2, MoreHorizontal, Plus, PencilLine, SmilePlus, Star, Trash2 } from "lucide-react";
+import { CalendarDays, ChevronLeft, ChevronRight, Columns2, History, Printer, CornerDownRight, FileText, Hash, Link2, MoreHorizontal, Plus, PencilLine, SmilePlus, Star, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import { useApp, type Tab } from "../store/app";
 import { ViewHeader } from "../components/ViewHeader";
@@ -17,6 +17,7 @@ import type { PageDoc } from "../lib/types";
 import { restorePage } from "./TrashView";
 import { ADD_PROPERTY_EVENT, PropertyEditor, WorkCard, pageReference } from "./PageProperties";
 import { VersionsDialog } from "./VersionsDialog";
+import { openCalendar } from "../components/CalendarPopover";
 
 export function PageView({ pageId, tab, active }: { pageId: number; tab: Tab; active: boolean }) {
   const [doc, setDoc] = useState<PageDoc | null>(null);
@@ -221,6 +222,7 @@ function PageHeader({
       {daily && (
         <>
           <IconButton icon={ChevronLeft} label="Vorheriger Tag" size={26} iconSize={15} onClick={() => goDay(-1)} />
+          <IconButton icon={CalendarDays} label="Kalender (Ctrl Shift C)" size={26} iconSize={15} onClick={(e) => openCalendar(e.currentTarget, doc.daily_date ?? undefined)} />
           <IconButton icon={ChevronRight} label="Nächster Tag" size={26} iconSize={15} onClick={() => goDay(1)} />
         </>
       )}

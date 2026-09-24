@@ -1,10 +1,12 @@
 // Obsidian-style ribbon: a slim column of global actions left of the sidebar.
 
-import { Briefcase, CalendarCheck2, FilePlus2, Search, ListChecks, PanelLeft, Settings, Sparkles, Timer } from "lucide-react";
+import { useRef } from "react";
+import { Briefcase, CalendarCheck2, ChevronDown, FilePlus2, Search, ListChecks, PanelLeft, Settings, Sparkles, Timer } from "lucide-react";
 import { api } from "../lib/api";
 import { useApp, savePref } from "../store/app";
 import { IconButton } from "./ui";
 import { createSubpage } from "../views/PageView";
+import { openCalendar } from "./CalendarPopover";
 
 export async function openToday() {
   const s = useApp.getState();
@@ -22,6 +24,49 @@ export function openAssistant() {
   s.set({ panelOpen: true, panelTab: "assistant" });
   savePref("aether.panel", true);
   setTimeout(() => document.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus(), 50);
+}
+
+/** „Heutige Tagesnotiz“; right-click, a long press or the small chevron opens the calendar. */
+function DailyButton() {
+  const wrap = useRef<HTMLDivElement>(null);
+  const press = useRef<{ timer: number; fired: boolean } | null>(null);
+  const show = () => openCalendar(wrap.current, undefined, "right");
+  const cancel = () => {
+    if (press.current) clearTimeout(press.current.timer);
+  };
+  return (
+    <div className="ribbon-daily" ref={wrap}>
+      <IconButton
+        icon={CalendarCheck2}
+        label="Heutige Tagesnotiz (Ctrl Shift D) – Rechtsklick: Kalender"
+        tooltipSide="right"
+        size={32}
+        iconSize={17}
+        onClick={() => {
+          if (press.current?.fired) return;
+          openToday();
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          show();
+        }}
+        onPointerDown={(e) => {
+          if (e.button !== 0) return;
+          const p = { timer: 0, fired: false };
+          p.timer = window.setTimeout(() => {
+            p.fired = true;
+            show();
+          }, 500);
+          press.current = p;
+        }}
+        onPointerUp={cancel}
+        onPointerLeave={cancel}
+      />
+      <button type="button" className="ribbon-chevron" aria-label="Kalender (Ctrl Shift C)" data-tooltip="Kalender (Ctrl Shift C)" data-tooltip-side="right" onClick={show}>
+        <ChevronDown size={11} strokeWidth={2} aria-hidden />
+      </button>
+    </div>
+  );
 }
 
 export function Ribbon() {
@@ -45,7 +90,7 @@ export function Ribbon() {
       />
       <span className="ribbon-sep" />
       <IconButton icon={FilePlus2} label="Neue Seite (Ctrl N)" tooltipSide={side} size={32} iconSize={17} onClick={() => createSubpage(null)} />
-      <IconButton icon={CalendarCheck2} label="Heutige Tagesnotiz (Ctrl Shift D)" tooltipSide={side} size={32} iconSize={17} onClick={openToday} />
+      <DailyButton />
       <IconButton icon={Search} label="Befehlspalette (Ctrl K)" tooltipSide={side} size={32} iconSize={17} onClick={() => s().set({ paletteOpen: true, paletteMode: "all", paletteQuery: "" })} />
       <span className="ribbon-sep" />
       <IconButton icon={Timer} label="Zeiterfassung" active={tab?.kind === "timesheet"} tooltipSide={side} size={32} iconSize={17} onClick={() => s().openTab({ kind: "timesheet" })} />
