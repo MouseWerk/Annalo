@@ -14,9 +14,18 @@ name: Release
 # APPLE_CERTIFICATE_PASSWORD and APPLE_SIGNING_IDENTITY the app is signed with the Developer ID;
 # with APPLE_ID, APPLE_PASSWORD and APPLE_TEAM_ID it is notarized as well (README → „macOS“).
 
+# Alternatively „Run workflow“ (Actions → Release) with a version: the workflow creates the
+# annotated tag v<version> on the selected branch itself, with docs/releases/v<version>.md as
+# its message, and builds that.
+
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version without v, e.g. 1.2.0"
+        required: true
 
 permissions:
   contents: write
@@ -25,8 +34,44 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  tag:
+    name: Tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        if: github.event_name == 'workflow_dispatch'
+      - id: tag
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]; then
+            echo "tag=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          VERSION="${INPUT_VERSION#v}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Version $INPUT_VERSION is not MAJOR.MINOR.PATCH"
+            exit 1
+          fi
+          TAG="v$VERSION"
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
+            echo "::error::Tag $TAG exists already"
+            exit 1
+          fi
+          NOTES="docs/releases/$TAG.md"
+          [ -f "$NOTES" ] || { echo "AETHER OS $VERSION" > /tmp/notes.md; NOTES=/tmp/notes.md; }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -F "$NOTES"
+          git push origin "refs/tags/$TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
   build:
     name: Build (${{ matrix.name }})
+    needs: tag
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -56,16 +101,19 @@ jobs:
     env:
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      TAG: ${{ needs.tag.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ needs.tag.outputs.tag }}
 
       # The tag is the version (tauri.conf.json is what the updater compares).
       - name: Version from tag
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${TAG#v}"
           if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Tag $GITHUB_REF_NAME is not vMAJOR.MINOR.PATCH"
+            echo "::error::Tag $TAG is not vMAJOR.MINOR.PATCH"
             exit 1
           fi
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
@@ -179,12 +227,17 @@ jobs:
 
   publish:
     name: Publish release
-    needs: build
+    needs: [tag, build]
     runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.tag.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: refs/tags/${{ needs.tag.outputs.tag }}
           fetch-depth: 0
+      # The checkout may leave the tag lightweight; fetch the annotated tag object for its message.
+      - run: git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -193,14 +246,14 @@ jobs:
       - name: Release notes and update feed
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          NOTES="$(git for-each-ref "refs/tags/$GITHUB_REF_NAME" --format='%(contents)' | sed '/-----BEGIN PGP SIGNATURE-----/,$d')"
-          if [ "$(git cat-file -t "$GITHUB_REF_NAME")" != "tag" ] || [ -z "$(echo "$NOTES" | tr -d '[:space:]')" ]; then
+          VERSION="${TAG#v}"
+          NOTES="$(git for-each-ref "refs/tags/$TAG" --format='%(contents)' | sed '/-----BEGIN PGP SIGNATURE-----/,$d')"
+          if [ "$(git cat-file -t "$TAG")" != "tag" ] || [ -z "$(echo "$NOTES" | tr -d '[:space:]')" ]; then
             NOTES="AETHER OS $VERSION"
           fi
           printf '%s\n' "$NOTES" > notes.md
           # Update feed: every platform whose update file was signed.
-          BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}" node -e '
+          BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}" node -e '
             const fs = require("fs");
             const version = process.argv[1];
             const files = {
@@ -223,6 +276,7 @@ jobs:
 
       - uses: softprops/action-gh-release@v2
         with:
-          name: AETHER OS ${{ github.ref_name }}
+          tag_name: ${{ needs.tag.outputs.tag }}
+          name: AETHER OS ${{ needs.tag.outputs.tag }}
           body_path: notes.md
           files: dist/*

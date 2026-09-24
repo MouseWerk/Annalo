@@ -395,5 +395,8 @@ Push an annotated tag. The tag message becomes the release notes, and the tag se
 git tag -a v1.1.0 -m "What's new …" && git push origin v1.1.0
 ```
 
+Or, without a local tag: write the notes to `docs/releases/v1.1.0.md`, then GitHub → **Actions → Release → Run
+workflow** with the version `1.1.0`. The workflow creates the annotated tag itself.
+
 The [Release workflow](.github/workflows/release.yml) builds Windows, Linux and both macOS variants, signs the update
 archives and publishes everything together with `latest.json` on the Releases page.
