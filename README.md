@@ -81,37 +81,19 @@ suchen“) and via „Jetzt nach Updates suchen“ it reads
 without that click. Before installing, all open editors are saved; the signed NSIS installer then runs passively and
 restarts the app.
 
-Updates must be signed. The public key is compiled into the app, so the updater is **only active in builds made with
-`AETHER_UPDATER_PUBKEY`** (the release workflow). Local and CI builds show „Automatische Updates sind in diesem Build
-nicht eingerichtet“ and never contact the update server. One-time setup:
+Updates must be signed. The public key is committed (`src-tauri/updater.pub`) and compiled into release builds;
+the updater is **only active in builds made by the release workflow with the signing secrets**. Local and CI builds show
+„Automatische Updates sind in diesem Build nicht eingerichtet“ and never contact the update server. One-time setup on
+GitHub → the repository → **Settings → Secrets and variables → Actions → New repository secret**:
 
-1. Create the signing keypair (choose a password; keep the private key safe and **never commit it**):
-   ```sh
-   cargo tauri signer generate -w ~/.tauri/aether.key
-   ```
-   This writes `~/.tauri/aether.key` (private) and `~/.tauri/aether.key.pub` (public).
-2. On GitHub → the repository → **Settings → Secrets and variables → Actions → New repository secret**, add:
+| Secret | Value |
+|---|---|
+| `TAURI_SIGNING_PRIVATE_KEY` | the full content of the private key file (`aether-updater.key`) |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | its password |
 
-   | Secret | Value |
-   |---|---|
-   | `TAURI_SIGNING_PRIVATE_KEY` | the full content of `~/.tauri/aether.key` |
-   | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | the password from step 1 |
-   | `AETHER_UPDATER_PUBKEY` | the full content of `~/.tauri/aether.key.pub` |
-
-3. Release a version. The tag is the version (`vMAJOR.MINOR.PATCH`, numeric – the MSI needs it): the workflow
-   `.github/workflows/release.yml` writes it into `src-tauri/tauri.conf.json` and `Cargo.toml` for the build. Bump
-   `version` in both files in the repository too, so local builds match:
-   ```sh
-   git commit -am "Release 1.1.0"
-   git tag -a v1.1.0 -m "Was ist neu: …"   # the tag message becomes the release notes
-   git push && git push --tags             # or: git tag v1.1.0 && git push --tags
-   ```
-   The workflow builds NSIS + MSI with their `.sig` files and publishes the release with `latest.json`. Installed
-   versions from then on find the update. The first version with the updater (built by this workflow) has to be
-   installed manually once.
-
-If the private key is lost, installed apps cannot verify new releases: create a new keypair, update the secrets and
-install the next version manually. Keep a backup of the key and its password.
+Then every tag `vX.Y.Z` produces a signed installer and `latest.json`. To rotate the key, generate a new pair with
+`cargo tauri signer generate -w aether-updater.key`, replace `src-tauri/updater.pub` and both secrets; apps installed
+with the old key must be updated once by hand.
 
 ## Tests
 

@@ -3,10 +3,10 @@ name: Release
 # Pushing a tag `v1.2.3` builds the Windows installer (per-user NSIS, no admin rights) and the
 # Linux packages (.deb, .AppImage) and publishes them as a GitHub release.
 #
-# Automatic updates: with the repository secrets TAURI_SIGNING_PRIVATE_KEY,
-# TAURI_SIGNING_PRIVATE_KEY_PASSWORD and AETHER_UPDATER_PUBKEY (README → „Automatische Updates
-# einrichten“) the Windows build is signed, the updater is switched on and `latest.json` is
-# published. Without them the release is built unsigned and the updater stays off.
+# Automatic updates: the public key is committed (src-tauri/updater.pub). With the repository
+# secrets TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD (README →
+# „Automatische Updates einrichten“) the Windows build is signed, the updater is switched on and
+# `latest.json` is published. Without them the release is built unsigned and the updater stays off.
 
 on:
   push:
@@ -35,7 +35,6 @@ jobs:
     env:
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-      AETHER_UPDATER_PUBKEY: ${{ secrets.AETHER_UPDATER_PUBKEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -50,8 +49,14 @@ jobs:
           fi
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           SIGN=0
-          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] && [ -n "$AETHER_UPDATER_PUBKEY" ] && [ "${{ matrix.name }}" = "Windows" ]; then SIGN=1; fi
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] && [ "${{ matrix.name }}" = "Windows" ]; then SIGN=1; fi
           echo "SIGN=$SIGN" >> "$GITHUB_ENV"
+          if [ "$SIGN" = "1" ]; then
+            # Compiled into the app (option_env!): switches the updater on in this build.
+            AETHER_UPDATER_PUBKEY="$(tr -d '\r\n' < src-tauri/updater.pub)"
+            export AETHER_UPDATER_PUBKEY
+            echo "AETHER_UPDATER_PUBKEY=$AETHER_UPDATER_PUBKEY" >> "$GITHUB_ENV"
+          fi
           node -e '
             const fs = require("fs");
             const p = "src-tauri/tauri.conf.json";
@@ -66,8 +71,7 @@ jobs:
             fs.writeFileSync(t, fs.readFileSync(t, "utf8").replace(/^version = "[^"]*"/m, `version = "${process.env.VERSION}"`));
           '
           if [ "$SIGN" = "0" ]; then
-            # Unsigned build: the updater must stay off (it is only enabled with a public key).
-            echo "AETHER_UPDATER_PUBKEY=" >> "$GITHUB_ENV"
+            # Unsigned build: the updater stays off (it is only enabled with a public key).
             echo "TAURI_SIGNING_PRIVATE_KEY=" >> "$GITHUB_ENV"
             echo "::notice::Building without updater signing (secrets not set)."
           fi
