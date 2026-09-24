@@ -15,7 +15,7 @@ import { RightPanel } from "./panels/RightPanel";
 import { createSubpage } from "./views/PageView";
 import { requestAddProperty } from "./views/PageProperties";
 import { flushAllEditors, reloadEditors } from "./editor/NoteEditor";
-import type { ActivityTick } from "./lib/types";
+import type { ActivityTick, SearchTarget } from "./lib/types";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { tabTitle } from "./components/Shell";
 import { flushBeforeExit } from "./lib/exit";
@@ -81,6 +81,18 @@ export function App() {
       on("tray://timer-stop", () => stopTimer()),
       // Clicked the end-of-day reminder (or came back after it).
       on("nav://timesheet", () => useApp.getState().openTab({ kind: "timesheet" })),
+      // A result chosen in the quick-search window (it may have created the page).
+      on<SearchTarget>("search://open", async (t) => {
+        const st = useApp.getState();
+        if (t.kind === "page") {
+          if (!st.pages.has(t.page_id)) await st.refreshTree();
+          st.openPage(t.page_id, { newTab: !!t.new_tab });
+        } else if (t.kind === "timesheet") st.openTab({ kind: "timesheet" });
+        else if (t.kind === "timer_stop") {
+          await st.refreshTimer();
+          stopTimer();
+        }
+      }),
       // Global palette shortcut: toggles while the window is in front, otherwise always opens.
       on<boolean>("palette://toggle", (foreground) => {
         const st = useApp.getState();

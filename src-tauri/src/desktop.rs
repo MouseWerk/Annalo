@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use aether_core::desktop::{self as core, CaptureOutcome};
 use aether_core::{Database, Error};
 use chrono::{Local, NaiveDate, TimeDelta, TimeZone, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, Window, WindowEvent, Wry};
@@ -23,6 +23,18 @@ use crate::{AppState, Result, lock};
 pub const MINIMIZED_ARG: &str = "--minimized";
 pub const MAIN: &str = "main";
 pub const CAPTURE: &str = "capture";
+pub const SEARCH: &str = "search";
+
+/// What a global shortcut does. The index is its slot in [`Desktop::shortcuts`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    Capture = 0,
+    Palette = 1,
+    Search = 2,
+}
+
+const ROLES: [Role; 3] = [Role::Capture, Role::Palette, Role::Search];
+const ROLE_NAMES: [&str; 3] = ["Schnellerfassung", "Befehlspalette", "Schnellsuche"];
 
 #[derive(Clone)]
 struct TrayHandles {
@@ -34,8 +46,8 @@ struct TrayHandles {
 #[derive(Default)]
 pub struct Desktop {
     tray: Mutex<Option<TrayHandles>>,
-    capture_shortcut: Mutex<Option<Shortcut>>,
-    palette_shortcut: Mutex<Option<Shortcut>>,
+    /// Registered global shortcuts by [`Role`]: capture, palette, search.
+    shortcuts: Mutex<[Option<Shortcut>; 3]>,
     /// A reminder was shown while the app was in the background: the next time the
     /// main window gets focus it opens the timesheet.
     pending_timesheet: AtomicBool,
@@ -66,9 +78,10 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let stop = MenuItem::with_id(app, "stop", "Timer stoppen", false, None::<&str>)?;
     let resume = MenuItem::with_id(app, "resume", "Zuletzt verwendet starten", false, None::<&str>)?;
     let capture = MenuItem::with_id(app, "capture", "Schnellerfassung", true, None::<&str>)?;
+    let search = MenuItem::with_id(app, "search", "Suchen…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Beenden", true, None::<&str>)?;
     let sep = || PredefinedMenuItem::separator(app);
-    let menu = Menu::with_items(app, &[&open, &sep()?, &stop, &resume, &capture, &sep()?, &quit])?;
+    let menu = Menu::with_items(app, &[&open, &search, &sep()?, &stop, &resume, &capture, &sep()?, &quit])?;
     let mut builder = TrayIconBuilder::with_id("main")
         .menu(&menu)
         .tooltip("AETHER OS")
@@ -102,6 +115,7 @@ fn on_menu(app: &AppHandle, event: MenuEvent) {
             }
         }
         "capture" => open_capture(app),
+        "search" => open_search(app, false),
         "quit" => request_quit(app),
         _ => {}
     }
@@ -171,7 +185,7 @@ pub fn on_window_event(window: &Window, event: &WindowEvent) {
         // must not keep the process alive then.
         (MAIN, WindowEvent::Destroyed) => app.exit(0),
         #[cfg(windows)]
-        (CAPTURE, WindowEvent::Focused(false)) => {
+        (CAPTURE | SEARCH, WindowEvent::Focused(false)) => {
             let _ = window.hide();
         }
         _ => {}
@@ -205,25 +219,47 @@ pub fn open_capture(app: &AppHandle) {
     });
 }
 
-fn show_capture(app: &AppHandle) -> tauri::Result<()> {
-    let w = match app.get_webview_window(CAPTURE) {
+/// A small undecorated window above all others (quick capture, quick search), loading the
+/// UI bundle with `#<label>`. Created hidden on first use, then only shown and hidden.
+struct Popup {
+    label: &'static str,
+    title: &'static str,
+    size: (f64, f64),
+    /// Transparent background: the page draws a rounded panel.
+    transparent: bool,
+}
+
+fn show_popup(app: &AppHandle, p: &Popup) -> tauri::Result<()> {
+    let w = match app.get_webview_window(p.label) {
         Some(w) => w,
-        None => WebviewWindowBuilder::new(app, CAPTURE, WebviewUrl::App("index.html#capture".into()))
-            .title("Schnellerfassung – AETHER OS")
-            .inner_size(620.0, 132.0)
-            .resizable(false)
-            .decorations(false)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .center()
-            .visible(false)
-            .build()?,
+        None => {
+            let b = WebviewWindowBuilder::new(app, p.label, WebviewUrl::App(format!("index.html#{}", p.label).into()))
+                .title(p.title)
+                .inner_size(p.size.0, p.size.1)
+                .resizable(false)
+                .decorations(false)
+                .always_on_top(true)
+                .skip_taskbar(true)
+                .center()
+                .visible(false);
+            // macOS needs the private-API feature for transparent windows.
+            #[cfg(not(target_os = "macos"))]
+            let b = b.transparent(p.transparent);
+            b.build()?
+        }
     };
     w.center()?;
     w.show()?;
     w.set_focus()?;
-    let _ = app.emit_to(CAPTURE, "capture://shown", ());
+    let _ = app.emit_to(p.label, &format!("{}://shown", p.label), ());
     Ok(())
+}
+
+fn show_capture(app: &AppHandle) -> tauri::Result<()> {
+    show_popup(
+        app,
+        &Popup { label: CAPTURE, title: "Schnellerfassung – AETHER OS", size: (620.0, 132.0), transparent: false },
+    )
 }
 
 #[tauri::command]
@@ -231,6 +267,64 @@ pub fn capture_hide(app: AppHandle) {
     if let Some(w) = app.get_webview_window(CAPTURE) {
         let _ = w.hide();
     }
+}
+
+// ------------------------------------------------------------- quick search
+
+/// Shows the quick-search window; with `toggle` (the global shortcut) a search window that is
+/// already in front is hidden instead.
+pub fn open_search(app: &AppHandle, toggle: bool) {
+    // Creating a webview from an event handler can deadlock on Windows; build it elsewhere.
+    let app = app.clone();
+    std::thread::spawn(move || {
+        if toggle
+            && let Some(w) = app.get_webview_window(SEARCH)
+            && w.is_visible().unwrap_or(false)
+            && w.is_focused().unwrap_or(false)
+        {
+            let _ = w.hide();
+            return;
+        }
+        let popup = Popup { label: SEARCH, title: "Suchen – AETHER OS", size: (640.0, 420.0), transparent: true };
+        if let Err(e) = show_popup(&app, &popup) {
+            eprintln!("quick search failed: {e}");
+        }
+    });
+}
+
+#[tauri::command]
+pub fn search_hide(app: AppHandle) {
+    if let Some(w) = app.get_webview_window(SEARCH) {
+        let _ = w.hide();
+    }
+}
+
+/// What the quick search asks the main window to open (event `search://open`).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SearchTarget {
+    Page {
+        page_id: i64,
+        #[serde(default)]
+        new_tab: bool,
+    },
+    Timesheet,
+    /// The main window stops the timer (it asks about idle time first).
+    TimerStop,
+}
+
+/// Hides the quick search, brings the main window to the front and lets it open `target`.
+#[tauri::command]
+pub fn search_open(app: AppHandle, target: SearchTarget) {
+    search_hide(app.clone());
+    show_main(&app);
+    let _ = app.emit_to(MAIN, "search://open", target);
+}
+
+/// Starts a timer on the most recently booked Netzplan/Vorgang („Zuletzt verwendet starten“).
+#[tauri::command]
+pub fn timer_resume_last(app: AppHandle) -> Result<()> {
+    resume_last(&app)
 }
 
 /// Books `/zeit` lines and appends everything else to today's daily note.
@@ -249,34 +343,27 @@ pub fn capture_submit(app: AppHandle, state: State<AppState>, text: String) -> R
     Ok(out)
 }
 
-/// Applies the global shortcuts; `None` keeps a slot as it is, `Some("")` switches it off.
-/// New shortcuts are registered before the old ones are released, so a failure (e.g. the
+/// Applies the global shortcuts by [`Role`]; `None` keeps a slot as it is, `Some("")` switches
+/// it off. New shortcuts are registered before the old ones are released, so a failure (e.g. the
 /// combination belongs to another program) keeps the previous shortcuts working. A shortcut
-/// that moves between the two slots (swap) stays registered and only changes its role.
-pub fn apply_shortcuts(
-    app: &AppHandle,
-    capture: Option<&str>,
-    palette: Option<&str>,
-) -> std::result::Result<(), String> {
+/// that moves between slots (swap) stays registered and only changes its role.
+pub fn apply_shortcuts(app: &AppHandle, specs: [Option<&str>; 3]) -> std::result::Result<(), String> {
     let d = desktop(app);
-    let (old_c, old_p) = (*lock(&d.capture_shortcut), *lock(&d.palette_shortcut));
-    let target = |spec: Option<&str>, old: Option<Shortcut>| -> std::result::Result<Option<Shortcut>, String> {
+    let old = *lock(&d.shortcuts);
+    let mut new = old;
+    for (slot, spec) in new.iter_mut().zip(specs) {
         match spec.map(str::trim) {
-            None => Ok(old),
-            Some("") => Ok(None),
-            Some(s) => parse_shortcut(s).map(Some),
+            None => {}
+            Some("") => *slot = None,
+            Some(s) => *slot = Some(parse_shortcut(s)?),
         }
-    };
-    let (new_c, new_p) = (target(capture, old_c)?, target(palette, old_p)?);
-    if new_c.is_some() && new_c == new_p {
-        return Err("Palette und Schnellerfassung brauchen verschiedene Tastenkürzel".into());
     }
-    let ours = [old_c, old_p];
+    check_distinct(&new)?;
     let gs = app.global_shortcut();
     let mut added: Vec<Shortcut> = Vec::new();
-    // The slot locks are not held while (un)registering: the shortcut handler reads them.
-    for sc in [new_c, new_p].into_iter().flatten() {
-        if ours.contains(&Some(sc)) || added.contains(&sc) {
+    // The slot lock is not held while (un)registering: the shortcut handler reads it.
+    for sc in new.into_iter().flatten() {
+        if old.contains(&Some(sc)) || added.contains(&sc) {
             continue;
         }
         if let Err(e) = gs.register(sc) {
@@ -287,14 +374,35 @@ pub fn apply_shortcuts(
         }
         added.push(sc);
     }
-    for sc in ours.into_iter().flatten() {
-        if Some(sc) != new_c && Some(sc) != new_p {
+    for sc in old.into_iter().flatten() {
+        if !new.contains(&Some(sc)) {
             let _ = gs.unregister(sc);
         }
     }
-    *lock(&d.capture_shortcut) = new_c;
-    *lock(&d.palette_shortcut) = new_p;
+    *lock(&d.shortcuts) = new;
     Ok(())
+}
+
+fn check_distinct(slots: &[Option<Shortcut>; 3]) -> std::result::Result<(), String> {
+    for i in 0..slots.len() {
+        for j in i + 1..slots.len() {
+            if slots[i].is_some() && slots[i] == slots[j] {
+                return Err(format!("{} und {} brauchen verschiedene Tastenkürzel", ROLE_NAMES[i], ROLE_NAMES[j]));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Checks the shortcuts of the settings (capture, palette, search; `""` = off) before saving.
+pub fn validate_shortcuts(specs: [&str; 3]) -> std::result::Result<(), String> {
+    let mut parsed = [None; 3];
+    for (slot, spec) in parsed.iter_mut().zip(specs) {
+        if !spec.trim().is_empty() {
+            *slot = Some(parse_shortcut(spec)?);
+        }
+    }
+    check_distinct(&parsed)
 }
 
 /// Parses `Ctrl+Shift+K`-style shortcuts. Ctrl+Alt is refused: on German keyboards it is
@@ -310,14 +418,11 @@ pub fn parse_shortcut(spec: &str) -> std::result::Result<Shortcut, String> {
     Ok(sc)
 }
 
-/// Whether `shortcut` is the registered quick-capture shortcut.
-pub fn is_capture_shortcut(app: &AppHandle, shortcut: &Shortcut) -> bool {
-    app.try_state::<Desktop>().is_some_and(|d| lock(&d.capture_shortcut).as_ref() == Some(shortcut))
-}
-
-/// Whether `shortcut` is the registered command-palette shortcut.
-pub fn is_palette_shortcut(app: &AppHandle, shortcut: &Shortcut) -> bool {
-    app.try_state::<Desktop>().is_some_and(|d| lock(&d.palette_shortcut).as_ref() == Some(shortcut))
+/// The role of a registered global shortcut.
+pub fn shortcut_role(app: &AppHandle, shortcut: &Shortcut) -> Option<Role> {
+    let d = app.try_state::<Desktop>()?;
+    let slots = *lock(&d.shortcuts);
+    ROLES.into_iter().find(|r| slots[*r as usize].as_ref() == Some(shortcut))
 }
 
 // ---------------------------------------------------------------- reminders
@@ -396,18 +501,22 @@ pub struct DesktopInfo {
     tray: bool,
     capture_shortcut_active: bool,
     palette_shortcut_active: bool,
+    search_shortcut_active: bool,
 }
 
 #[tauri::command]
 pub fn desktop_info(app: AppHandle) -> DesktopInfo {
     let d = desktop(&app);
     let autostart = app.try_state::<tauri_plugin_autostart::AutoLaunchManager>().map(|m| m.is_enabled());
+    // Copied out: one lock per statement (temporaries live until its end).
+    let slots = *lock(&d.shortcuts);
     DesktopInfo {
         autostart: matches!(autostart, Some(Ok(true))),
         autostart_available: matches!(autostart, Some(Ok(_))),
         tray: d.has_tray(),
-        capture_shortcut_active: lock(&d.capture_shortcut).is_some(),
-        palette_shortcut_active: lock(&d.palette_shortcut).is_some(),
+        capture_shortcut_active: slots[Role::Capture as usize].is_some(),
+        palette_shortcut_active: slots[Role::Palette as usize].is_some(),
+        search_shortcut_active: slots[Role::Search as usize].is_some(),
     }
 }
 
@@ -434,5 +543,25 @@ mod tests {
             assert!(e.contains("AltGr"), "{bad}: {e}");
         }
         assert!(parse_shortcut("Strg+Foo").unwrap_err().contains("ungültig"));
+    }
+
+    #[test]
+    fn settings_shortcuts_must_differ() {
+        assert!(validate_shortcuts(["Ctrl+Shift+Space", "", "Ctrl+Shift+O"]).is_ok());
+        assert!(validate_shortcuts(["", "", ""]).is_ok());
+        let e = validate_shortcuts(["Ctrl+Shift+Space", "Ctrl+Shift+O", " ctrl+shift+o "]).unwrap_err();
+        assert!(e.contains("Befehlspalette und Schnellsuche"), "{e}");
+        let e = validate_shortcuts(["Alt+Q", "", "Alt+Q"]).unwrap_err();
+        assert!(e.contains("Schnellerfassung und Schnellsuche"), "{e}");
+        assert!(validate_shortcuts(["", "", "Ctrl+Alt+F"]).unwrap_err().contains("AltGr"));
+    }
+
+    #[test]
+    fn search_target_serializes_for_the_main_window() {
+        let t = SearchTarget::Page { page_id: 7, new_tab: true };
+        assert_eq!(serde_json::to_string(&t).unwrap(), r#"{"kind":"page","page_id":7,"new_tab":true}"#);
+        let back: SearchTarget = serde_json::from_str(r#"{"kind":"page","page_id":3}"#).unwrap();
+        assert_eq!(back, SearchTarget::Page { page_id: 3, new_tab: false });
+        assert_eq!(serde_json::from_str::<SearchTarget>(r#"{"kind":"timer_stop"}"#).unwrap(), SearchTarget::TimerStop);
     }
 }

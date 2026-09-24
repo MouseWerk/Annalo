@@ -32,7 +32,7 @@ use aether_core::notes::PageDoc;
 use aether_core::pagework::{self, PageWork};
 use aether_core::report;
 use aether_core::search::{self, SearchHit};
-use aether_core::settings::Settings;
+use aether_core::settings::{Dashboard, Settings};
 use aether_core::tasks::{Task, TaskFilter};
 use aether_core::templates::TemplateVars;
 use aether_core::tracking::{self, BudgetStatus, LogOutcome};
@@ -1165,42 +1165,48 @@ fn settings_save(app: AppHandle, state: State<AppState>, settings: Settings) -> 
         settings.reminder_time = Some(time.format("%H:%M").to_string());
     }
     settings.capture_shortcut = settings.capture_shortcut.trim().to_owned();
-    if !settings.capture_shortcut.is_empty() {
-        desktop::parse_shortcut(&settings.capture_shortcut).map_err(Error::State)?;
-    }
     settings.palette_shortcut = settings.palette_shortcut.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty());
-    if let Some(p) = &settings.palette_shortcut {
-        let sc = desktop::parse_shortcut(p).map_err(Error::State)?;
-        if !settings.capture_shortcut.is_empty() && desktop::parse_shortcut(&settings.capture_shortcut).ok() == Some(sc)
-        {
-            return Err(Error::State("Palette und Schnellerfassung brauchen verschiedene Tastenkürzel".into()));
-        }
-    }
-    let old = state.settings();
-    let capture_changed = settings.capture_shortcut != old.capture_shortcut;
-    let palette_changed = settings.palette_shortcut != old.palette_shortcut;
+    settings.search_shortcut = settings.search_shortcut.trim().to_owned();
+    // The start page saves its widgets itself (`dashboard_save`); a settings draft opened
+    // earlier must not overwrite them.
+    settings.dashboard = state.settings().dashboard;
+    let specs = |s: &Settings| {
+        [s.capture_shortcut.clone(), s.palette_shortcut.clone().unwrap_or_default(), s.search_shortcut.clone()]
+    };
+    let new_specs = specs(&settings);
+    desktop::validate_shortcuts(new_specs.each_ref().map(String::as_str)).map_err(Error::State)?;
+    let old_specs = specs(&state.settings());
+    let changed: Vec<bool> = new_specs.iter().zip(&old_specs).map(|(a, b)| a != b).collect();
+    let only_changed =
+        |v: &[String; 3]| -> [Option<String>; 3] { std::array::from_fn(|i| changed[i].then(|| v[i].clone())) };
+    let apply = |v: &[String; 3]| {
+        let v = only_changed(v);
+        desktop::apply_shortcuts(&app, v.each_ref().map(Option::as_deref))
+    };
+    let any_changed = changed.contains(&true);
     // Registered before saving: a shortcut taken by another program is reported and the
     // previous one stays active and saved.
-    if capture_changed || palette_changed {
-        desktop::apply_shortcuts(
-            &app,
-            capture_changed.then_some(settings.capture_shortcut.as_str()),
-            palette_changed.then(|| settings.palette_shortcut.as_deref().unwrap_or("")),
-        )
-        .map_err(Error::State)?;
+    if any_changed {
+        apply(&new_specs).map_err(Error::State)?;
     }
     if let Err(e) = state.db().save_settings(&settings) {
-        if capture_changed || palette_changed {
-            let _ = desktop::apply_shortcuts(
-                &app,
-                capture_changed.then_some(old.capture_shortcut.as_str()),
-                palette_changed.then(|| old.palette_shortcut.as_deref().unwrap_or("")),
-            );
+        if any_changed {
+            let _ = apply(&old_specs);
         }
         return Err(e);
     }
     lock(&state.idle).set_threshold(Duration::from_secs(settings.idle_threshold_minutes * 60));
     *state.ai.write().unwrap_or_else(|e| e.into_inner()) = AiRuntime::new(settings, state.secrets.get());
+    Ok(settings_get(state))
+}
+
+/// Saves only the start page's widgets and scratch note (the rest of the settings stays as it is).
+#[tauri::command]
+fn dashboard_save(state: State<AppState>, dashboard: Dashboard) -> Result<SettingsView> {
+    let mut settings = state.settings();
+    settings.dashboard = dashboard.normalized();
+    state.db().save_settings(&settings)?;
+    state.ai.write().unwrap_or_else(|e| e.into_inner()).settings = settings;
     Ok(settings_get(state))
 }
 
@@ -1889,21 +1895,24 @@ pub fn run() {
                     if event.state() != ShortcutState::Pressed {
                         return;
                     }
-                    if desktop::is_capture_shortcut(app, shortcut) {
-                        desktop::open_capture(app);
-                    } else if desktop::is_palette_shortcut(app, shortcut) {
-                        // In front already: the shortcut toggles the palette; from the
-                        // background (hidden, minimized, unfocused) it always opens it.
-                        let mut foreground = false;
-                        if let Some(w) = app.get_webview_window("main") {
-                            foreground = w.is_visible().unwrap_or(false)
-                                && !w.is_minimized().unwrap_or(false)
-                                && w.is_focused().unwrap_or(false);
-                            let _ = w.unminimize();
-                            let _ = w.show();
-                            let _ = w.set_focus();
+                    match desktop::shortcut_role(app, shortcut) {
+                        Some(desktop::Role::Capture) => desktop::open_capture(app),
+                        Some(desktop::Role::Search) => desktop::open_search(app, true),
+                        Some(desktop::Role::Palette) => {
+                            // In front already: the shortcut toggles the palette; from the
+                            // background (hidden, minimized, unfocused) it always opens it.
+                            let mut foreground = false;
+                            if let Some(w) = app.get_webview_window("main") {
+                                foreground = w.is_visible().unwrap_or(false)
+                                    && !w.is_minimized().unwrap_or(false)
+                                    && w.is_focused().unwrap_or(false);
+                                let _ = w.unminimize();
+                                let _ = w.show();
+                                let _ = w.set_focus();
+                            }
+                            let _ = app.emit("palette://toggle", foreground);
                         }
-                        let _ = app.emit("palette://toggle", foreground);
+                        None => {}
                     }
                 })
                 .build(),
@@ -1940,8 +1949,11 @@ pub fn run() {
                 eprintln!("settings migration failed: {e}");
             }
             let settings = db.load_settings()?;
-            let capture_shortcut = settings.capture_shortcut.clone();
-            let palette_shortcut = settings.palette_shortcut.clone().unwrap_or_default();
+            let shortcuts = [
+                settings.capture_shortcut.clone(),
+                settings.palette_shortcut.clone().unwrap_or_default(),
+                settings.search_shortcut.clone(),
+            ];
             let secrets = SecretStore::new(&dir);
             let idle_threshold = Duration::from_secs(settings.idle_threshold_minutes * 60);
             let ai = AiRuntime::new(settings, secrets.get());
@@ -1973,12 +1985,13 @@ pub fn run() {
             create_main_window(app, !minimized)?;
 
             // Another instance may already own the shortcut; Ctrl+K still works in-app.
-            // Registered one by one: one taken shortcut must not block the other.
-            if let Err(e) = desktop::apply_shortcuts(app.handle(), Some(&capture_shortcut), None) {
-                eprintln!("capture shortcut not available: {e}");
-            }
-            if let Err(e) = desktop::apply_shortcuts(app.handle(), None, Some(&palette_shortcut)) {
-                eprintln!("palette shortcut not available: {e}");
+            // Registered one by one: one taken shortcut must not block the others.
+            for (i, spec) in shortcuts.iter().enumerate() {
+                let mut specs = [None; 3];
+                specs[i] = Some(spec.as_str());
+                if let Err(e) = desktop::apply_shortcuts(app.handle(), specs) {
+                    eprintln!("global shortcut not available: {e}");
+                }
             }
             spawn_activity_sampler(app.handle().clone());
             spawn_backup_scheduler(app.handle().clone());
@@ -2084,6 +2097,10 @@ pub fn run() {
             desktop::app_quit,
             desktop::capture_submit,
             desktop::capture_hide,
+            desktop::search_hide,
+            desktop::search_open,
+            desktop::timer_resume_last,
+            dashboard_save,
             desktop::desktop_info,
             desktop::autostart_set,
             updates::update_status,
