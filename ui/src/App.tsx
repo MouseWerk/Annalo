@@ -131,7 +131,10 @@ export function App() {
       else if (e.altKey && !mod && e.key === "ArrowLeft") run(() => st.goBack());
       else if (e.altKey && !mod && e.key === "ArrowRight") run(() => st.goForward());
       else if (mod && e.shiftKey && k === "t") run(() => (st.timer ? stopTimer() : st.openTab({ kind: "timesheet" })));
-      else if (mod && !e.shiftKey && k === "j") run(() => openAssistant());
+      // The editor takes Ctrl+J on a selection (inline AI) and marks the event handled.
+      else if (mod && !e.shiftKey && k === "j") {
+        if (!e.defaultPrevented) run(() => openAssistant());
+      }
       else if (mod && k === "w") run(() => st.activeTabId && st.closeTab(st.activeTabId));
       else if (mod && e.key === "Tab")
         run(() => {

@@ -1,11 +1,11 @@
 // A note: title, icon, properties, editor and backlinks.
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, Columns2, History, Printer, CornerDownRight, FileText, Hash, Link2, MoreHorizontal, Plus, PencilLine, SmilePlus, Star, Trash2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Columns2, History, Printer, CornerDownRight, FileText, Hash, Link2, MoreHorizontal, NotebookPen, Plus, PencilLine, SmilePlus, Star, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import { useApp, type Tab } from "../store/app";
 import { ViewHeader } from "../components/ViewHeader";
-import { NoteEditor, flushAllEditors, reloadEditors, type NoteEditorHandle } from "../editor/NoteEditor";
+import { MEETING_SUMMARY_EVENT, NoteEditor, flushAllEditors, reloadEditors, type NoteEditorHandle } from "../editor/NoteEditor";
 import { splitFrontmatter } from "../editor/extensions";
 import { parseFrontmatter } from "../lib/frontmatter";
 import { PAGE_ICONS, PageIcon } from "../components/icons";
@@ -16,6 +16,7 @@ import type { PageDoc } from "../lib/types";
 import { restorePage } from "./TrashView";
 import { ADD_PROPERTY_EVENT, PropertyEditor, WorkCard, pageReference } from "./PageProperties";
 import { VersionsDialog } from "./VersionsDialog";
+import { MeetingSummaryDialog } from "./MeetingSummaryDialog";
 
 export function PageView({ pageId, tab, active }: { pageId: number; tab: Tab; active: boolean }) {
   const [doc, setDoc] = useState<PageDoc | null>(null);
@@ -23,6 +24,10 @@ export function PageView({ pageId, tab, active }: { pageId: number; tab: Tab; ac
   // The frontmatter as the editor holds it (it saves it with the body).
   const [fm, setFm] = useState("");
   const [addingProp, setAddingProp] = useState(false);
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const closeSummary = useCallback(() => setSummaryOpen(false), []);
+  const getEditor = useCallback(() => handle.current?.editor ?? null, []);
+  const flushEditor = useCallback(async () => handle.current?.flush(), []);
   const pages = useApp((s) => s.pages);
   const handle = useRef<NoteEditorHandle | null>(null);
   const root = useRef<HTMLDivElement>(null);
@@ -55,6 +60,13 @@ export function PageView({ pageId, tab, active }: { pageId: number; tab: Tab; ac
     window.addEventListener(ADD_PROPERTY_EVENT, onAdd);
     return () => window.removeEventListener(ADD_PROPERTY_EVENT, onAdd);
   }, [active]);
+
+  // Slash „/Zusammenfassung“ in this page's editor.
+  useEffect(() => {
+    const onSummary = (e: Event) => (e as CustomEvent<{ id: number }>).detail.id === pageId && setSummaryOpen(true);
+    window.addEventListener(MEETING_SUMMARY_EVENT, onSummary);
+    return () => window.removeEventListener(MEETING_SUMMARY_EVENT, onSummary);
+  }, [pageId]);
 
   // The focused pane drives the outline, links panel and assistant context.
   useEffect(() => {
@@ -120,7 +132,7 @@ export function PageView({ pageId, tab, active }: { pageId: number; tab: Tab; ac
 
   return (
     <div className="page-view" ref={root}>
-      <PageHeader tab={tab} root={root} doc={doc} crumbs={crumbs} onChange={(d) => setDoc({ ...doc, ...d })}>
+      <PageHeader tab={tab} root={root} doc={doc} crumbs={crumbs} onChange={(d) => setDoc({ ...doc, ...d })} onSummary={() => setSummaryOpen(true)}>
         <Properties doc={doc} fm={fm} onAdd={() => setAddingProp(true)} />
         <PropertyEditor
           fm={fm}
@@ -147,6 +159,7 @@ export function PageView({ pageId, tab, active }: { pageId: number; tab: Tab; ac
           handleRef={(h) => (handle.current = h)}
         />
         <Backlinks doc={doc} />
+        <MeetingSummaryDialog open={summaryOpen} page={doc} reference={reference} getEditor={getEditor} flush={flushEditor} onClose={closeSummary} />
       </PageHeader>
     </div>
   );
@@ -158,6 +171,7 @@ function PageHeader({
   doc,
   crumbs,
   onChange,
+  onSummary,
   children,
 }: {
   tab: Tab;
@@ -165,6 +179,7 @@ function PageHeader({
   doc: PageDoc;
   crumbs: { id: number; title: string }[];
   onChange: (d: Partial<PageDoc>) => void;
+  onSummary: () => void;
   children: React.ReactNode;
 }) {
   const [title, setTitle] = useState(doc.title);
@@ -252,6 +267,7 @@ function PageHeader({
             { label: "Link kopieren", icon: Link2, onSelect: () => navigator.clipboard.writeText(`[[${doc.title}]]`) },
             { label: "Drucken / als PDF", icon: Printer, onSelect: () => printActivePane() },
             { label: "Versionen…", icon: History, onSelect: () => setVersionsOpen(true) },
+            { label: "Besprechung zusammenfassen", icon: NotebookPen, onSelect: onSummary },
             { label: "Unterseite anlegen", icon: CornerDownRight, onSelect: () => createSubpage(doc.id) },
             "separator",
             { label: "Seite löschen", icon: Trash2, danger: true, onSelect: () => deletePage(doc) },

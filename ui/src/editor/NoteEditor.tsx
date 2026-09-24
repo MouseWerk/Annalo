@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { EditorContent, useEditor, useEditorState, type Editor } from "@tiptap/react";
 import { BubbleMenu } from "@tiptap/react/menus";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Bold, Code, Highlighter, Italic, Link2, Strikethrough, SquareArrowOutUpRight } from "lucide-react";
+import { Bold, Code, Highlighter, Italic, Link2, Sparkles, Strikethrough, SquareArrowOutUpRight } from "lucide-react";
 import { api, attachmentUrl, uploadAttachment } from "../lib/api";
 import { insertTemplate } from "../components/Templates";
 import { useApp } from "../store/app";
@@ -15,6 +15,8 @@ import { zeitLaItems, zeitRefItems } from "./zeit-source";
 import { IconButton } from "../components/ui";
 import { findKey } from "./find";
 import { TableToolbar } from "./TableToolbar";
+import { InlineAiBar } from "./InlineAiBar";
+import { aiRange, type AiRange } from "./ai-insert";
 import { ChevronDown, ChevronUp, Search, X } from "lucide-react";
 import type { PageDoc } from "../lib/types";
 
@@ -26,6 +28,9 @@ export interface NoteEditorHandle {
   /** Replaces the page's frontmatter (property editor); saved like any other edit. */
   setFrontmatter: (fm: string) => void;
 }
+
+/** Asks the page view of `pageId` for „Besprechung zusammenfassen“ (slash command). */
+export const MEETING_SUMMARY_EVENT = "aether:meeting-summary";
 
 // Flush handles of all mounted editors (rename, window close).
 const flushers = new Set<() => Promise<void>>();
@@ -70,6 +75,14 @@ export function NoteEditor({
   const activeRef = useRef(active);
   activeRef.current = active;
   const instance = useRef(Math.random().toString(36).slice(2));
+  // Inline AI bar: the range it works on (null = closed); `seq` remounts it per opening.
+  const [ai, setAi] = useState<{ range: AiRange; seq: number } | null>(null);
+  const aiOpen = useRef(false);
+  aiOpen.current = ai !== null;
+  const openAi = (editor: Editor) => {
+    const range = aiRange(editor);
+    if (range) setAi((cur) => ({ range, seq: (cur?.seq ?? 0) + 1 }));
+  };
 
   // Another pane saved this page while we had edits: reload once ours are stored.
   const foreignPending = useRef(false);
@@ -212,6 +225,8 @@ export function NoteEditor({
           input.click();
         },
         onPickTemplate: (editor) => insertTemplate(editor, useApp.getState().pages.get(doc.id)?.title ?? doc.title),
+        onAi: (editor) => openAi(editor),
+        onSummary: () => window.dispatchEvent(new CustomEvent(MEETING_SUMMARY_EVENT, { detail: { id: doc.id } })),
         onZeitLost: (res) =>
           useApp.getState().toast({ tone: "warning", title: "Gebucht, aber Zeile nicht mehr gefunden", detail: `${res.hours} h · ${res.target} – kein Chip eingefügt` }),
       }),
@@ -219,6 +234,15 @@ export function NoteEditor({
       contentType: "markdown",
       editorProps: {
         attributes: { class: "prose", spellcheck: "true", "aria-label": "Notiz" },
+        // Ctrl+J on a selection: inline AI instead of the assistant panel (App's global Ctrl+J).
+        handleKeyDown: (view, event) => {
+          if (!(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey || event.key.toLowerCase() !== "j") return false;
+          if (view.state.selection.empty || !editorRef.current) return false;
+          event.preventDefault();
+          event.stopPropagation();
+          openAi(editorRef.current);
+          return true;
+        },
         handleClickOn: (_view, _pos, _node, _nodePos, event) => {
           const a = (event.target as HTMLElement).closest<HTMLAnchorElement>("a[href]");
           if (a && !a.dataset.wikilink && (event.ctrlKey || event.metaKey)) {
@@ -391,12 +415,17 @@ export function NoteEditor({
         </div>
       )}
       {editor && (
-        <BubbleMenu editor={editor} className="bubble" shouldShow={({ editor: e, state }) => find === null && !state.selection.empty && !e.isActive("codeBlock") && !e.isActive("wikiLink") && !e.isActive("timeEntry") && !e.isActive("imageEmbed") && !e.isActive("image")}>
+        <BubbleMenu editor={editor} className="bubble" shouldShow={({ editor: e, state }) => find === null && !aiOpen.current && !state.selection.empty && !e.isActive("codeBlock") && !e.isActive("wikiLink") && !e.isActive("timeEntry") && !e.isActive("imageEmbed") && !e.isActive("image")}>
           <IconButton icon={Bold} label="Fett (Ctrl B)" active={ui?.bold} onClick={() => editor.chain().focus().toggleBold().run()} tooltipSide="top" />
           <IconButton icon={Italic} label="Kursiv (Ctrl I)" active={ui?.italic} onClick={() => editor.chain().focus().toggleItalic().run()} tooltipSide="top" />
           <IconButton icon={Strikethrough} label="Durchgestrichen" active={ui?.strike} onClick={() => editor.chain().focus().toggleStrike().run()} tooltipSide="top" />
           <IconButton icon={Code} label="Code" active={ui?.code} onClick={() => editor.chain().focus().toggleCode().run()} tooltipSide="top" />
           <IconButton icon={Highlighter} label="Hervorheben" active={ui?.highlight} onClick={() => editor.chain().focus().toggleHighlight().run()} tooltipSide="top" />
+          <span className="bubble-sep" />
+          <button type="button" className="bubble-ai" aria-label="Mit KI bearbeiten (Ctrl J)" data-tooltip="Mit KI bearbeiten (Ctrl J)" data-tooltip-side="top" onClick={() => openAi(editor)}>
+            <Sparkles size={14} strokeWidth={1.75} aria-hidden />
+            KI
+          </button>
           <span className="bubble-sep" />
           <IconButton
             icon={Link2}
@@ -441,6 +470,20 @@ export function NoteEditor({
         </BubbleMenu>
       )}
       {editor && <TableToolbar editor={editor} hidden={find !== null} />}
+      {editor && ai && (
+        <InlineAiBar
+          key={ai.seq}
+          editor={editor}
+          range={ai.range}
+          pageId={doc.id}
+          beforeRun={async () => {
+            window.clearTimeout(saveTimer.current);
+            await save(editor);
+            await saving.current;
+          }}
+          onClose={() => setAi(null)}
+        />
+      )}
       <EditorContent editor={editor} />
     </div>
   );

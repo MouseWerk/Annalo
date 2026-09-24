@@ -37,7 +37,17 @@ export function startFakeLiteLLM({ port = 4999, apiKey = "sk-test-aether" } = {}
       let text;
       let toolCall = null;
       const booking = lastUser.match(/buche\s+([\d.,]+)\s*h\s+auf\s+(\S+)/i);
-      if (last.role === "tool") {
+      // ai_transform (inline AI, meeting summary): "Anweisung: …" + <text>…</text>.
+      const transform = msgs.some((m) => m.role === "system" && /Du bearbeitest Texte/.test(m.content ?? ""));
+      const instruction = lastUser.match(/Anweisung: ([^\n]*)/)?.[1] ?? "";
+      const source = lastUser.match(/<text>\n([\s\S]*)\n<\/text>/)?.[1] ?? "";
+      if (transform && /Besprechungsnotiz/.test(instruction)) {
+        text = `## Zusammenfassung\n\nIm Jour fixe wurde der Rollout besprochen. Der Termin bleibt.\n\n## Entscheidungen\n\n- Go-Live bleibt am 1. Oktober\n\n## Aufgaben\n\n- [ ] Testplan an [[Architektur]] anpassen @Max 📅 2026-09-30 !!\n\n## Offene Punkte\n\n- Schulungstermin`;
+      } else if (transform && /^Kürze/.test(instruction)) {
+        text = `**Kurz:** ${source.split(/\s+/).slice(0, 3).join(" ")} [[Architektur]]`;
+      } else if (transform) {
+        text = `Überarbeitet: ${source}`;
+      } else if (last.role === "tool") {
         text = `Erledigt: Die Zeit ist gebucht. Details stehen in der **Zeiterfassung**.`;
       } else if (booking && json.tools?.length) {
         toolCall = { name: "log_time", arguments: JSON.stringify({ command: `/zeit ${booking[2]} ${booking[1].replace(",", ".")}h #DEV Gebucht vom Assistenten` }) };

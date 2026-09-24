@@ -16,6 +16,7 @@ use aether_core::ai::metrics::SessionMeter;
 use aether_core::ai::rag::{self, ContextChunk};
 use aether_core::ai::router::{ModelRouter, RouteDecision, RouteInput, RouterConfig, Tier};
 use aether_core::ai::tools::{self, Risk, SystemCall};
+use aether_core::ai::transform;
 use aether_core::attachments::{self, SavedAttachment};
 use aether_core::backup::{self, BackupInfo};
 use aether_core::db::EntryFilter;
@@ -1064,14 +1065,27 @@ async fn ai_chat(
         max_tokens: None,
     };
 
+    let (completion, meter) = stream_completion(&app, &state, &client, &request_id, &req).await?;
+    Ok(ChatOutcome { completion, route, context, meter })
+}
+
+/// Streams `req` as `ai://stream` events for `request_id` (cancellable through `ai_cancel`)
+/// and records the usage.
+async fn stream_completion(
+    app: &AppHandle,
+    state: &AppState,
+    client: &LiteLlmClient,
+    request_id: &str,
+    req: &ChatRequest,
+) -> Result<(Completion, SessionMeter)> {
     let cancel = Arc::new(AtomicBool::new(false));
-    lock(&state.cancels).insert(request_id.clone(), cancel.clone());
+    lock(&state.cancels).insert(request_id.to_owned(), cancel.clone());
     let result = client
-        .chat_stream(&req, Some(&cancel), |event| {
-            let _ = app.emit("ai://stream", StreamPayload { request_id: &request_id, event: &event });
+        .chat_stream(req, Some(&cancel), |event| {
+            let _ = app.emit("ai://stream", StreamPayload { request_id, event: &event });
         })
         .await;
-    lock(&state.cancels).remove(&request_id);
+    lock(&state.cancels).remove(request_id);
     let completion = result?;
 
     state.db().record_ai_usage(&state.session_id, &completion.usage)?;
@@ -1081,7 +1095,50 @@ async fn ai_chat(
         m.clone()
     };
     let _ = app.emit("ai://meter", &meter);
-    Ok(ChatOutcome { completion, route, context, meter })
+    Ok((completion, meter))
+}
+
+/// Rewrites `text` according to `instruction` (inline AI bar, meeting summary) and streams the
+/// result like `ai_chat`, without retrieval or tools. The page's content and tags count for the
+/// privacy markers, so a `#privat` page stays on the local model.
+#[tauri::command]
+async fn ai_transform(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request_id: String,
+    instruction: String,
+    text: String,
+    page_id: Option<i64>,
+    tier: Option<Tier>,
+) -> Result<ChatOutcome> {
+    if instruction.trim().is_empty() {
+        return Err(Error::State("Keine Anweisung".into()));
+    }
+    let client = state.client();
+    let page = match page_id {
+        Some(id) => {
+            let db = state.db();
+            db.page_doc(id).ok()
+        }
+        None => None,
+    };
+    let mut context = vec![text.clone()];
+    if let Some(doc) = &page {
+        context.push(doc.content.clone());
+        context.push(doc.tags.iter().map(|t| format!("#{t}")).collect::<Vec<_>>().join(" "));
+    }
+    let route = route_for(&state, &instruction, &context, false, tier);
+    let today = Local::now().format("%A, %d.%m.%Y").to_string();
+    let req = ChatRequest {
+        model: route.model.clone(),
+        messages: transform::messages(&instruction, &text, page.as_ref().map(|d| d.page.title.as_str()), &today),
+        tools: vec![],
+        temperature: Some(0.2),
+        max_tokens: None,
+    };
+    let (mut completion, meter) = stream_completion(&app, &state, &client, &request_id, &req).await?;
+    completion.content = transform::clean_output(&completion.content);
+    Ok(ChatOutcome { completion, route, context: vec![], meter })
 }
 
 #[tauri::command]
@@ -1621,6 +1678,7 @@ pub fn run() {
             ai_models,
             ai_meter,
             ai_chat,
+            ai_transform,
             ai_cancel,
             ai_plan_tool,
             ai_run_workspace_tool,
