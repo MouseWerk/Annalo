@@ -59,6 +59,88 @@ pub struct Settings {
     /// Global shortcut that brings up the command palette, e.g. `Ctrl+Shift+K`; `None` or `""` = off
     /// (the default: Ctrl+K works inside the app).
     pub palette_shortcut: Option<String>,
+    /// Global shortcut of the quick-search window (Spotlight-like), e.g. `Ctrl+Shift+O`; `""` = off.
+    pub search_shortcut: String,
+    /// Widgets of the start page (and of new tabs).
+    pub dashboard: Dashboard,
+}
+
+/// Width of a dashboard widget in the start page's grid: one, two or all four columns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WidgetSize {
+    #[serde(rename = "s")]
+    Small,
+    #[serde(rename = "l")]
+    Large,
+    /// Unknown sizes (e.g. from a newer version) fall back to medium.
+    #[serde(rename = "m", other)]
+    Medium,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Widget {
+    /// Stable id within the dashboard (drag & drop, keys).
+    pub id: String,
+    /// One of [`WIDGET_KINDS`]; unknown kinds are dropped by [`Dashboard::normalized`].
+    pub kind: String,
+    pub size: WidgetSize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Dashboard {
+    pub widgets: Vec<Widget>,
+    /// Scratch text of the „Notiz“ widget.
+    pub note: String,
+}
+
+/// Widget kinds of the start page: Heute, Woche, Budgets, Zuletzt bearbeitet, Lesezeichen,
+/// Timer, Notiz, Kalender.
+pub const WIDGET_KINDS: [&str; 8] = ["today", "week", "budgets", "recent", "favorites", "timer", "note", "calendar"];
+
+/// At most this many widgets are kept.
+pub const MAX_WIDGETS: usize = 24;
+
+/// Longest scratch note kept (characters).
+pub const MAX_NOTE_CHARS: usize = 20_000;
+
+impl Default for Dashboard {
+    fn default() -> Self {
+        let w = |kind: &str, size| Widget { id: kind.into(), kind: kind.into(), size };
+        Dashboard {
+            widgets: vec![
+                w("today", WidgetSize::Medium),
+                w("week", WidgetSize::Medium),
+                w("timer", WidgetSize::Small),
+                w("budgets", WidgetSize::Small),
+                w("recent", WidgetSize::Medium),
+            ],
+            note: String::new(),
+        }
+    }
+}
+
+impl Dashboard {
+    /// Drops unknown kinds, gives every widget a unique non-empty id, caps the count and the note.
+    pub fn normalized(mut self) -> Self {
+        let mut seen = std::collections::HashSet::new();
+        self.widgets.retain(|w| WIDGET_KINDS.contains(&w.kind.as_str()));
+        self.widgets.truncate(MAX_WIDGETS);
+        for w in &mut self.widgets {
+            let base = if w.id.trim().is_empty() { w.kind.clone() } else { w.id.trim().to_owned() };
+            let mut id = base.clone();
+            let mut n = 2;
+            while !seen.insert(id.clone()) {
+                id = format!("{base}-{n}");
+                n += 1;
+            }
+            w.id = id;
+        }
+        if self.note.chars().count() > MAX_NOTE_CHARS {
+            self.note = self.note.chars().take(MAX_NOTE_CHARS).collect();
+        }
+        self
+    }
 }
 
 impl Default for Settings {
@@ -86,12 +168,17 @@ impl Default for Settings {
             reminder_time: Some("17:30".into()),
             capture_shortcut: DEFAULT_CAPTURE_SHORTCUT.into(),
             palette_shortcut: None,
+            search_shortcut: DEFAULT_SEARCH_SHORTCUT.into(),
+            dashboard: Dashboard::default(),
         }
     }
 }
 
 /// Ctrl+Alt+… is AltGr on German keyboards, so the default avoids it.
 pub const DEFAULT_CAPTURE_SHORTCUT: &str = "Ctrl+Shift+Space";
+
+/// Quick search. Not Ctrl+Shift+F: that is the sidebar search inside the app.
+pub const DEFAULT_SEARCH_SHORTCUT: &str = "Ctrl+Shift+O";
 
 /// The former default palette shortcut. It opened the Windows window menu, so it is now off
 /// by default; [`Database::migrate_palette_default`] clears it from saved settings once.
@@ -103,10 +190,12 @@ impl Database {
     pub fn load_settings(&self) -> Result<Settings> {
         let raw: Option<String> =
             self.conn().query_row("SELECT value FROM settings WHERE key = ?1", [KEY], |r| r.get(0)).optional()?;
-        Ok(match raw {
+        let mut s: Settings = match raw {
             Some(json) => serde_json::from_str(&json)?,
             None => Settings::default(),
-        })
+        };
+        s.dashboard = s.dashboard.normalized();
+        Ok(s)
     }
 
     pub fn save_settings(&self, s: &Settings) -> Result<()> {
@@ -184,6 +273,60 @@ mod tests {
         assert_eq!(db.load_settings().unwrap().reminder_time, None);
         db.conn().execute("UPDATE settings SET value = '{\"palette_shortcut\":null}'", []).unwrap();
         assert_eq!(db.load_settings().unwrap().palette_shortcut, None);
+    }
+
+    #[test]
+    fn dashboard_and_search_shortcut_default_for_old_settings() {
+        let db = Database::open_in_memory().unwrap();
+        // Settings saved before the dashboard and the quick search existed.
+        db.save_settings(&Settings::default()).unwrap();
+        db.conn().execute(r#"UPDATE settings SET value = '{"theme":"dark","capture_shortcut":"Alt+Q"}'"#, []).unwrap();
+        let s = db.load_settings().unwrap();
+        assert_eq!(s.search_shortcut, DEFAULT_SEARCH_SHORTCUT);
+        assert_eq!(s.dashboard, Dashboard::default());
+        let kinds: Vec<_> = s.dashboard.widgets.iter().map(|w| w.kind.as_str()).collect();
+        assert_eq!(kinds, ["today", "week", "timer", "budgets", "recent"]);
+        assert!(kinds.iter().all(|k| WIDGET_KINDS.contains(k)));
+        // An explicitly empty dashboard stays empty; "" switches the search shortcut off.
+        db.conn()
+            .execute(r#"UPDATE settings SET value = '{"search_shortcut":"","dashboard":{"widgets":[]}}'"#, [])
+            .unwrap();
+        let s = db.load_settings().unwrap();
+        assert_eq!((s.search_shortcut.as_str(), s.dashboard.widgets.len(), s.dashboard.note.as_str()), ("", 0, ""));
+    }
+
+    #[test]
+    fn dashboard_is_normalized_on_load() {
+        let db = Database::open_in_memory().unwrap();
+        let json = r#"{"dashboard":{"note":"Hallo","widgets":[
+            {"id":"a","kind":"today","size":"l"},
+            {"id":"a","kind":"week","size":"s"},
+            {"id":"","kind":"timer","size":"xl"},
+            {"id":"x","kind":"wetter","size":"m"}]}}"#;
+        db.conn().execute("INSERT INTO settings (key, value) VALUES ('app', ?1)", [json]).unwrap();
+        let d = db.load_settings().unwrap().dashboard;
+        assert_eq!(d.note, "Hallo");
+        let got: Vec<_> = d.widgets.iter().map(|w| (w.id.as_str(), w.kind.as_str(), w.size)).collect();
+        assert_eq!(
+            got,
+            [
+                ("a", "today", WidgetSize::Large),
+                ("a-2", "week", WidgetSize::Small),
+                ("timer", "timer", WidgetSize::Medium)
+            ]
+        );
+        let many = Dashboard {
+            widgets: (0..40)
+                .map(|i| Widget { id: format!("w{i}"), kind: "note".into(), size: WidgetSize::Small })
+                .collect(),
+            note: "x".repeat(MAX_NOTE_CHARS + 5),
+        }
+        .normalized();
+        assert_eq!((many.widgets.len(), many.note.len()), (MAX_WIDGETS, MAX_NOTE_CHARS));
+        // Sizes serialize with their short names.
+        let s =
+            serde_json::to_string(&Widget { id: "t".into(), kind: "today".into(), size: WidgetSize::Small }).unwrap();
+        assert_eq!(s, r#"{"id":"t","kind":"today","size":"s"}"#);
     }
 
     #[test]

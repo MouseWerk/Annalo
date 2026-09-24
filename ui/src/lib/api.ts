@@ -117,6 +117,13 @@ export const api = {
   quit: () => call<void>("app_quit"),
   captureSubmit: (text: string) => call<T.CaptureOutcome>("capture_submit", { text }),
   captureHide: () => call<void>("capture_hide"),
+  searchHide: () => call<void>("search_hide"),
+  /** Hides the quick search and lets the main window open `target` (`search://open`). */
+  searchOpen: (target: T.SearchTarget) => call<void>("search_open", { target }),
+  /** Starts a timer on the most recently booked Netzplan/Vorgang. */
+  timerResumeLast: () => call<void>("timer_resume_last"),
+  /** Saves the start page's widgets and scratch note only. */
+  saveDashboard: (dashboard: T.Dashboard) => call<T.SettingsView>("dashboard_save", { dashboard }),
 
   // AI
   routePreview: (prompt: string, useTools: boolean, tier: T.Tier | null) => call<T.RouteDecision>("ai_route_preview", { prompt, useTools, tier }),

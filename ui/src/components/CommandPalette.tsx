@@ -17,6 +17,7 @@ import { hoursFromMinutes, isoDay, isoWeek, weekStart } from "../lib/format";
 import type { SearchHit } from "../lib/types";
 import { importVault, exportVault, toggleTheme } from "../lib/actions";
 import { newPageFromTemplate } from "./Templates";
+import { snippetHtml } from "../lib/quicksearch";
 
 interface Item {
   id: string;
@@ -324,7 +325,3 @@ export function askWeeklyReport(now = new Date()) {
   ].join("\n");
   useApp.getState().set({ panelOpen: true, panelTab: "assistant", pendingAsk: { text, display: `Wochenbericht KW ${kw}`, pageTitle: `Wochenbericht KW ${kw}`, tools: true } });
 }
-
-const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-/** FTS snippets wrap hits in STX/ETX control characters. */
-const snippetHtml = (sn: string) => esc(sn).replace(/\u0002([^\u0003]*)\u0003/g, "<mark>$1</mark>");

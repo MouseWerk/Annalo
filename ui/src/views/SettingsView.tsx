@@ -37,7 +37,11 @@ export function SettingsView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view]);
 
-  const dirty = useMemo(() => !!view && !!draft && JSON.stringify(view.settings) !== JSON.stringify(draft), [view, draft]);
+  // The start page saves its widgets itself; they are not part of this form.
+  const dirty = useMemo(
+    () => !!view && !!draft && JSON.stringify({ ...view.settings, dashboard: null }) !== JSON.stringify({ ...draft, dashboard: null }),
+    [view, draft],
+  );
   if (!view || !draft) return null;
 
   const update = (patch: Partial<Settings>) => setDraft({ ...draft, ...patch });
@@ -741,7 +745,7 @@ function DesktopSection({ draft, update }: { draft: Settings; update: (p: Partia
     <>
       <header className="settings-head">
         <h1>Desktop</h1>
-        <p>Symbol im Infobereich, Autostart, Erinnerungen und die Schnellerfassung.</p>
+        <p>Symbol im Infobereich, Autostart, Erinnerungen, Schnellsuche und Schnellerfassung.</p>
       </header>
       <Group title="Fenster">
         <Row
@@ -770,6 +774,20 @@ function DesktopSection({ draft, update }: { draft: Settings; update: (p: Partia
             label="Tastenkürzel Befehlspalette"
             placeholder="z. B. Ctrl+Shift+K"
             active={info ? (draft.palette_shortcut ?? "") === (view?.settings.palette_shortcut ?? "") && info.palette_shortcut_active : undefined}
+          />
+        </Row>
+      </Group>
+      <Group title="Schnellsuche" description="Ein Suchfenster über allen Programmen: Seiten, Inhalte und Buchungen finden, Tagesnotiz öffnen, Timer starten oder „/zeit …“ buchen. Auch über „Suchen…“ im Infobereich.">
+        <Row
+          label="Tastenkürzel (global)"
+          description="Ins Feld klicken und die Tasten drücken, z. B. Ctrl+Shift+O. Ctrl+Shift+F bleibt die Suche in der Seitenleiste. Entf = aus."
+        >
+          <ShortcutField
+            value={draft.search_shortcut}
+            onChange={(v) => update({ search_shortcut: v })}
+            label="Tastenkürzel Schnellsuche"
+            placeholder="Tasten drücken…"
+            active={info ? draft.search_shortcut === view?.settings.search_shortcut && info.search_shortcut_active : undefined}
           />
         </Row>
       </Group>
@@ -924,6 +942,7 @@ function AboutSection() {
     ["Ctrl O", "Seite öffnen"],
     ...global(view.settings.palette_shortcut, "Befehlspalette (global)"),
     ...global(view.settings.capture_shortcut, "Schnellerfassung (global)"),
+    ...global(view.settings.search_shortcut, "Schnellsuche (global)"),
     ["Ctrl N", "Neue Seite"],
     ["Ctrl Shift D", "Heutige Tagesnotiz"],
     ["Ctrl Shift T", "Timer starten / stoppen"],

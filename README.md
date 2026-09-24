@@ -33,6 +33,8 @@ assistant that runs against **your own LiteLLM server**.
 - Tray icon: open, stop the timer or restart the last booking, quick capture, quit; the tooltip shows the running timer (`NP-8801/1020 · 01:23`)
 - Closing hides the window to the tray (Settings → Desktop), start with Windows (minimized), one instance per workspace
 - Quick capture (Ctrl Shift Space, global): one line into today's daily note, `todo …` / `- [ ] …` as a task, `/zeit …` books time
+- Quick search (Ctrl Shift O, global, or „Suchen…“ in the tray): a small window above all programs that finds pages, passages and bookings, opens today's daily note, creates a page, starts/stops the timer or books `/zeit …`; Enter opens the result in the main window
+- Start page with widgets: Heute (due tasks, quick add to the daily note), Woche (booked vs. target per day, gaps), Budgets, Zuletzt bearbeitet, Lesezeichen, Timer, Notiz and Kalender. „Anpassen“ adds, removes, reorders (drag & drop or arrow buttons) and resizes them
 - End-of-day reminder on workdays when less than the daily target is booked (default 17:30), and once when a timer is still running after 20:00
 
 **Assistant**
@@ -99,6 +101,7 @@ and a fake LiteLLM server for the assistant tests. It also saves screenshots of 
 |---|---|
 | Ctrl K / Alt Space (global, configurable) | Command palette, search, `/zeit …`, `? question` |
 | Ctrl Shift Space (global) | Quick capture |
+| Ctrl Shift O (global, configurable) | Quick search window |
 | Ctrl O | Quick switcher |
 | Ctrl N | New page |
 | Ctrl Shift D | Today's daily note |

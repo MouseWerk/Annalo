@@ -196,13 +196,32 @@ export interface Settings {
   capture_shortcut: string;
   /** Global shortcut of the command palette; null = none (the default). */
   palette_shortcut: string | null;
+  /** Global shortcut of the quick-search window; "" = none. */
+  search_shortcut: string;
+  /** Widgets of the start page. */
+  dashboard: Dashboard;
 }
+export type WidgetKind = "today" | "week" | "budgets" | "recent" | "favorites" | "timer" | "note" | "calendar";
+export type WidgetSize = "s" | "m" | "l";
+export interface Widget {
+  id: string;
+  kind: WidgetKind;
+  size: WidgetSize;
+}
+export interface Dashboard {
+  widgets: Widget[];
+  /** Scratch text of the „Notiz“ widget. */
+  note: string;
+}
+/** Payload of `search://open`: what the quick search asks the main window to show. */
+export type SearchTarget = { kind: "page"; page_id: number; new_tab?: boolean } | { kind: "timesheet" } | { kind: "timer_stop" };
 export interface DesktopInfo {
   autostart: boolean;
   autostart_available: boolean;
   tray: boolean;
   capture_shortcut_active: boolean;
   palette_shortcut_active: boolean;
+  search_shortcut_active: boolean;
 }
 export interface CaptureOutcome {
   appended: { page_id: number; tasks: number; notes: number } | null;

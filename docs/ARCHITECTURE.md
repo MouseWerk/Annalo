@@ -84,6 +84,17 @@ Migration v2 converts the old block model: blocks are concatenated into
   is AltGr on German keyboards). The palette's global shortcut is `palette_shortcut` (default Alt+Space,
   empty = off); both are re-registered when the settings are saved. `capture_submit` books `/zeit` lines and appends the rest to today's
   daily note (`desktop::capture`, all or nothing).
+- Global shortcuts live in three slots (capture, palette, `search_shortcut`, default Ctrl+Shift+O);
+  `apply_shortcuts` registers new ones before releasing old ones, refuses duplicates across slots and
+  rolls back on failure.
+- Quick search: a transparent, undecorated window (label `search`, `index.html#search`, 640×420) built
+  by the same popup code as the capture window, opened by the shortcut or the tray („Suchen…“). It uses
+  `search_workspace` plus quick actions (`ui/src/lib/quicksearch.ts`); a chosen result goes through
+  `search_open`, which hides it, shows the main window and emits `search://open` (`{kind:"page", page_id, new_tab}`,
+  `timesheet`, `timer_stop`) to it. `/zeit …` is booked via `capture_submit`. The query is kept for 60 s.
+- Start page: `settings.dashboard` (`{ widgets: [{ id, kind, size: "s"|"m"|"l" }], note }`, normalized on load:
+  unknown kinds dropped, ids made unique) is saved by `dashboard_save` only; `settings_save` keeps the stored
+  dashboard. The grid has four columns (s = 1, m = 2, l = all) and falls back to two and one via `@container pane`.
 - Reminders: `end_of_day_reminder` and `late_timer_reminder` are pure functions of time, settings,
   booked minutes and the last notified day (kept in `settings` meta rows). Desktop notifications cannot
   report clicks, so after an end-of-day reminder the next focus of the main window opens the timesheet.
