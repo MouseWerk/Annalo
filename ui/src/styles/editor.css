@@ -422,3 +422,35 @@ input.prop-value-input[type="date"] { width: auto; color-scheme: light dark; }
 
 .summary-preview { min-height: 120px; max-height: 56vh; overflow-y: auto; user-select: text; }
 .summary-meta { display: inline-flex; align-items: center; gap: 6px; }
+
+/* Scroll-to-text: the cited paragraph flashes briefly. */
+.ProseMirror .cite-flash { border-radius: 4px; animation: cite-flash 2.2s var(--ease-out); }
+@keyframes cite-flash {
+  0%, 35% { background: var(--accent-soft); box-shadow: 0 0 0 4px var(--accent-soft); }
+  100% { background: transparent; box-shadow: 0 0 0 4px transparent; }
+}
+
+/* Smart /zeit: confirmation of the AI-suggested reference. */
+.zeit-confirm {
+  position: absolute;
+  z-index: 45;
+  width: min(460px, 100%);
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-overlay);
+  box-shadow: var(--shadow-lg);
+  font-size: var(--fs-sm);
+  animation: pop-in var(--dur-fast) var(--ease-out);
+}
+.zeit-confirm.inline { position: static; width: auto; box-shadow: none; }
+.zeit-confirm-line { display: flex; align-items: center; gap: 8px; color: var(--text); }
+.zeit-confirm-icon { color: var(--accent); flex: none; }
+.zeit-confirm-target { font-weight: 600; }
+.zeit-confirm-conf { margin-left: auto; flex: none; padding: 1px 7px; border-radius: 9px; font-size: var(--fs-xs); background: var(--bg-hover); color: var(--text-2); }
+.zeit-confirm-conf.conf-sicher { background: var(--success-soft); color: var(--success); }
+.zeit-confirm-conf.conf-unsicher { color: var(--warning); }
+.zeit-confirm-reason { color: var(--text-2); font-size: var(--fs-xs); padding-left: 22px; }
+.zeit-confirm-actions { display: flex; flex-wrap: wrap; gap: 6px; padding-left: 22px; }

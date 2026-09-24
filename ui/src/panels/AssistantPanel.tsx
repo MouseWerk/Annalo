@@ -2,11 +2,15 @@
 // sources, cost/speed metrics and approval-gated tools.
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   ArrowUp, CalendarRange, Check, ChevronDown, Copy, FilePlus2, FileText, Gauge, GitBranch, Globe, ListChecks, Loader2, Plus, Search, Settings2, ShieldAlert, Sparkles, Square, Terminal, Timer, Wrench, X,
 } from "lucide-react";
 import { api, errorText, on } from "../lib/api";
 import { renderMarkdown } from "../lib/markdown";
+import { citedNumbers, linkCitations } from "../lib/citations";
+import { revealText } from "../editor/reveal";
+import { previewMarkdown } from "../components/LinkPreview";
 import { useApp } from "../store/app";
 import { Button, IconButton, useMenu } from "../components/ui";
 import { h1, usd } from "../lib/format";
@@ -188,7 +192,8 @@ export function AssistantPanel() {
           text: c.content,
           streaming: false,
           cancelled: c.finish_reason === "cancelled",
-          sources: out.context.filter((x) => x.page_id != null || x.time_entry_id != null),
+          // All of them, in order: `[n]` in the answer is `sources[n - 1]`.
+          sources: out.context,
           meta: {
             model: out.route.model,
             tier: out.route.tier,
@@ -380,9 +385,53 @@ function summarizeArgs(c: ToolCall) {
   }
 }
 
+/** Opens a source: the page scrolled to the cited passage (flashed), or the timesheet. */
+export function openSource(src: ContextChunk) {
+  const s = useApp.getState();
+  if (src.page_id == null) return s.openTab({ kind: "timesheet" });
+  revealText(src.page_id, src.text, (id) => s.openPage(id)).catch(() => {});
+}
+
+const sourceLabel = (src: ContextChunk) => {
+  const title = src.title ?? src.source.replace(/^Seite: /, "");
+  return src.heading ? `${title} › ${src.heading}` : title;
+};
+
+/** Hover card of a citation chip, in the look of the link preview. */
+function CiteCard({ src, n, rect, onEnter, onLeave }: { src: ContextChunk; n: number; rect: DOMRect; onEnter: () => void; onLeave: () => void }) {
+  const W = 380;
+  const H = 260;
+  const below = rect.bottom + 8 + H < window.innerHeight;
+  const left = Math.max(8, Math.min(rect.left - 20, window.innerWidth - W - 8));
+  const top = below ? rect.bottom + 6 : Math.max(8, rect.top - H - 6);
+  const preview = previewMarkdown(src.text, 600);
+  return createPortal(
+    <div className="link-preview cite-card" role="tooltip" style={{ left, top, width: W, maxHeight: H }} onMouseEnter={onEnter} onMouseLeave={onLeave}>
+      <button type="button" className="link-preview-title" onClick={() => openSource(src)}>
+        <span className="cite cite-static">{n}</span>
+        {src.page_id != null ? <FileText size={14} /> : <Timer size={14} />}
+        <span className="cite-card-title">{sourceLabel(src)}</span>
+      </button>
+      <div className="prose prose-chat link-preview-body" dangerouslySetInnerHTML={{ __html: renderMarkdown(preview.text) }} />
+      {preview.more && <div className="link-preview-fade" aria-hidden />}
+    </div>,
+    document.body,
+  );
+}
+
 function TurnView({ turn }: { turn: Turn }) {
   const s = useApp.getState;
   const [copied, setCopied] = useState(false);
+  const [cite, setCite] = useState<{ n: number; rect: DOMRect } | null>(null);
+  const hideTimer = useRef<number | undefined>(undefined);
+  const showTimer = useRef<number | undefined>(undefined);
+  useEffect(
+    () => () => {
+      window.clearTimeout(hideTimer.current);
+      window.clearTimeout(showTimer.current);
+    },
+    [],
+  );
   if (turn.kind === "user") return <div className="msg-user">{turn.text}</div>;
 
   if (turn.kind === "tool") {
@@ -419,6 +468,17 @@ function TurnView({ turn }: { turn: Turn }) {
   }
 
   const m = turn.meta;
+  const sources = turn.sources ?? [];
+  const citeOf = (el: EventTarget | null) => (el instanceof Element ? el.closest<HTMLElement>(".cite[data-cite]") : null);
+  const hideSoon = () => {
+    window.clearTimeout(showTimer.current);
+    window.clearTimeout(hideTimer.current);
+    hideTimer.current = window.setTimeout(() => setCite(null), 220);
+  };
+  // Cited sources first for the chips below the answer.
+  const cited = citedNumbers(turn.text, sources.length);
+  const chipSources = dedupeSources([...cited.map((n) => sources[n - 1]), ...sources]);
+  const numberOf = (src: ContextChunk) => sources.indexOf(src) + 1;
   return (
     <div className="msg-ai">
       {turn.error ? (
@@ -436,19 +496,52 @@ function TurnView({ turn }: { turn: Turn }) {
           <span />
         </div>
       ) : (
-        <div className={`prose prose-chat ${turn.streaming ? "streaming" : ""}`} dangerouslySetInnerHTML={{ __html: renderMarkdown(turn.text) }} />
+        <div
+          className={`prose prose-chat ${turn.streaming ? "streaming" : ""}`}
+          dangerouslySetInnerHTML={{ __html: turn.streaming ? renderMarkdown(turn.text) : linkCitations(renderMarkdown(turn.text), sources.length) }}
+          onMouseOver={(e) => {
+            const el = citeOf(e.target);
+            if (!el) return;
+            window.clearTimeout(hideTimer.current);
+            window.clearTimeout(showTimer.current);
+            const n = Number(el.dataset.cite);
+            showTimer.current = window.setTimeout(() => el.isConnected && setCite({ n, rect: el.getBoundingClientRect() }), 180);
+          }}
+          onMouseOut={(e) => citeOf(e.target) && hideSoon()}
+          onClick={(e) => {
+            const el = citeOf(e.target);
+            const src = el && sources[Number(el.dataset.cite) - 1];
+            if (!src) return;
+            e.preventDefault();
+            e.stopPropagation();
+            setCite(null);
+            openSource(src);
+          }}
+          onKeyDown={(e) => {
+            const el = citeOf(e.target);
+            const src = el && sources[Number(el.dataset.cite) - 1];
+            if (src && (e.key === "Enter" || e.key === " ")) {
+              e.preventDefault();
+              openSource(src);
+            }
+          }}
+        />
+      )}
+      {cite && sources[cite.n - 1] && (
+        <CiteCard src={sources[cite.n - 1]} n={cite.n} rect={cite.rect} onEnter={() => window.clearTimeout(hideTimer.current)} onLeave={hideSoon} />
       )}
       {turn.cancelled && <div className="faint small">Abgebrochen</div>}
       {!turn.streaming && !turn.error && turn.sources && turn.sources.length > 0 && (
         <div className="sources">
           <span className="sources-label">Quellen</span>
-          {dedupeSources(turn.sources).slice(0, 3).map((src, i) => (
+          {chipSources.slice(0, 3).map((src) => (
             <button
-              key={i}
+              key={numberOf(src)}
               type="button"
               className="source"
-              title={src.text.slice(0, 300)}
-              onClick={() => (src.page_id != null ? s().openPage(src.page_id) : s().openTab({ kind: "timesheet" }))}
+              data-source={numberOf(src)}
+              title={`[${numberOf(src)}] ${sourceLabel(src)}\n\n${src.text.slice(0, 300)}`}
+              onClick={() => openSource(src)}
             >
               {src.page_id != null ? <FileText size={11} /> : <Timer size={11} />}
               {src.source.replace(/^Seite: /, "")}
@@ -509,6 +602,7 @@ function TurnView({ turn }: { turn: Turn }) {
 function dedupeSources(src: ContextChunk[]) {
   const seen = new Set<string>();
   return src.filter((x) => {
+    if (x.page_id == null && x.time_entry_id == null) return false;
     const k = x.page_id != null ? `p${x.page_id}` : `t${x.time_entry_id}`;
     if (seen.has(k)) return false;
     seen.add(k);

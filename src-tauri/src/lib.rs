@@ -17,6 +17,7 @@ use aether_core::ai::rag::{self, ContextChunk};
 use aether_core::ai::router::{ModelRouter, RouteDecision, RouteInput, RouterConfig, Tier};
 use aether_core::ai::tools::{self, Risk, SystemCall};
 use aether_core::ai::transform;
+use aether_core::ai::zeitguess::{self, ZeitGuess};
 use aether_core::attachments::{self, SavedAttachment};
 use aether_core::backup::{self, BackupInfo};
 use aether_core::calendar::{self, DayOverview};
@@ -1216,6 +1217,57 @@ async fn ai_transform(
     Ok(ChatOutcome { completion, route, context: vec![], meter })
 }
 
+/// Smart `/zeit`: a line with a duration but no reference, typed on a page without a linked
+/// Vorgang, is matched to a Vorgang by the model. Returns `None` when the page has a linked
+/// Vorgang (the line books on it as is). Nothing is booked here: the UI asks first.
+/// The page's content and tags count for the privacy markers, so `#privat` pages stay local.
+#[tauri::command]
+async fn zeit_suggest_ai(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    line: String,
+    page_id: Option<i64>,
+) -> Result<Option<ZeitGuess>> {
+    if zeitguess::unreferenced(&line).is_none() {
+        return Err(Error::Parse("Die Zeile braucht eine Dauer direkt nach /zeit, z. B. /zeit 2h Beschreibung".into()));
+    }
+    let (candidates, las, page) = {
+        let db = state.db();
+        if let Some(id) = page_id
+            && db.page_reference(id)?.is_some()
+        {
+            return Ok(None);
+        }
+        let page = page_id.and_then(|id| db.page_doc(id).ok());
+        (zeitguess::candidates(&db, Utc::now())?, db.list_leistungsarten()?, page)
+    };
+    if candidates.is_empty() {
+        return Err(Error::State("Keine Netzpläne oder Vorgänge angelegt".into()));
+    }
+    if state.secrets.get().is_none() {
+        return Err(Error::State("Keine KI verbunden (LiteLLM-Token fehlt)".into()));
+    }
+    let messages = zeitguess::messages(&line, &candidates, &las, page.as_ref().map(|d| d.page.title.as_str()));
+    let mut context = vec![line.clone()];
+    if let Some(doc) = &page {
+        context.push(doc.content.clone());
+        context.push(doc.tags.iter().map(|t| format!("#{t}")).collect::<Vec<_>>().join(" "));
+    }
+    let route = route_for(&state, &line, &context, false, None);
+    let req = ChatRequest {
+        model: route.model.clone(),
+        messages,
+        tools: vec![],
+        temperature: Some(0.0),
+        max_tokens: Some(300),
+    };
+    let request_id = format!("zeitguess-{}", Utc::now().timestamp_nanos_opt().unwrap_or_default());
+    let client = state.client();
+    let (completion, _) = stream_completion(&app, &state, &client, &request_id, &req).await?;
+    let raw = zeitguess::parse_answer(&completion.content)?;
+    zeitguess::validate(&line, &raw, &candidates, &las, Local::now().date_naive()).map(Some)
+}
+
 #[tauri::command]
 fn ai_cancel(state: State<AppState>, request_id: String) {
     if let Some(flag) = lock(&state.cancels).get(&request_id) {
@@ -1757,6 +1809,7 @@ pub fn run() {
             ai_meter,
             ai_chat,
             ai_transform,
+            zeit_suggest_ai,
             ai_cancel,
             ai_plan_tool,
             ai_run_workspace_tool,

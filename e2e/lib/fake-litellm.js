@@ -41,7 +41,22 @@ export function startFakeLiteLLM({ port = 4999, apiKey = "sk-test-aether" } = {}
       const transform = msgs.some((m) => m.role === "system" && /Du bearbeitest Texte/.test(m.content ?? ""));
       const instruction = lastUser.match(/Anweisung: ([^\n]*)/)?.[1] ?? "";
       const source = lastUser.match(/<text>\n([\s\S]*)\n<\/text>/)?.[1] ?? "";
-      if (transform && /Besprechungsnotiz/.test(instruction)) {
+      // Smart /zeit (zeitguess): strict JSON with the best-matching candidate reference.
+      const zeitguess = msgs.some((m) => m.role === "system" && /Du ordnest Zeitbuchungen/.test(m.content ?? ""));
+      if (zeitguess) {
+        const activity = (lastUser.match(/Tätigkeit: (.*)$/m)?.[1] ?? "").toLowerCase();
+        const words = activity.split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 3);
+        const lines = lastUser.split("\n").filter((l) => /^- \S+ \| /.test(l));
+        let best = lines[0] ?? "";
+        let bestScore = -1;
+        for (const l of lines) {
+          const score = words.filter((w) => l.toLowerCase().includes(w)).length;
+          if (score > bestScore) [best, bestScore] = [l, score];
+        }
+        const reference = best.match(/^- (\S+) \|/)?.[1] ?? "NP-0000";
+        const leistungsart = best.match(/Leistungsarten: ([A-Z]+)/)?.[1] ?? null;
+        text = JSON.stringify({ reference, leistungsart, confidence: 0.82, reason: `„${activity}“ passt zu den letzten Buchungen auf ${reference}` });
+      } else if (transform && /Besprechungsnotiz/.test(instruction)) {
         text = `## Zusammenfassung\n\nIm Jour fixe wurde der Rollout besprochen. Der Termin bleibt.\n\n## Entscheidungen\n\n- Go-Live bleibt am 1. Oktober\n\n## Aufgaben\n\n- [ ] Testplan an [[Architektur]] anpassen @Max 📅 2026-09-30 !!\n\n## Offene Punkte\n\n- Schulungstermin`;
       } else if (transform && /^Kürze/.test(instruction)) {
         text = `**Kurz:** ${source.split(/\s+/).slice(0, 3).join(" ")} [[Architektur]]`;
@@ -59,6 +74,8 @@ export function startFakeLiteLLM({ port = 4999, apiKey = "sk-test-aether" } = {}
         const sys = msgs.filter((m) => m.role === "system").map((m) => m.content).join("\n");
         const page = sys.match(/Aktuell geöffnete Seite „([^“]+)“/)?.[1];
         text = `## Zusammenfassung\n\nDu hast gefragt: *${lastUser}*.\n\n- Kontext: ${page ? `[[${page}]]` : "keine Seite"}\n- Siehe auch [[Architektur]]\n\n\`\`\`bash\necho aether\n\`\`\``;
+        // With numbered sources the answer cites the first one.
+        if (/nummerierte Quellen/.test(sys)) text += `\n\nDas steht so in deinen Notizen [1].`;
       }
 
       await sleep(60);

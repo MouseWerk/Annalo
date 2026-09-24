@@ -289,6 +289,21 @@ export interface ContextChunk {
   score: number;
   block_id: number | null;
   time_entry_id: number | null;
+  /** Page title (null for time log entries). */
+  title?: string | null;
+  /** Headings above the chunk, `Plan › Netzplan`. */
+  heading?: string | null;
+}
+/** A suggested reference for a `/zeit` line without one (smart /zeit). */
+export interface ZeitGuess {
+  reference: string;
+  title: string;
+  leistungsart: string | null;
+  leistungsart_title: string | null;
+  confidence: number;
+  reason: string;
+  /** The line with the reference inserted; booked on confirmation. */
+  line: string;
 }
 export interface SessionMeter {
   requests: number;

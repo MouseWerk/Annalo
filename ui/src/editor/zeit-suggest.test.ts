@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { rankLeistungsarten, rankRefs, recentRefs, refOptions, remainingHint, zeitToken } from "./zeit-suggest";
+import { confidenceLabel, lacksReference, rankLeistungsarten, rankRefs, recentRefs, referenceOffset, refOptions, remainingHint, zeitToken } from "./zeit-suggest";
 import type { ProjectTree } from "../lib/types";
 
 describe("zeitToken", () => {
@@ -98,5 +98,23 @@ describe("rankLeistungsarten", () => {
     expect(rankLeistungsarten(las, "te").map(([c]) => c)).toEqual(["TEST"]);
     expect(rankLeistungsarten(las, "ber").map(([c]) => c)).toEqual(["CONSULTING"]);
     expect(rankLeistungsarten(las, "qualitaet").map(([c]) => c)).toEqual(["TEST"]);
+  });
+});
+
+describe("smart /zeit helpers", () => {
+  it("detects lines without reference", () => {
+    expect(lacksReference("/zeit 2h habe am Interface-Mapping gearbeitet")).toBe(true);
+    expect(lacksReference("  /time 1:30 Review")).toBe(true);
+    expect(lacksReference("/zeit 90min")).toBe(true);
+    expect(lacksReference("/zeit NP-8801/1020 2h x")).toBe(false);
+    expect(lacksReference("/zeit Mapping 2h")).toBe(false);
+    expect(lacksReference("zeit 2h x")).toBe(false);
+  });
+
+  it("finds where the reference goes and labels confidence", () => {
+    expect(referenceOffset("/zeit 2h x")).toBe(6);
+    expect(referenceOffset("/zeit   2h x")).toBe(8);
+    expect(referenceOffset("2h x")).toBe(-1);
+    expect([0.9, 0.6, 0.2].map(confidenceLabel)).toEqual(["sicher", "wahrscheinlich", "unsicher"]);
   });
 });

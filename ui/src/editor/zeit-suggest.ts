@@ -120,6 +120,28 @@ export function rankLeistungsarten(las: [string, string][], query: string): [str
   return hit.sort(([a], [b]) => Number(!a.toLowerCase().startsWith(q)) - Number(!b.toLowerCase().startsWith(q)) || a.localeCompare(b));
 }
 
+/**
+ * `/zeit 2h habe am Mapping gearbeitet`: the first argument is a duration, so the line names
+ * no reference (smart /zeit asks the AI, unless the page is linked to a Vorgang).
+ */
+export function lacksReference(line: string): boolean {
+  const m = ZEIT_PREFIX.exec(line);
+  if (!m) return false;
+  const first = line.slice(m[0].length).trim().split(/\s+/)[0] ?? "";
+  return DURATION_RE.test(first);
+}
+
+/** Offset in `text` right after `/zeit ` (where a reference goes), or -1. */
+export function referenceOffset(text: string): number {
+  const m = ZEIT_PREFIX.exec(text);
+  return m ? m[0].length : -1;
+}
+
+/** Label of a suggestion's confidence (0..1). */
+export function confidenceLabel(c: number): string {
+  return c >= 0.75 ? "sicher" : c >= 0.45 ? "wahrscheinlich" : "unsicher";
+}
+
 /** Hint text for the remaining plan hours of an option. */
 export function remainingHint(o: RefOption, fmt: (h: number) => string): string | undefined {
   if (o.booked == null || o.planned <= 0) return undefined;

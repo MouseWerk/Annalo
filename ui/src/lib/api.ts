@@ -71,6 +71,8 @@ export const api = {
 
   // time
   logTime: (line: string, pageId: number | null = null) => call<T.LogOutcome>("log_time", { line, pageId }),
+  /** Smart `/zeit`: suggests a reference for a line without one; null when the page has a linked Vorgang. */
+  zeitSuggestAi: (line: string, pageId: number | null = null) => call<T.ZeitGuess | null>("zeit_suggest_ai", { line, pageId }),
   pageWork: (pageId: number) => call<T.PageWork | null>("page_work", { pageId }),
   timerStatus: () => call<T.TimerStatus | null>("timer_status"),
   timerStart: (netzplanId: number, vorgangNr: string | null, leistungsart: string | null, description: string) =>
