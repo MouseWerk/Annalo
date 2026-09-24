@@ -44,6 +44,10 @@ pub struct Settings {
     pub backup_dir: Option<String>,
     /// Number of backups kept; older ones are deleted.
     pub backup_keep: usize,
+    /// After every backup, write the workspace as Markdown files (+ time entries as CSV).
+    pub markdown_mirror: bool,
+    /// Folder of the Markdown mirror; `None` = `markdown` in the backup folder.
+    pub markdown_mirror_dir: Option<String>,
     /// Template page for new daily notes; `None` = built-in sections.
     pub daily_template: Option<i64>,
     /// Closing the main window hides it to the tray instead of quitting.
@@ -75,6 +79,8 @@ impl Default for Settings {
             workdays: vec![1, 2, 3, 4, 5],
             backup_dir: None,
             backup_keep: 14,
+            markdown_mirror: true,
+            markdown_mirror_dir: None,
             daily_template: None,
             close_to_tray: cfg!(windows),
             reminder_time: Some("17:30".into()),
@@ -169,6 +175,7 @@ mod tests {
         assert_eq!(loaded.theme, "dark");
         assert_eq!(loaded.idle_threshold_minutes, 5);
         assert_eq!((loaded.backup_dir, loaded.backup_keep), (None, 14));
+        assert_eq!((loaded.markdown_mirror, loaded.markdown_mirror_dir), (true, None), "mirror on by default");
         assert_eq!(loaded.reminder_time.as_deref(), Some("17:30"));
         assert_eq!(loaded.capture_shortcut, DEFAULT_CAPTURE_SHORTCUT);
         assert_eq!(loaded.palette_shortcut, None, "the palette shortcut is off by default");

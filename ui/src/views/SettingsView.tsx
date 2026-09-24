@@ -2,7 +2,7 @@
 // notes (vault import/export); backups; appearance; about.
 
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, DatabaseBackup, Monitor, Eye, EyeOff, FolderInput, FolderOpen, FolderOutput, KeyRound, Loader2, Palette, Plus, RefreshCw, Server, Sparkles, Timer, Trash2, NotebookPen, Info, XCircle } from "lucide-react";
+import { CheckCircle2, DatabaseBackup, ExternalLink, Monitor, Eye, EyeOff, FolderInput, FolderOpen, FolderOutput, KeyRound, Loader2, Palette, Plus, RefreshCw, Server, Sparkles, Timer, Trash2, NotebookPen, Info, XCircle } from "lucide-react";
 import { api } from "../lib/api";
 import { useApp } from "../store/app";
 import { applyTheme, exportVault, importVault, pickFolder } from "../lib/actions";
@@ -10,7 +10,7 @@ import { flushAllEditors } from "../editor/NoteEditor";
 import { fileSize, relative } from "../lib/format";
 import { Badge, Button, Field, IconButton, Input, Segmented, Select, Switch, TextArea } from "../components/ui";
 import { recordShortcut } from "../lib/shortcut";
-import type { BackupInfo, ConnectionTest, DataDirStatus, DesktopInfo, Page, Settings } from "../lib/types";
+import type { BackupInfo, MirrorStatus, ConnectionTest, DataDirStatus, DesktopInfo, Page, Settings } from "../lib/types";
 
 type Section = "ai" | "time" | "notes" | "backup" | "desktop" | "appearance" | "about";
 const SECTIONS: { id: Section; label: string; icon: typeof Server }[] = [
@@ -578,13 +578,29 @@ function NotesSection({ draft, update }: { draft: Settings; update: (p: Partial<
 function BackupSection({ draft, update }: { draft: Settings; update: (p: Partial<Settings>) => void }) {
   const view = useApp((s) => s.settings)!;
   const [list, setList] = useState<BackupInfo[] | null>(null);
+  const [mirror, setMirror] = useState<MirrorStatus | null>(null);
   const [busy, setBusy] = useState(false);
   const s = useApp.getState;
-  const reload = () => api.backups().then(setList).catch(() => setList([]));
+  const reload = () => {
+    api.backups().then(setList).catch(() => setList([]));
+    api.mirrorStatus().then(setMirror).catch(() => setMirror(null));
+  };
   useEffect(() => {
     reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view.backup_dir, view.settings.backup_keep]);
+  }, [view.backup_dir, view.settings.backup_keep, view.settings.markdown_mirror, view.settings.markdown_mirror_dir]);
+
+  const pickMirror = async () => {
+    const dir = await pickFolder("Ordner für die Markdown-Kopie (leer oder eine frühere Kopie)");
+    if (dir) update({ markdown_mirror_dir: dir });
+  };
+  const openMirror = async () => {
+    try {
+      await api.openMirror();
+    } catch (e) {
+      s().error("Ordner konnte nicht geöffnet werden", e);
+    }
+  };
 
   const pick = async () => {
     const dir = await pickFolder("Ordner für Sicherungen");
@@ -634,6 +650,54 @@ function BackupSection({ draft, update }: { draft: Settings; update: (p: Partial
             <span className="faint">Sicherungen</span>
           </div>
         </Row>
+      </Group>
+      <Group
+        title="Markdown-Kopie"
+        description="Nach jeder Sicherung werden alle Seiten als Markdown-Dateien (mit Bildern) und die Buchungen als Zeiterfassung/JJJJ-MM.csv in einen Ordner geschrieben – lesbar auch ohne AETHER OS. Der Ordner wird jedes Mal vollständig ersetzt."
+      >
+        <Row label="Markdown-Kopie bei jeder Sicherung">
+          <Switch label="Markdown-Kopie bei jeder Sicherung" checked={draft.markdown_mirror} onChange={(v) => update({ markdown_mirror: v })} />
+        </Row>
+        {draft.markdown_mirror && (
+          <>
+            <Row
+              label="Ordner"
+              description={
+                <>
+                  <span>{draft.markdown_mirror_dir ? "Eigener Ordner (leer oder eine frühere Kopie):" : "Standard, im Sicherungsordner:"}</span>
+                  <span className="mono selectable backup-path mirror-path">{mirror?.path ?? ""}</span>
+                </>
+              }
+            >
+              <Button icon={FolderOpen} onClick={pickMirror}>
+                Ordner wählen…
+              </Button>
+              {draft.markdown_mirror_dir && (
+                <Button variant="ghost" onClick={() => update({ markdown_mirror_dir: null })}>
+                  Standard
+                </Button>
+              )}
+            </Row>
+            <Row
+              label="Letzte Kopie"
+              description={
+                mirror?.error ? (
+                  <span className="mirror-error">Fehlgeschlagen: {mirror.error}</span>
+                ) : mirror?.last_at ? (
+                  <span className="mirror-last">
+                    {new Date(mirror.last_at).toLocaleString("de-DE", { dateStyle: "medium", timeStyle: "short" })} · {relative(mirror.last_at)}
+                  </span>
+                ) : (
+                  "Noch keine – wird mit der nächsten Sicherung erstellt."
+                )
+              }
+            >
+              <Button icon={ExternalLink} onClick={openMirror} disabled={!mirror?.last_at}>
+                Ordner öffnen
+              </Button>
+            </Row>
+          </>
+        )}
       </Group>
       <Group title="Sicherungen">
         <Row label="Jetzt sichern" description="Legt sofort eine zusätzliche Sicherung an.">

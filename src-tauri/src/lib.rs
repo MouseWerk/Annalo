@@ -18,8 +18,10 @@ use aether_core::ai::router::{ModelRouter, RouteDecision, RouteInput, RouterConf
 use aether_core::ai::tools::{self, Risk, SystemCall};
 use aether_core::attachments::{self, SavedAttachment};
 use aether_core::backup::{self, BackupInfo};
+use aether_core::calendar::{self, DayOverview};
 use aether_core::db::EntryFilter;
 use aether_core::export::{self, ExportFormat, ExportOptions, ExportResult};
+use aether_core::mirror::{self, MirrorReport};
 use aether_core::model::*;
 use aether_core::netzplan::{self, Schedule};
 use aether_core::notes::PageDoc;
@@ -97,6 +99,14 @@ impl AppState {
         match self.settings().backup_dir.filter(|d| !d.trim().is_empty()) {
             Some(d) => PathBuf::from(d.trim()),
             None => self.data_dir.join("backups"),
+        }
+    }
+
+    /// The configured Markdown mirror folder, or `markdown` in the backup folder.
+    fn mirror_dir(&self) -> PathBuf {
+        match self.settings().markdown_mirror_dir.filter(|d| !d.trim().is_empty()) {
+            Some(d) => PathBuf::from(d.trim()),
+            None => self.backup_dir().join("markdown"),
         }
     }
 
@@ -248,6 +258,12 @@ fn recent_pages(state: State<AppState>, limit: usize) -> Result<Vec<Page>> {
 #[tauri::command]
 fn daily_note(state: State<AppState>, date: Option<NaiveDate>) -> Result<Page> {
     state.db().daily_note(date.unwrap_or_else(|| Local::now().date_naive()))
+}
+
+/// Per day `from..=to` (local): daily note, booked minutes and open tasks due, for the calendar.
+#[tauri::command]
+fn daily_overview(state: State<AppState>, from: NaiveDate, to: NaiveDate) -> Result<Vec<DayOverview>> {
+    calendar::daily_overview(&state.db(), from, to, &Local)
 }
 
 #[tauri::command]
@@ -758,7 +774,64 @@ fn run_backup(state: &AppState) -> Result<BackupInfo> {
     if src.is_dir() {
         copy_new_attachments(&src, &dir.join("attachments"))?;
     }
+    if state.settings().markdown_mirror {
+        // The backup itself succeeded; a failed mirror is reported in the settings, not as a failed backup.
+        if let Err(e) = run_mirror(state) {
+            eprintln!("markdown mirror failed: {e}");
+        }
+    }
     Ok(info)
+}
+
+const MIRROR_LAST: &str = "mirror.last";
+const MIRROR_ERROR: &str = "mirror.error";
+
+/// Rebuilds the Markdown mirror and records the outcome (time or error) for the settings.
+fn run_mirror(state: &AppState) -> Result<MirrorReport> {
+    let dir = state.mirror_dir();
+    let db = state.db();
+    let res = mirror::write_mirror(&db, &dir, &state.attachments_dir(), &Local);
+    match &res {
+        Ok(r) => {
+            db.meta_set(MIRROR_LAST, &r.created_at.to_rfc3339())?;
+            db.meta_set(MIRROR_ERROR, "")?;
+        }
+        Err(e) => db.meta_set(MIRROR_ERROR, &e.to_string())?,
+    }
+    res
+}
+
+#[derive(Serialize)]
+struct MirrorStatus {
+    enabled: bool,
+    /// Effective mirror folder (the configured one or the default).
+    path: String,
+    last_at: Option<DateTime<Local>>,
+    error: Option<String>,
+}
+
+#[tauri::command]
+fn mirror_status(state: State<AppState>) -> Result<MirrorStatus> {
+    let db = state.db();
+    let last_at =
+        db.meta_get(MIRROR_LAST)?.and_then(|s| DateTime::parse_from_rfc3339(&s).ok()).map(|t| t.with_timezone(&Local));
+    Ok(MirrorStatus {
+        enabled: state.settings().markdown_mirror,
+        path: state.mirror_dir().display().to_string(),
+        last_at,
+        error: db.meta_get(MIRROR_ERROR)?.filter(|e| !e.is_empty()),
+    })
+}
+
+/// Opens the mirror folder in the file manager.
+#[tauri::command]
+fn mirror_open(app: AppHandle, state: State<AppState>) -> Result<()> {
+    use tauri_plugin_opener::OpenerExt;
+    let dir = state.mirror_dir();
+    if !dir.is_dir() {
+        return Err(Error::State("Die Markdown-Kopie wurde noch nicht erstellt – zuerst sichern".into()));
+    }
+    app.opener().open_path(dir.display().to_string(), None::<&str>).map_err(|e| Error::State(e.to_string()))
 }
 
 /// Copies regular files from `src` that `dst` lacks. Hidden files and symlinks are skipped;
@@ -786,8 +859,9 @@ fn copy_new_attachments(src: &std::path::Path, dst: &std::path::Path) -> Result<
     Ok(())
 }
 
+/// Async so the snapshot and the Markdown mirror do not block the main (UI) thread.
 #[tauri::command]
-fn backup_now(state: State<AppState>) -> Result<BackupInfo> {
+async fn backup_now(state: State<'_, AppState>) -> Result<BackupInfo> {
     run_backup(&state)
 }
 
@@ -851,6 +925,7 @@ fn settings_save(app: AppHandle, state: State<AppState>, settings: Settings) -> 
     settings.litellm_base_url = url.trim_end_matches('/').to_owned();
     settings.backup_keep = settings.backup_keep.clamp(1, 365);
     settings.backup_dir = settings.backup_dir.map(|d| d.trim().to_owned()).filter(|d| !d.is_empty());
+    settings.markdown_mirror_dir = settings.markdown_mirror_dir.map(|d| d.trim().to_owned()).filter(|d| !d.is_empty());
     settings.reminder_time = settings.reminder_time.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty());
     if let Some(t) = &settings.reminder_time {
         let time = aether_core::desktop::parse_hhmm(t)
@@ -1572,6 +1647,7 @@ pub fn run() {
             page_resolve,
             recent_pages,
             daily_note,
+            daily_overview,
             tags_list,
             tag_pages,
             tasks_list,
@@ -1613,6 +1689,8 @@ pub fn run() {
             export_entries,
             backup_now,
             backup_list,
+            mirror_status,
+            mirror_open,
             settings_get,
             settings_save,
             api_key_set,

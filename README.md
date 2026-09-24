@@ -11,7 +11,7 @@ assistant that runs against **your own LiteLLM server**.
 - Live-preview Markdown editor: headings, lists, task lists, tables, code blocks with syntax highlighting, highlights, links
 - `[[Wiki links]]` with autocomplete; clicking a missing page creates it; renames rewrite links everywhere
 - Backlinks under every page and in the side panel, outline, tags (`#tag`) with a tag view
-- Daily notes (Ctrl Shift D) with previous/next day navigation, optionally from a template
+- Daily notes (Ctrl Shift D) with previous/next day navigation, optionally from a template; a calendar (Ctrl Shift C, right-click on the ribbon's daily-note button) shows which days have a note and the booked hours per day against the daily target
 - Tasks across all notes (Ctrl Shift A): `- [ ] Angebot senden 📅 2026-09-30 !!` (also `due:2026-09-30`; `!!` = hoch, `!` = mittel), grouped into Überfällig / Heute / Diese Woche / Später / Ohne Datum, filterable by status and tag, checked off right in the list
 - Images: paste or drop screenshots into a note; they are stored under `attachments/` and embedded as `![[name.png]]`
 - Templates: pages under „Vorlagen“ with `{{datum}}`, `{{date}}`, `{{zeit}}`, `{{titel}}`, `{{wochentag}}`, `{{kw}}`; `/Vorlage einfügen` or „Neue Seite aus Vorlage…“ in the palette
@@ -67,7 +67,8 @@ cargo tauri build    # NSIS + MSI installers in target/release/bundle
 Data lives in `%APPDATA%\os.aether.workspace\` (`workspace.db`); Settings → AETHER OS → „Speicherort ändern…“ moves it
 (avoid OneDrive/Dropbox and network folders for the database; backups there are fine). The first start seeds a small demo workspace.
 The database is backed up daily into `backups` there (or a folder chosen under Settings → Sicherung), and deleted
-pages stay in the trash for 30 days.
+pages stay in the trash for 30 days. Each backup also refreshes a read-only Markdown copy of all pages (with images) and
+the bookings as `Zeiterfassung/YYYY-MM.csv` (Excel-ready) in `backups/markdown` (configurable under Settings → Sicherung).
 
 ## Tests
 
@@ -99,6 +100,7 @@ and a fake LiteLLM server for the assistant tests. It also saves screenshots of 
 | Ctrl O | Quick switcher |
 | Ctrl N | New page |
 | Ctrl Shift D | Today's daily note |
+| Ctrl Shift C | Calendar of daily notes |
 | Ctrl Shift A | Tasks |
 | Ctrl Shift T | Start/stop timer |
 | Ctrl J | Assistant |

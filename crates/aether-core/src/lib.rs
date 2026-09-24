@@ -9,6 +9,8 @@
 //! * [`trash`] – page trash (restore, purge, 30-day expiry)
 //! * [`versions`] – page version history (snapshots, restore)
 //! * [`backup`] – database snapshots (`VACUUM INTO`) with rotation
+//! * [`mirror`] – Markdown mirror of the workspace (+ time entries as CSV), refreshed with each backup
+//! * [`calendar`] – month overview for the daily-note calendar (notes, booked time, due tasks)
 //! * [`vault`] – Obsidian vault import / Markdown export
 //! * [`attachments`] – pasted and imported images
 //! * [`templates`] – page templates with `{{datum}}`-style placeholders
@@ -28,12 +30,14 @@ pub mod activity;
 pub mod ai;
 pub mod attachments;
 pub mod backup;
+pub mod calendar;
 pub mod datadir;
 pub mod db;
 pub mod demo;
 pub mod desktop;
 pub mod error;
 pub mod export;
+pub mod mirror;
 pub mod model;
 pub mod netzplan;
 pub mod notes;

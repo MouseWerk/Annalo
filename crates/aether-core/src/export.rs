@@ -104,7 +104,7 @@ fn truncate_chars(s: &str, max: usize) -> String {
 
 /// Quotes a field for a delimiter-separated file (RFC 4180 rules). Text that a
 /// spreadsheet would run as a formula (`=`, `+`, `-`, `@`, …) is prefixed with `'`.
-fn field(s: &str, delim: char) -> String {
+pub(crate) fn field(s: &str, delim: char) -> String {
     let s = if s.starts_with(['=', '+', '-', '@', '\t', '\r']) { format!("'{s}") } else { s.to_owned() };
     if s.contains([delim, '"', '\n', '\r']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s }
 }

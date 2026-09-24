@@ -3,11 +3,12 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowLeft, ArrowRight, Columns2, Plus, Briefcase, CalendarCheck2, Download, FilePlus2, FolderInput, Hash, Moon, PanelLeft, PanelRight, RefreshCw, Search, Settings, Sparkles, Square, Timer, Trash2, Play, Focus, ListChecks, LayoutTemplate, Mail, ListPlus,
+  ArrowLeft, ArrowRight, CalendarDays, Columns2, Plus, Briefcase, CalendarCheck2, Download, FilePlus2, FolderInput, Hash, Moon, PanelLeft, PanelRight, RefreshCw, Search, Settings, Sparkles, Square, Timer, Trash2, Play, Focus, ListChecks, LayoutTemplate, Mail, ListPlus,
 } from "lucide-react";
 import { api } from "../lib/api";
 import { useApp, savePref } from "../store/app";
 import { openAssistant, openToday } from "./Ribbon";
+import { openCalendar } from "./CalendarPopover";
 import { PageIcon } from "./icons";
 import { createSubpage } from "../views/PageView";
 import { requestAddProperty } from "../views/PageProperties";
@@ -160,6 +161,7 @@ export function CommandPalette() {
         hint: "Ctrl Shift D",
         run: () => openToday(),
       },
+      { id: "calendar", title: "Kalender", subtitle: "Tagesnotiz eines anderen Tages öffnen", icon: ic(CalendarDays), hint: "Ctrl Shift C", run: () => setTimeout(() => openCalendar(), 0) },
       ...(s().tabs.find((t) => t.id === s().activeTabId)?.kind === "page"
         ? [{ id: "add-property", title: "Eigenschaft hinzufügen", subtitle: "Zur aktuellen Seite", icon: ic(ListPlus), hint: "Ctrl ;", run: () => setTimeout(requestAddProperty, 0) }]
         : []),
