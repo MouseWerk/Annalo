@@ -1,9 +1,123 @@
-# AETHER OS
+<p align="center">
+  <img src="docs/brand/aether-icon-1024.png" width="112" alt="AETHER OS logo">
+</p>
 
-A local-first desktop workspace for Windows: Markdown notes with `[[links]]`,
-backlinks and tags (an Obsidian replacement), precise time tracking on project
-structures (Projekt → Netzplan/PSP-Element → Vorgang → Leistungsart), and an AI
-assistant that runs against **your own LiteLLM server**.
+<h1 align="center">AETHER OS</h1>
+
+<p align="center">
+  <b>Notes, time tracking and your own AI in one local-first desktop app.</b><br>
+  Markdown notes with <code>[[links]]</code> like Obsidian · SAP PS time booking with <code>/zeit</code> · an assistant on <b>your</b> LiteLLM server
+</p>
+
+<p align="center">
+  <a href="https://github.com/mauricekleindienst/aetheros/actions/workflows/ci.yml"><img src="https://github.com/mauricekleindienst/aetheros/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://github.com/mauricekleindienst/aetheros/releases/latest"><img src="https://img.shields.io/github/v/release/mauricekleindienst/aetheros?label=release" alt="Latest release"></a>
+  <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-6b5bd6" alt="Platforms">
+  <img src="https://img.shields.io/badge/built%20with-Tauri%202%20%C2%B7%20Rust%20%C2%B7%20React-2f2f3a" alt="Tauri 2, Rust, React">
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/split-view.png" alt="AETHER OS: two notes side by side with the side panel" width="100%">
+</p>
+
+Everything lives in one SQLite database on your computer. There is no cloud account and no telemetry. The only
+network traffic is what you set up yourself: your LiteLLM server, an optional Git remote for backups, and update checks
+against this repository's releases.
+
+**Contents:** [Download](#download) · [Tour](#a-quick-tour) · [Features](#what-you-get) · [First steps](#first-steps) ·
+[LiteLLM](#connecting-your-litellm-server) · [Proxy](#netzwerk--proxy) · [Customizing](#anpassen) ·
+[Your data](#your-data-is-safe) · [Git sync](#git-synchronisierung) · [Keyboard](#keyboard) · [Building](#building) ·
+[Updates](#automatische-updates-einrichten) · [Tests](#tests)
+
+## Download
+
+Get the latest version from the [**Releases page**](https://github.com/mauricekleindienst/aetheros/releases/latest).
+
+| System | File | Notes |
+|---|---|---|
+| **Windows 10/11** (x64) | `AETHER-OS_<version>_x64-setup.exe` | Installs per user into `%LOCALAPPDATA%`, **no admin rights needed**. Updates itself. WebView2 is installed silently if it is missing |
+| **macOS 11+** Apple Silicon | `AETHER-OS_<version>_aarch64.dmg` | Drag into *Programme*. Not notarized: see [macOS](#macos) for the one-time Gatekeeper step |
+| **macOS 11+** Intel | `AETHER-OS_<version>_x64.dmg` | Same as above |
+| **Linux** (x64) | `AETHER-OS_<version>_amd64.deb` | Debian/Ubuntu: `sudo apt install ./AETHER-OS_*.deb` |
+| **Linux** (x64) | `AETHER-OS_<version>_amd64.AppImage` | Any distribution: `chmod +x AETHER-OS_*.AppImage && ./AETHER-OS_*.AppImage` |
+
+The first start opens a short onboarding (language, theme, LiteLLM server) and seeds a small demo workspace to try
+things out.
+
+## A quick tour
+
+### Notes that link to each other
+
+Live-preview Markdown editing, with `[[wiki links]]`, backlinks, tags, tables, tasks and a page tree. Hovering a link
+shows a preview of the linked page.
+
+<p align="center">
+  <img src="docs/screenshots/dark-02-page.png" width="49%" alt="A note in dark mode">
+  <img src="docs/screenshots/link-preview.png" width="49%" alt="Hover preview of a [[link]]">
+</p>
+<p align="center">
+  <img src="docs/screenshots/table-toolbar.png" width="49%" alt="Table editing toolbar">
+  <img src="docs/screenshots/versions-diff.png" width="49%" alt="Version history with diff">
+</p>
+
+### Your own start page
+
+Widgets for today's tasks, booked hours this week, budget warnings, recent pages, bookmarks, the timer, a note and the
+calendar. You can arrange and resize them with drag and drop.
+
+<p align="center"><img src="docs/screenshots/dashboard.png" width="90%" alt="Start page with widgets"></p>
+
+### Time tracking with `/zeit`
+
+Type `/zeit NP-8801/1020 2.5h #DEV Systemintegration` in any note. Netzplan, Vorgang and Leistungsart autocomplete,
+with the remaining plan hours shown. A page linked to a Vorgang shows a work card with budget, ETC and a timer. The
+weekly timesheet exports to SAP CATS, Jira, CSV or JSON.
+
+<p align="center">
+  <img src="docs/screenshots/zeit-suggest.png" width="49%" alt="/zeit autocomplete">
+  <img src="docs/screenshots/page-work-card.png" width="49%" alt="Work card on a page linked to a Vorgang">
+</p>
+<p align="center">
+  <img src="docs/screenshots/dark-06-timesheet.png" width="49%" alt="Weekly timesheet">
+  <img src="docs/screenshots/dark-07-projects.png" width="49%" alt="Projects with budget, EAC and critical path">
+</p>
+
+### AI that stays on your server
+
+The assistant answers from your notes and cites its sources: hovering `[1]` shows the passage. Inline AI rewrites
+selected text. Meeting notes turn into decisions and tasks. `/zeit 2h habe am Interface-Mapping gearbeitet` asks the
+AI which Vorgang the time belongs to and books only after you confirm.
+
+<p align="center">
+  <img src="docs/screenshots/cite-preview.png" width="49%" alt="Answer with cited sources">
+  <img src="docs/screenshots/inline-ai-preview.png" width="49%" alt="Inline AI on a selection">
+</p>
+<p align="center">
+  <img src="docs/screenshots/meeting-summary.png" width="49%" alt="Meeting summary">
+  <img src="docs/screenshots/smart-zeit-confirm.png" width="49%" alt="Smart /zeit asks before booking">
+</p>
+
+### Tasks, calendar and quick search
+
+Tasks from all notes are grouped by due date. The calendar shows your daily notes and booked hours per day. The global
+quick search (Ctrl Shift O) works from any program.
+
+<p align="center">
+  <img src="docs/screenshots/tasks-view.png" width="32%" alt="Tasks across all notes">
+  <img src="docs/screenshots/calendar.png" width="32%" alt="Calendar of daily notes">
+  <img src="docs/screenshots/quick-search.png" width="32%" alt="Global quick search">
+</p>
+
+### Made to fit you
+
+Light or dark mode, any accent color, fonts, density, language (German/English) and rebindable shortcuts. The
+settings also cover proxy and certificates for company networks and Git backup.
+
+<p align="center">
+  <img src="docs/screenshots/settings-appearance-teal.png" width="32%" alt="Appearance settings">
+  <img src="docs/screenshots/settings-network.png" width="32%" alt="Network and proxy settings">
+  <img src="docs/screenshots/settings-git-sync.png" width="32%" alt="Git sync settings">
+</p>
 
 ## What you get
 
@@ -48,12 +162,27 @@ assistant that runs against **your own LiteLLM server**.
 - Smart `/zeit`: `/zeit 2h habe am Interface-Mapping gearbeitet` on a page without `vorgang:` asks the AI for the Vorgang and shows „Buchen auf NP-8801/1020 · Systemintegration (DEV)?“ with the reason – Enter books, Tab picks another reference, Esc cancels (also in quick capture). Nothing is booked without confirmation
 - Shows sources, time to first token, tokens/s, tokens and cost per answer and per session
 
+## First steps
+
+<img src="docs/screenshots/onboarding.png" width="42%" align="right" alt="Onboarding">
+
+1. **Install and start.** The onboarding asks for language, theme and (optionally) your LiteLLM server. You can skip
+   anything and change it later under Settings
+2. **Look around the demo workspace.** Press **Ctrl K** for the command palette, **Ctrl O** to jump to a page and
+   **Ctrl Shift D** for today's daily note
+3. **Coming from Obsidian?** Use „Obsidian-Vault importieren…“ in the command palette. Folders, frontmatter, links,
+   tags and images are kept
+4. **Book your first time.** Type `/zeit` in a note, or start the timer with **Ctrl Shift T**
+5. **Behind a company proxy?** Settings → Netzwerk, see [below](#netzwerk--proxy)
+
+<br clear="right">
+
 ## Connecting your LiteLLM server
 
 Settings → **KI & LiteLLM**:
 
 1. **Server-URL**: e.g. `https://llm.your-company.com`
-2. **API-Token**: your LiteLLM virtual key or master key. It is stored in the Windows Credential Manager, never in a file or the database
+2. **API-Token**: your LiteLLM virtual key or master key. It is stored in the Windows Credential Manager or the macOS Keychain, never in the database or the settings
 3. **Testen** lists the server's models; pick the models for *Lokal*, *Standard*, *Reasoning* and (optionally) *Embeddings*
 
 Changes apply immediately, with no restart. `config/litellm.config.example.yaml` shows a matching proxy configuration.
@@ -103,14 +232,16 @@ Settings are grouped (Allgemein, Arbeiten, KI, System) and searchable. Besides t
 
 ## Building
 
-Prerequisites: Rust (stable, MSVC on Windows), Node 22, and on Windows the WebView2 runtime (preinstalled on Windows 11).
+Prerequisites: Rust (the version in `rust-toolchain.toml` is picked automatically; MSVC on Windows), Node 22, on Windows the
+WebView2 runtime (preinstalled on Windows 11), on Linux the WebKitGTK 4.1 development packages
+(`libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev`).
 
 ```sh
 npm ci --prefix ui
 cargo install tauri-cli --version "^2"
 cd src-tauri
 cargo tauri dev      # run with hot reload
-cargo tauri build    # NSIS + MSI installers in target/release/bundle
+cargo tauri build    # installer/packages in target/release/bundle (NSIS on Windows, deb/AppImage on Linux)
 ```
 
 Data lives in `%APPDATA%\os.aether.workspace\` (`workspace.db`); Settings → AETHER OS → „Speicherort ändern…“ moves it
@@ -178,6 +309,19 @@ Then every tag `vX.Y.Z` produces a signed installer (Windows), signed update arc
 `cargo tauri signer generate -w aether-updater.key`, replace `src-tauri/updater.pub` and both secrets; apps installed
 with the old key must be updated once by hand.
 
+## Your data is safe
+
+- **Local first.** Everything is in one SQLite database (`workspace.db`) in your user profile. Nothing leaves the
+  computer unless you set it up
+- **Daily backups** of the database into `backups` (folder configurable), with a readable **Markdown copy** of all
+  pages, images and bookings (`Zeiterfassung/YYYY-MM.csv`, Excel-ready)
+- **Trash** keeps deleted pages for 30 days. **Version history** keeps earlier states of every page, with a diff
+- **Git sync** pushes the Markdown copy to your own private repository (see below)
+- **Secrets** (LiteLLM key, Git token, proxy password) are stored in the Windows Credential Manager or the macOS
+  Keychain (on Linux in `secrets.json` in the data folder, readable only by your user). They are never written to the
+  database, settings exports or logs
+- **Export** everything back to plain Markdown files at any time
+
 ## Git-Synchronisierung
 
 Settings → **Sicherung** → „Git-Synchronisierung“ pushes the Markdown copy (pages, images, `Zeiterfassung/*.csv`) to a
@@ -242,3 +386,14 @@ All in-app shortcuts can be changed under Settings → Tastatur (the defaults ar
 | Ctrl \ / Ctrl Shift \ | Toggle sidebar / side panel |
 | Ctrl . | Focus mode |
 | Ctrl , | Settings |
+
+## Releasing
+
+Push an annotated tag. The tag message becomes the release notes, and the tag sets the version:
+
+```sh
+git tag -a v1.1.0 -m "What's new …" && git push origin v1.1.0
+```
+
+The [Release workflow](.github/workflows/release.yml) builds Windows, Linux and both macOS variants, signs the update
+archives and publishes everything together with `latest.json` on the Releases page.

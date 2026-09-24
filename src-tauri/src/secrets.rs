@@ -1,7 +1,7 @@
 //! Storage for secrets: the LiteLLM API key and the Git access token.
 //!
-//! Windows: Credential Manager, macOS: Keychain. Elsewhere (Linux test
-//! builds) the secrets are written to `secrets.json` in the app data directory
+//! Windows: Credential Manager, macOS: Keychain. Elsewhere (Linux
+//! and other systems) the secrets are written to `secrets.json` in the app data directory
 //! with owner-only permissions, one JSON field per secret.
 
 use std::path::{Path, PathBuf};
@@ -46,7 +46,7 @@ impl SecretStore {
         } else if cfg!(target_os = "macos") {
             "macOS-Schlüsselbund"
         } else {
-            "Datei im App-Datenordner (nur für Tests)"
+            "Datei im App-Datenordner (nur für den Benutzer lesbar)"
         }
     }
 
