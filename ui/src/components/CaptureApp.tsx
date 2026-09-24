@@ -9,7 +9,9 @@ import { api, errorText, on } from "../lib/api";
 import { applyTheme } from "../lib/actions";
 import { CAPTURE_HINTS, captureKind } from "../lib/capture";
 import { SuggestionPopup, type PopupHandle } from "../editor/suggestion-popup";
-import { zeitToken, type ZeitToken } from "../editor/zeit-suggest";
+import { lacksReference, referenceOffset, zeitToken, type ZeitToken } from "../editor/zeit-suggest";
+import { ZeitConfirm, type ZeitChoice } from "../editor/ZeitConfirm";
+import type { ZeitGuess } from "../lib/types";
 import { resetZeitCache, zeitLaItems, zeitRefItems } from "../editor/zeit-source";
 import type { ZeitSuggestItem } from "../editor/extensions";
 
@@ -35,6 +37,9 @@ export function CaptureApp() {
   const popup = useRef<PopupHandle>(null);
   // Latest suggestion request; older answers are dropped.
   const req = useRef(0);
+  // Smart /zeit: a single `/zeit 2h …` line without reference asks the AI first.
+  const [ask, setAsk] = useState<{ id: number; line: string; guess: ZeitGuess | null } | null>(null);
+  const askSeq = useRef(0);
 
   useEffect(() => {
     document.body.classList.add("capture-mode");
@@ -70,7 +75,7 @@ export function CaptureApp() {
     if (win.label !== "capture" || !body.current) return;
     const h = Math.round(Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, body.current.offsetHeight + 32)));
     win.setSize(new LogicalSize(WIDTH, h)).catch(() => {});
-  }, [text, sugg, error]);
+  }, [text, sugg, error, ask]);
 
   /** `/zeit` suggestions for the token before the caret (first line only). */
   const suggest = (value: string, caret: number) => {
@@ -96,17 +101,61 @@ export function CaptureApp() {
   };
 
   const hide = () => api.captureHide().catch(() => {});
-  const submit = async () => {
-    if (!text.trim() || busy) return;
+  const askAi = async (line: string) => {
+    const id = ++askSeq.current;
+    setAsk({ id, line, guess: null });
+    let guess: ZeitGuess | null = null;
+    let aiError: unknown = null;
+    try {
+      guess = await api.zeitSuggestAi(line, null);
+    } catch (e) {
+      aiError = e;
+    }
+    if (askSeq.current !== id) return;
+    if (guess) return setAsk({ id, line, guess });
+    setAsk(null);
+    // No AI: the booking's own error, plus how to fix it.
+    const err = await submit(line, true);
+    if (err && aiError) setError(`${err} – Referenz angeben, z. B. /zeit NP-8801/1020 2h … (KI: ${errorText(aiError)})`);
+  };
+  const decide = (c: ZeitChoice) => {
+    const cur = ask;
+    askSeq.current++;
+    setAsk(null);
+    if (!cur) return;
+    if (c === "book" && cur.guess) {
+      setText(cur.guess.line);
+      submit(cur.guess.line, true);
+    } else if (c === "other") {
+      const off = referenceOffset(cur.line);
+      const next = `${cur.line.slice(0, off)} ${cur.line.slice(off)}`;
+      setText(next);
+      requestAnimationFrame(() => {
+        input.current?.focus();
+        input.current?.setSelectionRange(off, off);
+        suggest(next, off);
+      });
+    } else requestAnimationFrame(() => input.current?.focus());
+  };
+  /** Submits; returns the error text when it failed. */
+  const submit = async (value = text, confirmed = false): Promise<string | null> => {
+    if (!value.trim() || busy) return null;
+    const single = value.trim();
+    if (!confirmed && !single.includes("\n") && lacksReference(single)) {
+      await askAi(single);
+      return null;
+    }
     setBusy(true);
     try {
-      await api.captureSubmit(text);
+      await api.captureSubmit(value);
       setText("");
       setSugg(null);
       setError(null);
       hide();
+      return null;
     } catch (e) {
       setError(errorText(e));
+      return errorText(e);
     } finally {
       setBusy(false);
       requestAnimationFrame(() => input.current?.focus());
@@ -150,7 +199,7 @@ export function CaptureApp() {
               }
               if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
                 e.preventDefault();
-                submit();
+                void submit();
               } else if (e.key === "Escape") {
                 e.preventDefault();
                 if (sugg) {
@@ -161,6 +210,7 @@ export function CaptureApp() {
             }}
           />
         </div>
+        {ask && <ZeitConfirm className="inline" guess={ask.guess} onChoice={decide} />}
         {sugg && (
           <div className="capture-sugg">
             <SuggestionPopup ref={popup} items={sugg.items} className="zeit" command={(it) => pick(it as ZeitSuggestItem)} />

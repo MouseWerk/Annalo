@@ -144,6 +144,14 @@ Migration v2 converts the old block model: blocks are concatenated into
 - **RAG** (`ai/rag.rs`): exact cosine scan over stored embeddings fused with FTS5 BM25
   hits (reciprocal rank fusion), so exact identifiers like `NP-8801` are always found.
   Template pages (the „Vorlagen“ subtree) are never retrieved.
+- **Citations** (`ai/rag.rs`, `ui/src/lib/citations.ts`, `ui/src/editor/reveal.ts`): `format_context` numbers the retrieved chunks `[1]`, `[2]` … with page title and heading path
+  (derived from the headings of the page's earlier chunks) and asks the model to cite with `[n]`. `ai_chat` returns the chunks in that order (`page_id`, `block_id`, text, `heading`),
+  so `[n]` is `context[n - 1]`. The UI turns `[n]` into chips (outside code and links); a click runs `revealText`: open the page, wait for its registered editor,
+  search the chunk's first sentence, paragraph start or heading in the text blocks (wiki links by label), select it, scroll it to the middle and flash it (`.cite-flash` decoration).
+- **Smart `/zeit`** (`ai/zeitguess.rs`, `zeit_suggest_ai`): a `/zeit` line whose first argument is a duration, on a page without `vorgang:`, is matched by the model. The prompt
+  lists the bookable references (recently booked first, with their Leistungsarten and descriptions) and asks for strict JSON `{reference, leistungsart, confidence, reason}`.
+  The answer is validated against the database (unknown references are rejected, unknown Leistungsarten dropped) and turned into a complete `/zeit` line, which the UI books only
+  after the user confirmed it. The page's content and tags go to the router, so `#privat` pages stay local. Without an API token the booking error is shown with a hint.
 - **Time summary** (`report.rs`): finished entries of local days `from..=to` grouped per Netzplan/Vorgang
   (hours, deduplicated descriptions) plus a total per day; offered to the assistant as the `time_summary` tool.
 - **Streaming** (`ai/client.rs`): SSE decoder tolerant of split chunks and keep-alives;

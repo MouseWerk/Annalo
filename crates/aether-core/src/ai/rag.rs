@@ -65,6 +65,65 @@ pub struct ContextChunk {
     pub score: f64,
     pub block_id: Option<i64>,
     pub time_entry_id: Option<i64>,
+    /// Title of the page (`None` for time log entries).
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Headings above the chunk on its page, outermost first (`Architektur › Datenbank`).
+    #[serde(default)]
+    pub heading: Option<String>,
+}
+
+/// Headings (without `#`) of a Markdown text in order, with their level, outside code fences.
+fn headings(markdown: &str) -> Vec<(usize, String)> {
+    let mut out = vec![];
+    let mut in_fence = false;
+    for line in markdown.lines() {
+        if line.trim_start().starts_with("```") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence || !line.starts_with('#') {
+            continue;
+        }
+        let level = line.chars().take_while(|c| *c == '#').count();
+        let rest = &line[level..];
+        if level <= 6 && rest.starts_with(' ') && !rest.trim().is_empty() {
+            out.push((level, rest.trim().trim_end_matches('#').trim().to_owned()));
+        }
+    }
+    out
+}
+
+/// The heading path of a chunk: the headings of all chunks before it (and its own leading
+/// heading), reduced to the enclosing ones.
+pub fn heading_path(chunks_up_to: &[String]) -> Option<String> {
+    let mut stack: Vec<(usize, String)> = vec![];
+    let n = chunks_up_to.len();
+    for (i, chunk) in chunks_up_to.iter().enumerate() {
+        let hs = headings(chunk);
+        // Of the chunk itself only a heading at its very start counts: it titles the chunk.
+        let hs = if i + 1 == n {
+            if chunk.trim_start().starts_with('#') { hs.into_iter().take(1).collect() } else { vec![] }
+        } else {
+            hs
+        };
+        for (level, text) in hs {
+            while stack.last().is_some_and(|(l, _)| *l >= level) {
+                stack.pop();
+            }
+            stack.push((level, text));
+        }
+    }
+    (!stack.is_empty()).then(|| stack.into_iter().map(|(_, t)| t).collect::<Vec<_>>().join(" › "))
+}
+
+fn block_heading(db: &Database, block_id: i64) -> Result<Option<String>> {
+    let mut st = db.conn().prepare_cached(
+        "SELECT b.content_markdown FROM notes_blocks b JOIN notes_blocks me ON me.id = ?1
+         WHERE b.page_id = me.page_id AND b.position <= me.position ORDER BY b.position",
+    )?;
+    let chunks: Vec<String> = st.query_map([block_id], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+    Ok(heading_path(&chunks))
 }
 
 /// Exact cosine top-k over all embedded blocks: `(block_id, similarity)`.
@@ -161,6 +220,8 @@ pub fn retrieve(
                     score,
                     block_id: Some(id),
                     time_entry_id: None,
+                    title: Some(title),
+                    heading: None,
                 }),
             Key::Entry(id) => conn
                 .query_row(
@@ -186,19 +247,39 @@ pub fn retrieve(
                     score,
                     block_id: None,
                     time_entry_id: Some(id),
+                    title: None,
+                    heading: None,
                 }),
         };
         out.extend(chunk);
     }
+    for c in &mut out {
+        if let Some(id) = c.block_id {
+            c.heading = block_heading(db, id)?;
+        }
+    }
     Ok(out)
 }
 
-/// Renders retrieved chunks as a system-prompt section.
+/// How the model cites the numbered sources of [`format_context`].
+pub const CITATION_RULES: &str = "Belege jede Aussage, die auf einer dieser Quellen beruht, direkt danach \
+     mit ihrer Nummer in eckigen Klammern, z. B. „… wird im Oktober freigegeben [2].“ – mehrere Quellen als [1][3]. \
+     Verwende nur die Nummern der Quellen oben, erfinde keine und schreibe kein Quellenverzeichnis.";
+
+/// Renders retrieved chunks as a system-prompt section: numbered sources `[1]`, `[2]` … with
+/// page title and heading path, followed by the citation rules. The numbers are the 1-based
+/// positions in `chunks`, so the UI maps `[n]` to `chunks[n - 1]`.
 pub fn format_context(chunks: &[ContextChunk]) -> String {
-    let mut s = String::from("Relevanter Kontext aus dem lokalen Workspace:\n");
+    let mut s = String::from("Relevanter Kontext aus dem lokalen Workspace (nummerierte Quellen):\n");
     for (i, c) in chunks.iter().enumerate() {
-        s.push_str(&format!("\n[{}] ({})\n{}\n", i + 1, c.source, c.text.trim()));
+        let label = match (&c.title, &c.heading) {
+            (Some(t), Some(h)) => format!("Seite: {t} › {h}"),
+            _ => c.source.clone(),
+        };
+        s.push_str(&format!("\n[{}] ({label})\n{}\n", i + 1, c.text.trim()));
     }
+    s.push('\n');
+    s.push_str(CITATION_RULES);
     s
 }
 
@@ -238,7 +319,7 @@ mod tests {
         let chunks = retrieve(&db, "NP-8801", Some(&[0.9, 0.1, 0.0]), 2).unwrap();
         let ids: Vec<_> = chunks.iter().filter_map(|c| c.block_id).collect();
         assert!(ids.contains(&a) && ids.contains(&b), "{chunks:?}");
-        assert!(format_context(&chunks).contains("[1] (Seite: Architektur)"));
+        assert!(format_context(&chunks).contains("[1] (Seite: Architektur"));
     }
 
     #[test]
@@ -267,5 +348,46 @@ mod tests {
             })
             .collect();
         assert_eq!(vec_pages, [note.id], "vector");
+    }
+
+    #[test]
+    fn heading_paths_follow_the_outline() {
+        let c = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(heading_path(&c(&["Intro"])), None);
+        assert_eq!(heading_path(&c(&["# A\n\ntext"])).as_deref(), Some("A"));
+        assert_eq!(heading_path(&c(&["# A\n\n## B\n\nx", "## C\n\ny"])).as_deref(), Some("A › C"));
+        assert_eq!(heading_path(&c(&["# A", "### Tief", "## B"])).as_deref(), Some("A › B"));
+        // A continuation chunk inherits the heading of the section; a fenced `#` is no heading.
+        assert_eq!(heading_path(&c(&["# A\n\n```\n# kein\n```", "weiter"])).as_deref(), Some("A"));
+    }
+
+    #[test]
+    fn context_is_numbered_with_titles_headings_and_citation_rules() {
+        let db = Database::open_in_memory().unwrap();
+        let page = db.create_page(None, "Architektur", None).unwrap();
+        db.save_page_content(page.id, "# Plan\n\n## Netzplan\n\nNetzplan NP-8801 wird im Oktober freigegeben.")
+            .unwrap();
+        let other = db.create_page(None, "Notiz", None).unwrap();
+        db.save_page_content(other.id, "NP-8801 hat Vorrang.").unwrap();
+
+        let chunks = retrieve(&db, "NP-8801", None, 5).unwrap();
+        assert_eq!(chunks.len(), 2, "{chunks:?}");
+        let arch = chunks.iter().find(|c| c.page_id == Some(page.id)).unwrap();
+        assert_eq!(arch.title.as_deref(), Some("Architektur"));
+        assert_eq!(arch.heading.as_deref(), Some("Plan › Netzplan"));
+        assert!(arch.block_id.is_some());
+        let note = chunks.iter().find(|c| c.page_id == Some(other.id)).unwrap();
+        assert_eq!(note.heading, None);
+
+        let ctx = format_context(&chunks);
+        for (i, c) in chunks.iter().enumerate() {
+            let n = format!("[{}] (", i + 1);
+            assert!(ctx.contains(&n), "{ctx}");
+            assert!(ctx[ctx.find(&n).unwrap()..].contains(c.text.trim()));
+        }
+        assert!(ctx.contains("(Seite: Architektur › Plan › Netzplan)"), "{ctx}");
+        assert!(ctx.contains("(Seite: Notiz)"), "{ctx}");
+        assert!(!ctx.contains("\n[3] ("));
+        assert!(ctx.trim_end().ends_with(CITATION_RULES));
     }
 }

@@ -5,7 +5,7 @@ import { EditorContent, useEditor, useEditorState, type Editor } from "@tiptap/r
 import { BubbleMenu } from "@tiptap/react/menus";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Bold, Code, Highlighter, Italic, Link2, Sparkles, Strikethrough, SquareArrowOutUpRight } from "lucide-react";
-import { api, attachmentUrl, uploadAttachment } from "../lib/api";
+import { api, attachmentUrl, errorText, uploadAttachment } from "../lib/api";
 import { insertTemplate } from "../components/Templates";
 import { useApp } from "../store/app";
 import { hoursFromMinutes } from "../lib/format";
@@ -17,8 +17,39 @@ import { findKey } from "./find";
 import { TableToolbar } from "./TableToolbar";
 import { InlineAiBar } from "./InlineAiBar";
 import { aiRange, type AiRange } from "./ai-insert";
+import { registerEditor } from "./reveal";
+import { ZeitConfirm, type ZeitChoice } from "./ZeitConfirm";
+import { lacksReference, referenceOffset } from "./zeit-suggest";
+import type { ZeitGuess } from "../lib/types";
 import { ChevronDown, ChevronUp, Search, X } from "lucide-react";
 import type { PageDoc } from "../lib/types";
+
+/** Where a `/zeit` line is in the document: position of its paragraph, or -1. */
+function findLine(editor: Editor, line: string): number {
+  let at = -1;
+  editor.state.doc.descendants((node, pos) => {
+    if (at >= 0) return false;
+    if (node.type.name === "paragraph" && node.textContent.trim() === line.trim()) {
+      at = pos;
+      return false;
+    }
+    return true;
+  });
+  return at;
+}
+
+/** „Anderen wählen“: puts the caret where the reference goes, which opens the /zeit autocomplete. */
+function chooseOtherRef(editor: Editor, line: string) {
+  const at = findLine(editor, line);
+  if (at < 0 || editor.isDestroyed) return;
+  const node = editor.state.doc.nodeAt(at)!;
+  const off = referenceOffset(node.textContent);
+  if (off < 0) return;
+  const pos = at + 1 + off;
+  editor.chain().focus().insertContentAt(pos, " ").setTextSelection(pos).run();
+}
+
+const NO_REF_HINT = "Schreibe die Referenz dazu, z. B. /zeit NP-8801/1020 2h Beschreibung.";
 
 const SAVE_DELAY = 450;
 
@@ -79,6 +110,11 @@ export function NoteEditor({
   const [ai, setAi] = useState<{ range: AiRange; seq: number } | null>(null);
   const aiOpen = useRef(false);
   aiOpen.current = ai !== null;
+  // Smart /zeit: the pending confirmation of an AI-suggested reference.
+  const [zeitAsk, setZeitAsk] = useState<{ id: number; pos: number; guess: ZeitGuess | null; resolve: (c: ZeitChoice) => void } | null>(null);
+  const zeitSeq = useRef(0);
+  const [zeitPos, setZeitPos] = useState<{ top: number; left: number } | null>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
   const openAi = (editor: Editor) => {
     const range = aiRange(editor);
     if (range) setAi((cur) => ({ range, seq: (cur?.seq ?? 0) + 1 }));
@@ -184,7 +220,47 @@ export function NoteEditor({
               await save(ed);
               await saving.current;
             }
-            const out = await api.logTime(line, doc.id);
+            // Smart /zeit: `/zeit 2h text` without reference on a page without linked Vorgang.
+            let aiError: unknown = null;
+            if (ed && lacksReference(line)) {
+              const id = ++zeitSeq.current;
+              let settle!: (c: ZeitChoice) => void;
+              const choice = new Promise<ZeitChoice>((r) => (settle = r));
+              let settled = false;
+              const resolve = (c: ZeitChoice) => {
+                if (settled) return;
+                settled = true;
+                setZeitAsk((cur) => (cur?.id === id ? null : cur));
+                settle(c);
+              };
+              setZeitAsk({ id, pos: Math.max(0, findLine(ed, line)), guess: null, resolve });
+              let guess: ZeitGuess | null = null;
+              try {
+                guess = await api.zeitSuggestAi(line, doc.id);
+              } catch (e) {
+                aiError = e;
+              }
+              if (settled) return null; // cancelled while the AI was thinking
+              if (!guess) resolve("cancel");
+              else {
+                setZeitAsk((cur) => (cur?.id === id ? { ...cur, guess } : cur));
+                const c = await choice;
+                if (c === "other") {
+                  window.setTimeout(() => chooseOtherRef(ed, line), 0);
+                  return null;
+                }
+                if (c !== "book") return null;
+                line = guess.line;
+              }
+            }
+            let out;
+            try {
+              out = await api.logTime(line, doc.id);
+            } catch (e) {
+              if (aiError === null) throw e;
+              useApp.getState().toast({ tone: "danger", title: "Buchung fehlgeschlagen", detail: `${errorText(e)}. ${NO_REF_HINT} (KI-Vorschlag nicht möglich: ${errorText(aiError)})` });
+              return null;
+            }
             const s = useApp.getState();
             s.bumpEntries();
             s.alerts(out.alerts);
@@ -287,12 +363,14 @@ export function NoteEditor({
     };
     handleRef?.({ editor, flush: flushNow, setFrontmatter });
     flushers.add(flushNow);
+    const unregister = registerEditor(doc.id, editor);
     const flush = () => {
       window.clearTimeout(saveTimer.current);
       save(editor);
     };
     window.addEventListener("blur", flush);
     return () => {
+      unregister();
       flushers.delete(flushNow);
       window.removeEventListener("blur", flush);
       flush();
@@ -344,6 +422,24 @@ export function NoteEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editor, doc.id]);
 
+  // The smart /zeit confirmation sits below its line.
+  useEffect(() => {
+    if (!editor || !zeitAsk) return setZeitPos(null);
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    try {
+      const box = wrap.getBoundingClientRect();
+      const c = editor.view.coordsAtPos(Math.min(zeitAsk.pos + 1, editor.state.doc.content.size));
+      setZeitPos({ top: c.bottom - box.top + 6, left: Math.max(0, Math.min(c.left - box.left, box.width - 420)) });
+    } catch {
+      setZeitPos({ top: 0, left: 0 });
+    }
+  }, [editor, zeitAsk]);
+  // Leaving the page cancels an open confirmation.
+  const zeitAskRef = useRef(zeitAsk);
+  zeitAskRef.current = zeitAsk;
+  useEffect(() => () => zeitAskRef.current?.resolve("cancel"), []);
+
   // Ctrl+F: find in this page.
   const [find, setFind] = useState<string | null>(null);
   const findInput = useRef<HTMLInputElement>(null);
@@ -386,7 +482,8 @@ export function NoteEditor({
   };
 
   return (
-    <div className="editor-wrap" data-save-status={status}>
+    <div className="editor-wrap" data-save-status={status} ref={wrapRef}>
+      {zeitAsk && zeitPos && <ZeitConfirm guess={zeitAsk.guess} onChoice={zeitAsk.resolve} style={{ top: zeitPos.top, left: zeitPos.left }} />}
       {find !== null && (
         <div className="find-anchor">
           <div className="find-bar" role="search">

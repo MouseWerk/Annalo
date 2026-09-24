@@ -42,6 +42,8 @@ assistant that runs against **your own LiteLLM server**.
 - „Wochenbericht erstellen“ (Ctrl K) drafts this week's status e-mail from your bookings and done tasks; „In neue Seite einfügen“ saves it as „Wochenbericht KW nn“
 - Inline AI: select text and press Ctrl J (or „KI“ in the formatting toolbar, `/KI bearbeiten` for the current block): Verbessern, Kürzen, Übersetzen DE↔EN, In Stichpunkte, Als Tabelle, … or your own instruction; the result streams into a preview and replaces the text (one Ctrl Z undoes it) or goes below it
 - „Besprechung zusammenfassen“ (page menu, `/Zusammenfassung`): Zusammenfassung, Entscheidungen, Aufgaben (`- [ ] … @Person 📅 …`) and Offene Punkte, inserted at the end of the page or saved as „<Titel> – Zusammenfassung“; on a page with `vorgang:` and a time span (`10:00–11:30`) it adds a `/zeit` booking suggestion
+- Answers cite their sources as numbered chips `[1]`: hovering shows the cited passage, clicking opens the page, scrolls to the paragraph and briefly highlights it (the „Quellen“ chips do the same)
+- Smart `/zeit`: `/zeit 2h habe am Interface-Mapping gearbeitet` on a page without `vorgang:` asks the AI for the Vorgang and shows „Buchen auf NP-8801/1020 · Systemintegration (DEV)?“ with the reason – Enter books, Tab picks another reference, Esc cancels (also in quick capture). Nothing is booked without confirmation
 - Shows sources, time to first token, tokens/s, tokens and cost per answer and per session
 
 ## Connecting your LiteLLM server

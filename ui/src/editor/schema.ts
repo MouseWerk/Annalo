@@ -12,6 +12,7 @@ import { Markdown } from "@tiptap/markdown";
 import Link from "@tiptap/extension-link";
 import { Callouts, ImageEmbed, MarkdownImage, SlashCommand, TagHighlight, TimeEntryChip, WikiLink, WikiLinkSuggest, ZeitCommand, ZeitSuggest, type LinkSuggestItem, type ZeitResult, type ZeitSuggestItem } from "./extensions";
 import { FindInPage } from "./find";
+import { CiteFlash } from "./reveal";
 
 const lowlight = createLowlight(common);
 
@@ -175,6 +176,7 @@ export function buildExtensions(o: SchemaOptions = {}): Extensions {
     TagHighlight.configure({ onOpen: o.onOpenTag ?? (() => {}) }),
     FindInPage,
     Callouts,
+    CiteFlash,
   ];
 }
 
