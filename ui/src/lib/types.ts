@@ -198,6 +198,43 @@ export interface Settings {
   palette_shortcut: string | null;
   /** Look for new releases at start and every 6 h (builds with an update key only). */
   auto_update_check: boolean;
+  /** Push the Markdown mirror to a Git remote; the token lives in the credential store. */
+  git_sync: GitSyncSettings;
+}
+export type GitSyncMode = "with_backup" | "hourly";
+export interface GitSyncSettings {
+  enabled: boolean;
+  remote_url: string;
+  branch: string;
+  author_name: string;
+  author_email: string;
+  include_database: boolean;
+  mode: GitSyncMode;
+}
+export interface GitSyncStatus {
+  enabled: boolean;
+  repo_path: string;
+  last_at: string | null;
+  last_commit: string | null;
+  /** Branch of the last push (an `aether-sync-…` branch after a fallback). */
+  last_branch: string | null;
+  last_error: string | null;
+  pending_changes: number;
+  token_set: boolean;
+}
+export interface GitSyncOutcome {
+  commit: string | null;
+  committed: boolean;
+  changed_files: number;
+  branch: string;
+  fallback: boolean;
+  message: string;
+}
+export interface GitTest {
+  ok: boolean;
+  latency_ms: number;
+  branches: string[];
+  error: string | null;
 }
 export interface DesktopInfo {
   autostart: boolean;

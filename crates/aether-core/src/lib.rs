@@ -10,6 +10,7 @@
 //! * [`versions`] – page version history (snapshots, restore)
 //! * [`backup`] – database snapshots (`VACUUM INTO`) with rotation
 //! * [`mirror`] – Markdown mirror of the workspace (+ time entries as CSV), refreshed with each backup
+//! * [`gitsync`] – pushes the Markdown mirror to a Git remote (system `git`, token via environment)
 //! * [`calendar`] – month overview for the daily-note calendar (notes, booked time, due tasks)
 //! * [`vault`] – Obsidian vault import / Markdown export
 //! * [`attachments`] – pasted and imported images
@@ -38,6 +39,7 @@ pub mod demo;
 pub mod desktop;
 pub mod error;
 pub mod export;
+pub mod gitsync;
 pub mod mirror;
 pub mod model;
 pub mod netzplan;

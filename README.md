@@ -97,6 +97,28 @@ Then every tag `vX.Y.Z` produces a signed installer and `latest.json`. To rotate
 `cargo tauri signer generate -w aether-updater.key`, replace `src-tauri/updater.pub` and both secrets; apps installed
 with the old key must be updated once by hand.
 
+## Git-Synchronisierung
+
+Settings → **Sicherung** → „Git-Synchronisierung“ pushes the Markdown copy (pages, images, `Zeiterfassung/*.csv`) to a
+Git repository, for example on GitHub, GitLab or Azure DevOps. It needs Git installed ([git-scm.com](https://git-scm.com)).
+
+1. Create an empty private repository and enter its **Remote-URL** (and the branch, default `main`)
+2. HTTPS: create a personal access token with write access to the repository and save it under **Zugangstoken**. It is
+   stored in the Windows Credential Manager and sent to Git only through environment variables, never on the command
+   line, in `.git/config` or in any log. SSH URLs (`git@github.com:…`) use your system's SSH keys and agent instead
+3. **Verbindung testen** runs `git ls-remote`; **Jetzt synchronisieren** syncs immediately
+4. Choose when to sync: **Mit jeder Sicherung** (daily and „Jetzt sichern“) or **Stündlich**
+
+Every sync commits only when something changed („Sicherung 24.09.2026 14:05 – 3 Dateien geändert“). The working copy
+lives in `git-sync` in the data folder. Optionally the latest database backup is committed as `aether-workspace.db`
+(this grows the repository quickly; GitHub rejects files over 100 MB). If the branch on the server contains a
+different history (for example another computer's or an unrelated project), nothing there is overwritten: the commit
+goes to the branch `aether-sync-<computer name>` and the settings say so. A new computer with the same remote continues
+the existing history. Failures appear as a notification and in the status line.
+
+**Restore**: „Aus Git wiederherstellen…“ clones the repository and imports it as a new top-level page
+„Git-Import <Datum>“ (images included); existing pages are left alone.
+
 ## Tests
 
 ```sh

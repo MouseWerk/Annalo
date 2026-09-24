@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::ai::router::RouterConfig;
 use crate::db::Database;
 use crate::error::Result;
+use crate::gitsync::GitSyncSettings;
 use crate::tracking::Thresholds;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -62,6 +63,8 @@ pub struct Settings {
     /// Look for a new release at start and every few hours (only in builds with an update
     /// key). Updates are never installed without the user's click.
     pub auto_update_check: bool,
+    /// Push the Markdown mirror to a Git remote (the access token lives in the credential store).
+    pub git_sync: GitSyncSettings,
 }
 
 impl Default for Settings {
@@ -90,6 +93,7 @@ impl Default for Settings {
             capture_shortcut: DEFAULT_CAPTURE_SHORTCUT.into(),
             palette_shortcut: None,
             auto_update_check: true,
+            git_sync: GitSyncSettings::default(),
         }
     }
 }
@@ -184,6 +188,14 @@ mod tests {
         assert_eq!(loaded.capture_shortcut, DEFAULT_CAPTURE_SHORTCUT);
         assert_eq!(loaded.palette_shortcut, None, "the palette shortcut is off by default");
         assert!(loaded.auto_update_check, "update checks are on by default");
+        assert_eq!(loaded.git_sync, GitSyncSettings::default(), "git sync off by default");
+        assert!(!loaded.git_sync.enabled && loaded.git_sync.branch == "main");
+        // Partial git_sync objects fill the rest with defaults.
+        db.conn()
+            .execute("UPDATE settings SET value = '{\"git_sync\":{\"enabled\":true,\"mode\":\"hourly\"}}'", [])
+            .unwrap();
+        let gs = db.load_settings().unwrap().git_sync;
+        assert!(gs.enabled && gs.mode == crate::gitsync::SyncMode::Hourly && gs.branch == "main");
         // An explicit null switches the reminder off.
         db.conn().execute("UPDATE settings SET value = '{\"reminder_time\":null}'", []).unwrap();
         assert_eq!(db.load_settings().unwrap().reminder_time, None);

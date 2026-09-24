@@ -103,6 +103,12 @@ export const api = {
   backups: () => call<T.BackupInfo[]>("backup_list"),
   mirrorStatus: () => call<T.MirrorStatus>("mirror_status"),
   openMirror: () => call<void>("mirror_open"),
+  gitSyncNow: () => call<T.GitSyncOutcome>("git_sync_now"),
+  gitSyncStatus: () => call<T.GitSyncStatus>("git_sync_status"),
+  /** Stores (or with null removes) the Git access token; it is never sent back. */
+  setGitToken: (token: string | null) => call<T.GitSyncStatus>("git_token_set", { token }),
+  gitSyncTest: (url: string | null, token: string | null) => call<T.GitTest>("git_sync_test", { url, token }),
+  gitRestoreImport: (url: string) => call<T.ImportReport>("git_restore_import", { url }),
   appInfo: () => call<{ version: string; data_dir: string; platform: string }>("app_info"),
   dataDirStatus: () => call<T.DataDirStatus>("data_dir_status"),
   inspectDataDir: (path: string) => call<T.DataDirTarget>("data_dir_inspect", { path }),
