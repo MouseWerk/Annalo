@@ -105,6 +105,18 @@ describe("serializeFrontmatter", () => {
     expect(serializeFrontmatter([list])).toBe('---\ntags: ["2026", a]\n---\n');
   });
 
+  it("quotes YAML's other number forms: .5, hex, octal, infinity, NaN", () => {
+    const vals = [".5", "-.5", "0x10", "0X1F", "0o17", ".inf", "+.inf", "-.INF", ".Inf", ".nan", ".NaN"];
+    const props: Property[] = vals.map((v, i) => edited({ key: `k${i}`, type: "text", value: "", items: [] }, { value: v }));
+    const out = serializeFrontmatter(props);
+    vals.forEach((v, i) => expect(out).toContain(`k${i}: "${v}"`));
+    expect(parseFrontmatter(out).map((p) => p.value)).toEqual(vals);
+    // Text that merely starts like a number stays plain.
+    const plain = ["0xyz", ".info", "v1.5", ".nanny"];
+    const out2 = serializeFrontmatter(plain.map((v, i) => edited({ key: `p${i}`, type: "text", value: "", items: [] }, { value: v })));
+    plain.forEach((v, i) => expect(out2).toContain(`p${i}: ${v}\n`));
+  });
+
   it("keeps a block whose first key is not ASCII", () => {
     const fm = "---\nPriorität: hoch\ndue date: 2026-10-01\n---\n";
     const props = parseFrontmatter(fm);

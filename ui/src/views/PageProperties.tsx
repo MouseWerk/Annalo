@@ -223,6 +223,7 @@ function RefCombo({ value, draft, setDraft, label, onCommit, onPick, onRevert }:
         className="prop-value-input"
         value={draft}
         placeholder="NP-8801/1020"
+        size={Math.min(26, Math.max(14, draft.length + 1))}
         aria-label={label}
         role="combobox"
         aria-expanded={items !== null}

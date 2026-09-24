@@ -39,13 +39,15 @@ export interface ConfirmRequest {
   title: string;
   message: string;
   confirmLabel: string;
+  /** Label of the cancel button (default „Abbrechen“). */
+  cancelLabel?: string;
   /** Optional third button between Abbrechen and the confirm button. */
   altLabel?: string;
   danger: boolean;
   resolve: (choice: ConfirmChoice) => void;
 }
 export type ConfirmChoice = "confirm" | "alt" | "cancel";
-type ConfirmOpts = { title: string; message: string; confirmLabel?: string; danger?: boolean };
+type ConfirmOpts = { title: string; message: string; confirmLabel?: string; cancelLabel?: string; danger?: boolean };
 
 /** A preset request for the assistant (e.g. the weekly report). */
 export interface PendingAsk {
@@ -218,6 +220,7 @@ export const useApp = create<State>((set, get) => ({
           title: opts.title,
           message: opts.message,
           confirmLabel: opts.confirmLabel ?? "Bestätigen",
+          cancelLabel: opts.cancelLabel,
           altLabel: opts.altLabel || undefined,
           danger: opts.danger ?? false,
           resolve: (choice) => {

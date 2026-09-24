@@ -113,10 +113,16 @@ test("table toolbar adds a column; the slash menu offers row commands inside tab
 
 test("palette shortcut is validated and saved; the data folder is not flagged", async () => {
   const view = await app.invoke("settings_get");
-  assert.equal(view.settings.palette_shortcut, "Alt+Space");
+  assert.equal(view.settings.palette_shortcut, null, "off by default");
   const saved = await app.invoke("settings_save", { settings: { ...view.settings, palette_shortcut: "Ctrl+Shift+K" } });
   assert.equal(saved.settings.palette_shortcut, "Ctrl+Shift+K");
   await assert.rejects(app.invoke("settings_save", { settings: { ...view.settings, palette_shortcut: "Strg+Foo" } }), /ungültig/);
+  await assert.rejects(app.invoke("settings_save", { settings: { ...view.settings, palette_shortcut: "Ctrl+Alt+K" } }), /AltGr/);
+  // Swapping the two shortcuts works (both stay registered, only their roles change).
+  const swapped = await app.invoke("settings_save", { settings: { ...saved.settings, palette_shortcut: saved.settings.capture_shortcut, capture_shortcut: "Ctrl+Shift+K" } });
+  assert.equal(swapped.settings.capture_shortcut, "Ctrl+Shift+K");
+  const back = await app.invoke("settings_save", { settings: { ...swapped.settings, palette_shortcut: "Ctrl+Shift+K", capture_shortcut: swapped.settings.palette_shortcut } });
+  assert.equal(back.settings.palette_shortcut, "Ctrl+Shift+K");
   const off = await app.invoke("settings_save", { settings: { ...view.settings, palette_shortcut: "" } });
   assert.equal(off.settings.palette_shortcut, null);
 
@@ -127,4 +133,8 @@ test("palette shortcut is validated and saved; the data folder is not flagged", 
   const status = await app.invoke("data_dir_status");
   assert.equal(status.synced, false);
   assert.equal(status.data_dir, app.dataDir);
+  assert.equal(status.pending_move, null);
+  assert.equal(status.notice, null);
+  // Under AETHER_DATA_DIR the folder cannot be changed; nothing is recorded.
+  await assert.rejects(app.invoke("data_dir_set", { path: `${app.dataDir}-neu`, useExisting: false }), /AETHER_DATA_DIR/);
 });

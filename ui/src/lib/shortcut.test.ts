@@ -20,4 +20,12 @@ describe("recordShortcut", () => {
     expect(key("Tab", "Tab")).toBeUndefined();
     expect(key("Escape", "Escape")).toBeUndefined();
   });
+  it("refuses Ctrl+Alt and AltGr (they type @, € … on German keyboards)", () => {
+    expect(key("KeyQ", "@", { ctrlKey: true, altKey: true })).toBeNull();
+    expect(key("KeyK", "k", { ctrlKey: true, altKey: true, shiftKey: true })).toBeNull();
+    expect(key("AltRight", "AltGraph")).toBeNull();
+    const altGr = { code: "KeyE", key: "€", ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, getModifierState: (m: string) => m === "AltGraph" };
+    expect(recordShortcut(altGr)).toBeNull();
+    expect(key("KeyK", "k", { altKey: true, shiftKey: true })).toBe("Alt+Shift+K");
+  });
 });

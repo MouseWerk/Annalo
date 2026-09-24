@@ -24,6 +24,23 @@ export const dateLong = (iso: string) =>
   new Date(iso).toLocaleDateString("de-DE", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
 export const time = (iso: string) => new Date(iso).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
 
+/**
+ * Main labels of the version list: the time, with seconds when two versions share a minute,
+ * and the date for versions from other days ("21.09., 14:03").
+ */
+export function versionTimes(isos: string[], now = new Date()): string[] {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const dates = isos.map((iso) => new Date(iso));
+  const minute = (d: Date) => `${d.toDateString()} ${d.getHours()}:${d.getMinutes()}`;
+  const count = new Map<string, number>();
+  for (const d of dates) count.set(minute(d), (count.get(minute(d)) ?? 0) + 1);
+  return dates.map((d) => {
+    let t = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    if ((count.get(minute(d)) ?? 0) > 1) t += `:${pad(d.getSeconds())}`;
+    return d.toDateString() === now.toDateString() ? t : `${pad(d.getDate())}.${pad(d.getMonth() + 1)}., ${t}`;
+  });
+}
+
 export function relative(iso: string) {
   const diff = (Date.now() - new Date(iso).getTime()) / 1000;
   if (diff < 60) return "gerade eben";
@@ -93,4 +110,13 @@ export function parseGermanNumber(s: string): number | null {
   if (!/^-?(\d+\.?\d*|\.\d+)$/.test(v)) return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+/** „1 Seite, 2 Ordner, 3 Bilder, 1 Datei übersprungen“ */
+export function importSummary(r: { pages: number; folders: number; attachments: number; skipped: number }) {
+  const n = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
+  const parts = [n(r.pages, "Seite", "Seiten"), n(r.folders, "Ordner", "Ordner")];
+  if (r.attachments) parts.push(n(r.attachments, "Bild", "Bilder"));
+  if (r.skipped) parts.push(`${n(r.skipped, "Datei", "Dateien")} übersprungen`);
+  return parts.join(", ");
 }

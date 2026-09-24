@@ -182,7 +182,7 @@ function SearchPane() {
           ref={input}
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Suchen …"
+          placeholder="Suchen…"
           aria-label="Volltextsuche"
           onKeyDown={(e) => {
             if (e.key === "Enter") {

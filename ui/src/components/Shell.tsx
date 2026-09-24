@@ -224,7 +224,7 @@ export function ConfirmHost() {
       footer={
         <>
           <Button variant="ghost" onClick={() => req.resolve("cancel")}>
-            Abbrechen
+            {req.cancelLabel ?? "Abbrechen"}
           </Button>
           {req.altLabel && <Button onClick={() => req.resolve("alt")}>{req.altLabel}</Button>}
           <Button variant={req.danger ? "danger" : "primary"} onClick={() => req.resolve("confirm")} data-autofocus>

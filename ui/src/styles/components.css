@@ -339,11 +339,14 @@
 .versions-item { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 6px 8px; border: 0; background: none; font: inherit; border-radius: var(--r-sm); text-align: left; color: var(--text-2); cursor: pointer; }
 .versions-item:hover { background: var(--bg-hover); color: var(--text); }
 .versions-item.on { background: var(--bg-active); color: var(--text); }
-.versions-when { font-weight: 500; }
+.versions-when { font-weight: 500; display: inline-flex; align-items: center; gap: 6px; }
+.versions-tag { font-size: var(--fs-xs); font-weight: 500; color: var(--accent); }
 .versions-meta { font-size: var(--fs-xs); }
 .versions-preview { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .versions-pre { flex: 1; margin: 0; overflow: auto; padding: 10px 12px; border-radius: var(--r-sm); background: var(--bg-hover); font-family: var(--font-mono); font-size: var(--fs-sm); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
-.versions-diff > div { padding: 0 4px; border-radius: 2px; }
+.versions-preview > .segmented { align-self: flex-start; }
+.versions-diff > div { padding: 0 4px 0 calc(2ch + 4px); text-indent: -2ch; border-radius: 2px; }
+.versions-diff .diff-skip { color: var(--text-3); font-style: italic; font-family: var(--font-ui, inherit); padding-top: 2px; padding-bottom: 2px; }
 .versions-diff .diff-same { color: var(--text-3); }
 .diff-add { color: var(--success); }
 .diff-del { color: var(--danger); }

@@ -52,7 +52,8 @@ pub struct Settings {
     pub reminder_time: Option<String>,
     /// Global shortcut for the quick-capture window, e.g. `Ctrl+Shift+Space`.
     pub capture_shortcut: String,
-    /// Global shortcut that brings up the command palette, e.g. `Alt+Space`; `None` or `""` = off.
+    /// Global shortcut that brings up the command palette, e.g. `Ctrl+Shift+K`; `None` or `""` = off
+    /// (the default: Ctrl+K works inside the app).
     pub palette_shortcut: Option<String>,
 }
 
@@ -78,7 +79,7 @@ impl Default for Settings {
             close_to_tray: cfg!(windows),
             reminder_time: Some("17:30".into()),
             capture_shortcut: DEFAULT_CAPTURE_SHORTCUT.into(),
-            palette_shortcut: Some(DEFAULT_PALETTE_SHORTCUT.into()),
+            palette_shortcut: None,
         }
     }
 }
@@ -86,8 +87,9 @@ impl Default for Settings {
 /// Ctrl+Alt+… is AltGr on German keyboards, so the default avoids it.
 pub const DEFAULT_CAPTURE_SHORTCUT: &str = "Ctrl+Shift+Space";
 
-/// Default global shortcut of the command palette.
-pub const DEFAULT_PALETTE_SHORTCUT: &str = "Alt+Space";
+/// The former default palette shortcut. It opened the Windows window menu, so it is now off
+/// by default; [`Database::migrate_palette_default`] clears it from saved settings once.
+const OLD_PALETTE_DEFAULT: &str = "Alt+Space";
 
 const KEY: &str = "app";
 
@@ -107,6 +109,25 @@ impl Database {
             params![KEY, serde_json::to_string(s)?],
         )?;
         Ok(())
+    }
+
+    /// Earlier versions saved `Alt+Space` as the palette shortcut with any settings change,
+    /// so an explicit choice cannot be told apart: switch it off once.
+    pub fn migrate_palette_default(&self) -> Result<()> {
+        const FLAG: &str = "palette_default_off";
+        if self.meta_get(FLAG)?.is_some() {
+            return Ok(());
+        }
+        let raw: Option<String> =
+            self.conn().query_row("SELECT value FROM settings WHERE key = ?1", [KEY], |r| r.get(0)).optional()?;
+        if raw.is_some() {
+            let mut s = self.load_settings()?;
+            if s.palette_shortcut.as_deref() == Some(OLD_PALETTE_DEFAULT) {
+                s.palette_shortcut = None;
+                self.save_settings(&s)?;
+            }
+        }
+        self.meta_set(FLAG, "1")
     }
 
     /// Internal flags kept next to the settings (e.g. whether sample data was seeded).
@@ -150,11 +171,30 @@ mod tests {
         assert_eq!((loaded.backup_dir, loaded.backup_keep), (None, 14));
         assert_eq!(loaded.reminder_time.as_deref(), Some("17:30"));
         assert_eq!(loaded.capture_shortcut, DEFAULT_CAPTURE_SHORTCUT);
-        assert_eq!(loaded.palette_shortcut.as_deref(), Some(DEFAULT_PALETTE_SHORTCUT));
+        assert_eq!(loaded.palette_shortcut, None, "the palette shortcut is off by default");
         // An explicit null switches the reminder off.
         db.conn().execute("UPDATE settings SET value = '{\"reminder_time\":null}'", []).unwrap();
         assert_eq!(db.load_settings().unwrap().reminder_time, None);
         db.conn().execute("UPDATE settings SET value = '{\"palette_shortcut\":null}'", []).unwrap();
         assert_eq!(db.load_settings().unwrap().palette_shortcut, None);
+    }
+
+    #[test]
+    fn old_alt_space_default_is_switched_off_once() {
+        let db = Database::open_in_memory().unwrap();
+        let s = Settings { palette_shortcut: Some(OLD_PALETTE_DEFAULT.into()), ..Default::default() };
+        db.save_settings(&s).unwrap();
+        db.migrate_palette_default().unwrap();
+        assert_eq!(db.load_settings().unwrap().palette_shortcut, None);
+        // Chosen again afterwards: kept.
+        db.save_settings(&s).unwrap();
+        db.migrate_palette_default().unwrap();
+        assert_eq!(db.load_settings().unwrap().palette_shortcut.as_deref(), Some(OLD_PALETTE_DEFAULT));
+        // Other shortcuts are never touched.
+        let db = Database::open_in_memory().unwrap();
+        let s = Settings { palette_shortcut: Some("Ctrl+Shift+K".into()), ..Default::default() };
+        db.save_settings(&s).unwrap();
+        db.migrate_palette_default().unwrap();
+        assert_eq!(db.load_settings().unwrap(), s);
     }
 }

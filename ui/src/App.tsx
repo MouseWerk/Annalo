@@ -61,7 +61,14 @@ export function App() {
     // SQLite in a sync client's or a network folder can be corrupted: warn until dismissed.
     api
       .dataDirStatus()
-      .then((d) => d.synced && s.toast({ tone: "warning", persistent: true, title: "Datenbank im synchronisierten Ordner", detail: `Die Datenbank liegt in einem synchronisierten/Netzwerkordner – das kann sie beschädigen. Sicherungen dorthin sind unbedenklich. (${d.data_dir})` }))
+      .then((d) => {
+        // A move at startup, or a chosen folder that is not reachable (fallback to the default).
+        const n = d.notice;
+        if (n?.kind === "info") s.toast({ tone: "success", title: "Speicherort geändert", detail: n.message });
+        else if (n?.kind === "warning") s.toast({ tone: "warning", persistent: true, title: "Datenordner nicht verfügbar", detail: n.message });
+        else if (n?.kind === "error") s.toast({ tone: "danger", persistent: true, title: "Daten nicht verschoben", detail: n.message });
+        if (d.synced) s.toast({ tone: "warning", persistent: true, title: "Datenbank im synchronisierten Ordner", detail: `Die Datenbank liegt in einem synchronisierten/Netzwerkordner – das kann sie beschädigen. Sicherungen dorthin sind unbedenklich. (${d.data_dir})` });
+      })
       .catch(() => {});
 
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -84,9 +91,10 @@ export function App() {
       on("tray://timer-stop", () => stopTimer()),
       // Clicked the end-of-day reminder (or came back after it).
       on("nav://timesheet", () => useApp.getState().openTab({ kind: "timesheet" })),
-      on("palette://toggle", () => {
+      // Global palette shortcut: toggles while the window is in front, otherwise always opens.
+      on<boolean>("palette://toggle", (foreground) => {
         const st = useApp.getState();
-        st.set({ paletteOpen: !st.paletteOpen, paletteMode: "all", paletteQuery: "" });
+        st.set({ paletteOpen: foreground ? !st.paletteOpen : true, paletteMode: "all", paletteQuery: "" });
       }),
     ];
     return () => {
@@ -107,7 +115,6 @@ export function App() {
         fn();
       };
       if (mod && !e.shiftKey && k === "k") run(() => st.set({ paletteOpen: !st.paletteOpen, paletteMode: "all", paletteQuery: "" }));
-      else if (e.altKey && e.code === "Space") run(() => st.set({ paletteOpen: !st.paletteOpen, paletteMode: "all", paletteQuery: "" }));
       else if (mod && !e.shiftKey && k === "o") run(() => st.set({ paletteOpen: true, paletteMode: "pages", paletteQuery: "" }));
       else if (mod && !e.shiftKey && k === "n") run(() => createSubpage(null));
       else if (mod && e.shiftKey && k === "d") run(() => openToday());

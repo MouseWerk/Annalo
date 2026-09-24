@@ -649,7 +649,7 @@ function ExportDialog({ week, onClose }: { week: Date; onClose: () => void }) {
             Kopieren
           </Button>
           <Button variant="primary" icon={Download} onClick={() => doExport("file")} disabled={!count} loading={busy}>
-            Speichern unter …
+            Speichern unter…
           </Button>
         </>
       }

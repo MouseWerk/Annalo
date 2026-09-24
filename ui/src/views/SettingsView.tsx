@@ -10,7 +10,7 @@ import { flushAllEditors } from "../editor/NoteEditor";
 import { fileSize, relative } from "../lib/format";
 import { Badge, Button, Field, IconButton, Input, Segmented, Select, Switch, TextArea } from "../components/ui";
 import { recordShortcut } from "../lib/shortcut";
-import type { BackupInfo, ConnectionTest, DesktopInfo, Page, Settings } from "../lib/types";
+import type { BackupInfo, ConnectionTest, DataDirStatus, DesktopInfo, Page, Settings } from "../lib/types";
 
 type Section = "ai" | "time" | "notes" | "backup" | "desktop" | "appearance" | "about";
 const SECTIONS: { id: Section; label: string; icon: typeof Server }[] = [
@@ -220,7 +220,7 @@ function AiSection({ draft, update }: { draft: Settings; update: (p: Partial<Set
           <div className={`conn ${test ? (test.ok ? "ok" : "fail") : ""}`}>
             {testing ? (
               <>
-                <Loader2 size={14} className="spin" /> Prüfe …
+                <Loader2 size={14} className="spin" /> Prüfe…
               </>
             ) : test?.ok ? (
               <>
@@ -533,7 +533,7 @@ function NotesSection({ draft, update }: { draft: Settings; update: (p: Partial<
       <Group title="Obsidian" description="Ordner werden zu Seiten, [[Links]] und #Tags bleiben erhalten. Bilder werden als Anhänge übernommen, andere Dateien übersprungen.">
         <Row label="Vault importieren">
           <Button icon={FolderInput} onClick={() => importVault()}>
-            Ordner wählen …
+            Ordner wählen…
           </Button>
         </Row>
         <Row stack label="Pfad direkt angeben" description="Alternativ zum Dialog.">
@@ -544,7 +544,7 @@ function NotesSection({ draft, update }: { draft: Settings; update: (p: Partial<
         </Row>
         <Row label="Als Markdown exportieren" description="Schreibt jede Seite als .md-Datei, Unterseiten als Ordner.">
           <Button icon={FolderOutput} onClick={() => exportVault()}>
-            Zielordner wählen …
+            Zielordner wählen…
           </Button>
         </Row>
       </Group>
@@ -620,7 +620,7 @@ function BackupSection({ draft, update }: { draft: Settings; update: (p: Partial
           }
         >
           <Button icon={FolderOpen} onClick={pick}>
-            Ordner wählen …
+            Ordner wählen…
           </Button>
           {draft.backup_dir && (
             <Button variant="ghost" onClick={() => update({ backup_dir: null })}>
@@ -695,13 +695,16 @@ function DesktopSection({ draft, update }: { draft: Settings; update: (p: Partia
         </Row>
       </Group>
       <Group title="Befehlspalette">
-        <Row label="Tastenkürzel (global)" description="Holt AETHER OS mit der Befehlspalette nach vorn, z. B. Alt+Space oder Ctrl+Shift+K. Leer = aus. Ctrl K funktioniert im Fenster immer.">
-          <Input
+        <Row
+          label="Tastenkürzel (global)"
+          description="Holt AETHER OS mit der Befehlspalette nach vorn. Ins Feld klicken und die Tasten drücken, z. B. Ctrl+Shift+K. Entf = aus. Ctrl+K funktioniert im Fenster immer."
+        >
+          <ShortcutField
             value={draft.palette_shortcut ?? ""}
-            onChange={(e) => update({ palette_shortcut: e.target.value || null })}
-            placeholder="Alt+Space"
-            aria-label="Tastenkürzel Befehlspalette"
-            className="mono"
+            onChange={(v) => update({ palette_shortcut: v || null })}
+            label="Tastenkürzel Befehlspalette"
+            placeholder="z. B. Ctrl+Shift+K"
+            active={info ? (draft.palette_shortcut ?? "") === (view?.settings.palette_shortcut ?? "") && info.palette_shortcut_active : undefined}
           />
         </Row>
       </Group>
@@ -710,10 +713,13 @@ function DesktopSection({ draft, update }: { draft: Settings; update: (p: Partia
           <div className="unit-input">
             {reminderOn && (
               <Input
-                type="time"
-                className="time-input"
+                inputMode="numeric"
+                pattern="([01]\d|2[0-3]):[0-5]\d"
+                placeholder="17:30"
+                maxLength={5}
+                className="time-input num"
                 value={draft.reminder_time ?? ""}
-                onChange={(e) => update({ reminder_time: e.target.value || null })}
+                onChange={(e) => update({ reminder_time: e.target.value })}
                 aria-label="Uhrzeit der Erinnerung"
               />
             )}
@@ -725,29 +731,40 @@ function DesktopSection({ draft, update }: { draft: Settings; update: (p: Partia
       <Group title="Schnellerfassung" description="Ein kleines Fenster über allen anderen: Text landet in der heutigen Tagesnotiz, „todo …“ oder „- [ ] …“ als Aufgabe, „/zeit …“ wird gebucht.">
         <Row
           label="Tastenkürzel (global)"
-          description="Ins Feld klicken und die Tasten drücken, z. B. Ctrl+Shift+Space. Ctrl+Alt meiden – das ist AltGr auf deutschen Tastaturen. Entf = aus."
+          description="Ins Feld klicken und die Tasten drücken, z. B. Ctrl+Shift+Space. Ctrl+Alt geht nicht – das ist AltGr auf deutschen Tastaturen. Entf = aus."
         >
-          <div className="unit-input shortcut-input">
-            <Input
-              value={draft.capture_shortcut}
-              onChange={(e) => update({ capture_shortcut: e.target.value })}
-              onKeyDown={(e) => {
-                const next = recordShortcut(e.nativeEvent);
-                if (next === undefined) return;
-                e.preventDefault();
-                if (next !== null) update({ capture_shortcut: next });
-              }}
-              placeholder="Tasten drücken …"
-              aria-label="Tastenkürzel Schnellerfassung"
-              className="mono"
-            />
-            {info && draft.capture_shortcut === view?.settings.capture_shortcut && (
-              info.capture_shortcut_active ? <Badge tone="success">Aktiv</Badge> : <Badge tone="warning">Nicht registriert</Badge>
-            )}
-          </div>
+          <ShortcutField
+            value={draft.capture_shortcut}
+            onChange={(v) => update({ capture_shortcut: v })}
+            label="Tastenkürzel Schnellerfassung"
+            placeholder="Tasten drücken…"
+            active={info ? draft.capture_shortcut === view?.settings.capture_shortcut && info.capture_shortcut_active : undefined}
+          />
         </Row>
       </Group>
     </>
+  );
+}
+
+/** Records a global shortcut from the pressed keys; `active` shows whether the saved one is registered. */
+function ShortcutField({ value, onChange, label, placeholder, active }: { value: string; onChange: (v: string) => void; label: string; placeholder: string; active?: boolean }) {
+  return (
+    <div className="unit-input shortcut-input">
+      <Input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          const next = recordShortcut(e.nativeEvent);
+          if (next === undefined) return;
+          e.preventDefault();
+          if (next !== null) onChange(next);
+        }}
+        placeholder={placeholder}
+        aria-label={label}
+        className="mono"
+      />
+      {value && active !== undefined && (active ? <Badge tone="success">Aktiv</Badge> : <Badge tone="warning">Nicht registriert</Badge>)}
+    </div>
   );
 }
 
@@ -774,21 +791,58 @@ function AppearanceSection({ draft, update }: { draft: Settings; update: (p: Par
   );
 }
 
-async function moveDataDir() {
+/** Offers to restart now; the move (or switch) happens at the next start either way. */
+async function offerRestart(dir: string, what: string) {
+  const s = useApp.getState();
+  const restart = await s.confirm({
+    title: "Neustart erforderlich",
+    message: `${what} Bis dahin arbeitest du normal im bisherigen Ordner weiter – es geht nichts verloren, auch wenn du erst später neu startest.`,
+    confirmLabel: "Jetzt neu starten",
+    cancelLabel: "Später",
+  });
+  if (restart) return restartApp();
+  s.toast({
+    tone: "info",
+    persistent: true,
+    title: "Neustart ausstehend",
+    detail: `Der Speicherort ${dir} gilt ab dem nächsten Start.`,
+    action: { label: "Jetzt neu starten", run: () => void restartApp() },
+  });
+}
+
+async function restartApp() {
+  try {
+    await flushAllEditors();
+    await api.restart();
+  } catch (e) {
+    useApp.getState().error("Neustart fehlgeschlagen", e);
+  }
+}
+
+async function moveDataDir(onChanged: () => void) {
   const s = useApp.getState();
   const dir = await pickFolder("Neuer Speicherort für die Daten");
   if (!dir) return;
   try {
-    await flushAllEditors();
-    const moved = await api.setDataDir(dir);
-    const warn = moved.synced ? " Achtung: Der Ordner ist synchronisiert oder liegt im Netzwerk – das kann die Datenbank beschädigen." : "";
-    const restart = await s.confirm({
-      title: "Neu starten?",
-      message: `Die Daten wurden nach ${moved.data_dir} kopiert und werden nach dem Neustart von dort geladen. Änderungen bis zum Neustart landen noch im alten Ordner.${warn}`,
-      confirmLabel: "Jetzt neu starten",
-    });
-    if (restart) await api.restart();
-    else s.toast({ tone: "warning", persistent: true, title: "Neustart ausstehend", detail: `Der neue Speicherort ${moved.data_dir} gilt ab dem nächsten Start.` });
+    const target = await api.inspectDataDir(dir);
+    let useExisting = false;
+    if (target.has_workspace) {
+      useExisting = await s.confirm({
+        title: "Vorhandenen Arbeitsbereich verwenden?",
+        message: `In ${dir} liegt bereits ein AETHER-Arbeitsbereich. Nach dem Neustart wird dieser geöffnet; es werden keine Daten kopiert. Der aktuelle Arbeitsbereich bleibt unverändert im bisherigen Ordner.`,
+        confirmLabel: "Vorhandenen verwenden",
+      });
+      if (!useExisting) return;
+    }
+    await api.setDataDir(dir, useExisting);
+    onChanged();
+    const warn = target.synced ? " Achtung: Der Ordner ist synchronisiert oder liegt im Netzwerk – das kann die Datenbank beschädigen." : "";
+    await offerRestart(
+      dir,
+      useExisting
+        ? `Beim nächsten Start wird der Arbeitsbereich in ${dir} geöffnet.${warn}`
+        : `Beim nächsten Start werden Datenbank, Bilder und Sicherungen nach ${dir} kopiert und ab dann von dort geladen. Der alte Ordner bleibt unverändert.${warn}`,
+    );
   } catch (e) {
     s.error("Speicherort nicht geändert", e);
   }
@@ -796,12 +850,15 @@ async function moveDataDir() {
 
 function AboutSection() {
   const view = useApp((s) => s.settings)!;
-  const palette = view.settings.palette_shortcut;
+  const [status, setStatus] = useState<DataDirStatus | null>(null);
+  const loadStatus = () => void api.dataDirStatus().then(setStatus, () => setStatus(null));
+  useEffect(loadStatus, []);
+  const global = (spec: string | null | undefined, label: string): [string, string][] => (spec?.trim() ? [[spec.trim().replace(/\+/g, " "), label]] : []);
   const shortcuts: [string, string][] = [
     ["Ctrl K", "Befehlspalette & Suche"],
     ["Ctrl O", "Seite öffnen"],
-    ...(palette ? [[palette.replace(/\+/g, " "), "Befehlspalette (global)"] as [string, string]] : []),
-    ["Ctrl Shift Space", "Schnellerfassung (global)"],
+    ...global(view.settings.palette_shortcut, "Befehlspalette (global)"),
+    ...global(view.settings.capture_shortcut, "Schnellerfassung (global)"),
     ["Ctrl N", "Neue Seite"],
     ["Ctrl Shift D", "Heutige Tagesnotiz"],
     ["Ctrl Shift T", "Timer starten / stoppen"],
@@ -823,8 +880,28 @@ function AboutSection() {
         <Row label="Datenordner" description="Datenbank, Einstellungen und Schlüsselablage (unter Linux).">
           <span className="mono small selectable">{view.data_dir}</span>
         </Row>
-        <Row label="Speicherort ändern" description="Kopiert Datenbank, Bilder und Sicherungen in einen anderen Ordner und startet neu. Der alte Ordner bleibt unverändert. Kein OneDrive-, Dropbox- oder Netzwerkordner.">
-          <Button icon={FolderInput} onClick={() => moveDataDir()}>
+        {status?.pending_move && (
+          <Row label="Beim nächsten Start" description="Der Speicherort wechselt beim nächsten Start. Bis dahin bleibt alles im bisherigen Ordner.">
+            <div className="unit-input">
+              <span className="mono small selectable">{status.pending_move}</span>
+              <Button onClick={() => void restartApp()}>Jetzt neu starten</Button>
+              <Button
+                variant="ghost"
+                onClick={async () => {
+                  try {
+                    setStatus(await api.cancelDataDirMove());
+                  } catch (e) {
+                    useApp.getState().error("Nicht verworfen", e);
+                  }
+                }}
+              >
+                Verwerfen
+              </Button>
+            </div>
+          </Row>
+        )}
+        <Row label="Speicherort ändern" description="Kopiert Datenbank, Bilder und Sicherungen beim nächsten Start in einen anderen Ordner. Der alte Ordner bleibt unverändert. Kein OneDrive-, Dropbox- oder Netzwerkordner.">
+          <Button icon={FolderInput} onClick={() => moveDataDir(loadStatus)}>
             Speicherort ändern…
           </Button>
         </Row>

@@ -190,7 +190,7 @@ export interface Settings {
   reminder_time: string | null;
   /** Global shortcut of the quick-capture window; "" = none. */
   capture_shortcut: string;
-  /** Global shortcut of the command palette (default "Alt+Space"); null = none. */
+  /** Global shortcut of the command palette; null = none (the default). */
   palette_shortcut: string | null;
 }
 export interface DesktopInfo {
@@ -198,6 +198,7 @@ export interface DesktopInfo {
   autostart_available: boolean;
   tray: boolean;
   capture_shortcut_active: boolean;
+  palette_shortcut_active: boolean;
 }
 export interface CaptureOutcome {
   appended: { page_id: number; tasks: number; notes: number } | null;
@@ -338,6 +339,16 @@ export interface VersionInfo {
 }
 export interface DataDirStatus {
   data_dir: string;
+  /** Network share or OneDrive/Dropbox folder. */
+  synced: boolean;
+  /** Folder the workspace moves to on the next start. */
+  pending_move: string | null;
+  /** Result of a move or a fallback at startup. */
+  notice: { kind: "info" | "warning" | "error"; message: string } | null;
+}
+export interface DataDirTarget {
+  /** The folder already holds a workspace. */
+  has_workspace: boolean;
   /** Network share or OneDrive/Dropbox folder. */
   synced: boolean;
 }

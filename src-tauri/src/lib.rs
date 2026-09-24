@@ -65,6 +65,8 @@ pub struct AppState {
     ai: RwLock<AiRuntime>,
     secrets: SecretStore,
     data_dir: PathBuf,
+    /// What happened to the data folder at startup (pending move, fallback).
+    data_dir_notice: Option<datadir::Notice>,
     meter: Mutex<SessionMeter>,
     session_id: String,
     idle: Mutex<IdleAccumulator>,
@@ -867,18 +869,28 @@ fn settings_save(app: AppHandle, state: State<AppState>, settings: Settings) -> 
             return Err(Error::State("Palette und Schnellerfassung brauchen verschiedene Tastenkürzel".into()));
         }
     }
-    let old_palette = state.settings().palette_shortcut;
-    let old_shortcut = state.settings().capture_shortcut;
-    state.db().save_settings(&settings)?;
-    if settings.palette_shortcut != old_palette
-        && let Err(e) = desktop::set_palette_shortcut(&app, settings.palette_shortcut.as_deref().unwrap_or(""))
-    {
-        eprintln!("palette shortcut not available: {e}");
+    let old = state.settings();
+    let capture_changed = settings.capture_shortcut != old.capture_shortcut;
+    let palette_changed = settings.palette_shortcut != old.palette_shortcut;
+    // Registered before saving: a shortcut taken by another program is reported and the
+    // previous one stays active and saved.
+    if capture_changed || palette_changed {
+        desktop::apply_shortcuts(
+            &app,
+            capture_changed.then_some(settings.capture_shortcut.as_str()),
+            palette_changed.then(|| settings.palette_shortcut.as_deref().unwrap_or("")),
+        )
+        .map_err(Error::State)?;
     }
-    if settings.capture_shortcut != old_shortcut
-        && let Err(e) = desktop::set_capture_shortcut(&app, &settings.capture_shortcut)
-    {
-        eprintln!("capture shortcut not available: {e}");
+    if let Err(e) = state.db().save_settings(&settings) {
+        if capture_changed || palette_changed {
+            let _ = desktop::apply_shortcuts(
+                &app,
+                capture_changed.then_some(old.capture_shortcut.as_str()),
+                palette_changed.then(|| old.palette_shortcut.as_deref().unwrap_or("")),
+            );
+        }
+        return Err(e);
     }
     lock(&state.idle).set_threshold(Duration::from_secs(settings.idle_threshold_minutes * 60));
     *state.ai.write().unwrap_or_else(|e| e.into_inner()) = AiRuntime::new(settings, state.secrets.get());
@@ -1327,43 +1339,97 @@ struct DataDirStatus {
     data_dir: String,
     /// The folder is a network share or inside OneDrive/Dropbox.
     synced: bool,
+    /// Folder the workspace moves to on the next start.
+    pending_move: Option<String>,
+    /// Result of a move or a fallback at startup.
+    notice: Option<datadir::Notice>,
 }
 
-#[tauri::command]
-fn data_dir_status(state: State<AppState>) -> DataDirStatus {
+fn config_dir(app: &AppHandle) -> Result<PathBuf> {
+    app.path().app_config_dir().map_err(|e| Error::State(e.to_string()))
+}
+
+fn data_dir_status_of(app: &AppHandle, state: &AppState) -> DataDirStatus {
     let dir = state.data_dir.display().to_string();
-    DataDirStatus { synced: datadir::is_synced_or_network(&dir), data_dir: dir }
+    let pending = config_dir(app).ok().and_then(|c| datadir::read_location_file(&c)).and_then(|l| l.pending_move);
+    DataDirStatus {
+        synced: datadir::is_synced_or_network(&dir),
+        data_dir: dir,
+        pending_move: pending,
+        notice: state.data_dir_notice.clone(),
+    }
 }
 
-/// Copies the workspace to `path` and points `location.json` there. The new folder is used
-/// after a restart (`app_restart`); the old folder is left as it is.
 #[tauri::command]
-fn data_dir_set(app: AppHandle, state: State<AppState>, path: String) -> Result<DataDirStatus> {
+fn data_dir_status(app: AppHandle, state: State<AppState>) -> DataDirStatus {
+    data_dir_status_of(&app, &state)
+}
+
+fn data_dir_env_guard() -> Result<()> {
     if std::env::var_os("AETHER_DATA_DIR").is_some() {
         return Err(Error::State("Der Speicherort ist über AETHER_DATA_DIR festgelegt".into()));
     }
-    let to = PathBuf::from(path.trim());
-    if !to.is_absolute() {
-        return Err(Error::State("Bitte einen vollständigen Ordnerpfad wählen".into()));
-    }
-    let config = app.path().app_config_dir().map_err(|e| Error::State(e.to_string()))?;
-    {
-        // Held while copying: no write can slip in between checkpoint and copy.
-        let db = state.db();
-        datadir::copy_workspace(&db, &state.data_dir, &to)?;
-    }
-    let secrets = state.data_dir.join("secrets.json");
-    if secrets.is_file() {
-        std::fs::copy(&secrets, to.join("secrets.json"))?;
-    }
-    datadir::write_location(&config, &to)?;
-    let dir = to.display().to_string();
-    Ok(DataDirStatus { synced: datadir::is_synced_or_network(&dir), data_dir: dir })
+    Ok(())
 }
 
+/// Checks a folder chosen as the new data folder (writable, not the current one) and
+/// whether it already holds a workspace.
+#[tauri::command(async)]
+fn data_dir_inspect(state: State<'_, AppState>, path: String) -> Result<datadir::Target> {
+    datadir::check_target(&state.data_dir, &PathBuf::from(path.trim()))
+}
+
+/// Chooses `path` as the data folder from the next start on. Nothing is copied now, so
+/// edits made until the restart are not lost: the next start copies the closed workspace
+/// (see `datadir::prepare`). With `use_existing`, a workspace already in `path` is opened
+/// instead (the current one stays where it is).
+#[tauri::command(async)]
+fn data_dir_set(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+    use_existing: Option<bool>,
+) -> Result<DataDirStatus> {
+    data_dir_env_guard()?;
+    let to = PathBuf::from(path.trim());
+    let target = datadir::check_target(&state.data_dir, &to)?;
+    let config = config_dir(&app)?;
+    if target.has_workspace {
+        if !use_existing.unwrap_or(false) {
+            return Err(Error::State(format!("Im Zielordner liegt bereits ein Arbeitsbereich ({})", datadir::DB_FILE)));
+        }
+        datadir::write_location(&config, &to)?;
+    } else {
+        datadir::write_pending_move(&config, &state.data_dir, &to)?;
+    }
+    Ok(data_dir_status_of(&app, &state))
+}
+
+/// Discards a pending move (the current folder stays in use).
+#[tauri::command(async)]
+fn data_dir_cancel(app: AppHandle, state: State<'_, AppState>) -> Result<DataDirStatus> {
+    data_dir_env_guard()?;
+    datadir::write_location(&config_dir(&app)?, &state.data_dir)?;
+    Ok(data_dir_status_of(&app, &state))
+}
+
+/// Restarts the app (in the foreground, even when it was autostarted minimized). The
+/// database is closed first, so a pending move at the next start copies a finished file.
 #[tauri::command]
-fn app_restart(app: AppHandle) {
-    app.restart();
+fn app_restart(app: AppHandle, state: State<AppState>) -> Result<()> {
+    {
+        let mut db = state.db();
+        let _ = db.checkpoint();
+        // Dropping the connection closes the workspace; late writes land in memory.
+        *db = Database::open_in_memory()?;
+    }
+    // Release the single-instance lock, or the new process would only focus this one.
+    tauri_plugin_single_instance::destroy(&app);
+    let exe = tauri::process::current_binary(&app.env())?;
+    let args = std::env::args_os().skip(1).filter(|a| a != desktop::MINIMIZED_ARG);
+    std::process::Command::new(exe).args(args).spawn()?;
+    app.exit(0);
+    Ok(())
 }
 
 // ------------------------------------------------------------------ startup
@@ -1396,12 +1462,18 @@ pub fn run() {
                     if desktop::is_capture_shortcut(app, shortcut) {
                         desktop::open_capture(app);
                     } else if desktop::is_palette_shortcut(app, shortcut) {
+                        // In front already: the shortcut toggles the palette; from the
+                        // background (hidden, minimized, unfocused) it always opens it.
+                        let mut foreground = false;
                         if let Some(w) = app.get_webview_window("main") {
+                            foreground = w.is_visible().unwrap_or(false)
+                                && !w.is_minimized().unwrap_or(false)
+                                && w.is_focused().unwrap_or(false);
                             let _ = w.unminimize();
                             let _ = w.show();
                             let _ = w.set_focus();
                         }
-                        let _ = app.emit("palette://toggle", ());
+                        let _ = app.emit("palette://toggle", foreground);
                     }
                 })
                 .build(),
@@ -1411,11 +1483,16 @@ pub fn run() {
         .setup(move |app| {
             // AETHER_DATA_DIR lets tests run against a throw-away workspace; otherwise
             // `location.json` in the config folder may point to a chosen data folder.
-            let dir = datadir::resolve(
+            // A pending move is carried out here, before the database is opened.
+            let startup = datadir::prepare(
                 std::env::var_os("AETHER_DATA_DIR").map(PathBuf::from),
                 app.path().app_config_dir().ok().as_deref(),
                 app.path().app_data_dir()?,
             );
+            if let Some(n) = &startup.notice {
+                eprintln!("data folder: {}", n.message);
+            }
+            let dir = startup.dir;
             std::fs::create_dir_all(&dir)?;
             let opts: StartupOptions =
                 std::env::var("AETHER_STARTUP").ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
@@ -1429,6 +1506,9 @@ pub fn run() {
             if let Err(e) = db.prune_versions(Utc::now()) {
                 eprintln!("version cleanup failed: {e}");
             }
+            if let Err(e) = db.migrate_palette_default() {
+                eprintln!("settings migration failed: {e}");
+            }
             let settings = db.load_settings()?;
             let capture_shortcut = settings.capture_shortcut.clone();
             let palette_shortcut = settings.palette_shortcut.clone().unwrap_or_default();
@@ -1441,6 +1521,7 @@ pub fn run() {
                 ai: RwLock::new(ai),
                 secrets,
                 data_dir: dir,
+                data_dir_notice: startup.notice,
                 meter: Mutex::new(SessionMeter::default()),
                 session_id: Utc::now().format("%Y%m%dT%H%M%S").to_string(),
                 idle: Mutex::new(IdleAccumulator::new(idle_threshold)),
@@ -1459,11 +1540,12 @@ pub fn run() {
             create_main_window(app, !minimized)?;
 
             // Another instance may already own the shortcut; Ctrl+K still works in-app.
-            if let Err(e) = desktop::set_palette_shortcut(app.handle(), &palette_shortcut) {
-                eprintln!("palette shortcut not available: {e}");
-            }
-            if let Err(e) = desktop::set_capture_shortcut(app.handle(), &capture_shortcut) {
+            // Registered one by one: one taken shortcut must not block the other.
+            if let Err(e) = desktop::apply_shortcuts(app.handle(), Some(&capture_shortcut), None) {
                 eprintln!("capture shortcut not available: {e}");
+            }
+            if let Err(e) = desktop::apply_shortcuts(app.handle(), None, Some(&palette_shortcut)) {
+                eprintln!("palette shortcut not available: {e}");
             }
             spawn_activity_sampler(app.handle().clone());
             spawn_backup_scheduler(app.handle().clone());
@@ -1546,7 +1628,9 @@ pub fn run() {
             ai_index_pending,
             app_info,
             data_dir_status,
+            data_dir_inspect,
             data_dir_set,
+            data_dir_cancel,
             app_restart,
             demo_remove,
             onboarding_needed,

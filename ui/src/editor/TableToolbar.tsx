@@ -1,10 +1,11 @@
-// Floating toolbar above a table while the cursor is in it: rows, columns, header, delete.
+// Floating toolbar above a table while the cursor is in it: rows, columns, delete.
 
 import type { Editor } from "@tiptap/core";
+import { useEditorState } from "@tiptap/react";
 import { BubbleMenu } from "@tiptap/react/menus";
 import { CellSelection } from "@tiptap/pm/tables";
 import { IconButton } from "../components/ui";
-import { TABLE_ACTIONS, runTableAction } from "./table-actions";
+import { TABLE_ACTIONS, inHeaderRow, runTableAction } from "./table-actions";
 
 /** The DOM element of the table around the selection. */
 function tableElement(editor: Editor): HTMLElement | null {
@@ -18,6 +19,7 @@ function tableElement(editor: Editor): HTMLElement | null {
 }
 
 export function TableToolbar({ editor, hidden }: { editor: Editor; hidden: boolean }) {
+  const header = useEditorState({ editor, selector: ({ editor: e }) => inHeaderRow(e.state) });
   return (
     <BubbleMenu
       editor={editor}
@@ -29,7 +31,7 @@ export function TableToolbar({ editor, hidden }: { editor: Editor; hidden: boole
         if (!el) return null;
         return { getBoundingClientRect: () => el.getBoundingClientRect(), getClientRects: () => el.getClientRects() };
       }}
-      options={{ placement: "top-start", offset: 6, flip: true, shift: true }}
+      options={{ placement: "top-end", offset: 6, flip: true, shift: true }}
     >
       {TABLE_ACTIONS.map((a, i) => (
         <span key={a.id} style={{ display: "contents" }}>
@@ -39,6 +41,7 @@ export function TableToolbar({ editor, hidden }: { editor: Editor; hidden: boole
             label={a.title}
             data-action={a.id}
             className={a.danger ? "danger" : ""}
+            disabled={a.bodyOnly && header}
             tooltipSide="top"
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => runTableAction(editor, a)}

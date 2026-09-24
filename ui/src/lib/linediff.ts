@@ -7,8 +7,10 @@ const MAX_CELLS = 4_000_000;
 
 /** Lines of `a` missing in `b` are `del`, lines only in `b` are `add`. */
 export function lineDiff(a: string, b: string): DiffLine[] {
-  const x = a.split("\n");
-  const y = b.split("\n");
+  // A final newline ends the last line; it is not an empty line of its own.
+  const lines = (t: string) => t.replace(/\n$/, "").split("\n");
+  const x = lines(a);
+  const y = lines(b);
   // Common head and tail cost nothing and keep the table small.
   let head = 0;
   while (head < x.length && head < y.length && x[head] === y[head]) head++;
@@ -44,5 +46,34 @@ export function lineDiff(a: string, b: string): DiffLine[] {
     while (j < m) out.push({ kind: "add", text: ys[j++] });
   }
   out.push(...x.slice(x.length - tail).map((text): DiffLine => ({ kind: "same", text })));
+  return out;
+}
+
+/** A run of unchanged lines that is folded away in the view. */
+export type DiffRow = DiffLine | { kind: "skip"; count: number };
+
+/**
+ * Folds runs of more than `max` unchanged lines, keeping `context` lines next to each change.
+ * Without any change everything stays visible.
+ */
+export function collapseDiff(lines: DiffLine[], context = 2, max = 6): DiffRow[] {
+  if (!lines.some((l) => l.kind !== "same")) return lines;
+  const out: DiffRow[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    if (lines[i].kind !== "same") {
+      out.push(lines[i++]);
+      continue;
+    }
+    let j = i;
+    while (j < lines.length && lines[j].kind === "same") j++;
+    const run = lines.slice(i, j);
+    const before = i === 0 ? 0 : context; // lines after the previous change
+    const after = j === lines.length ? 0 : context; // lines before the next change
+    if (run.length > max && run.length > before + after) {
+      out.push(...run.slice(0, before), { kind: "skip", count: run.length - before - after }, ...run.slice(run.length - after));
+    } else out.push(...run);
+    i = j;
+  }
   return out;
 }

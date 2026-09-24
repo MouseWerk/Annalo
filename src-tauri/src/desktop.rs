@@ -14,7 +14,7 @@ use tauri::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, Window, WindowEvent, Wry};
 use tauri_plugin_autostart::ManagerExt as _;
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, Modifiers, Shortcut};
 use tauri_plugin_notification::NotificationExt;
 
 use crate::{AppState, Result, lock};
@@ -249,34 +249,65 @@ pub fn capture_submit(app: AppHandle, state: State<AppState>, text: String) -> R
     Ok(out)
 }
 
-/// Registers the quick-capture shortcut (`""` = none), replacing the previous one.
-pub fn set_capture_shortcut(app: &AppHandle, spec: &str) -> std::result::Result<(), String> {
-    set_shortcut(app, &desktop(app).capture_shortcut, spec)
-}
-
-/// Registers the command-palette shortcut (`""` = none), replacing the previous one.
-pub fn set_palette_shortcut(app: &AppHandle, spec: &str) -> std::result::Result<(), String> {
-    set_shortcut(app, &desktop(app).palette_shortcut, spec)
-}
-
-fn set_shortcut(app: &AppHandle, slot: &Mutex<Option<Shortcut>>, spec: &str) -> std::result::Result<(), String> {
+/// Applies the global shortcuts; `None` keeps a slot as it is, `Some("")` switches it off.
+/// New shortcuts are registered before the old ones are released, so a failure (e.g. the
+/// combination belongs to another program) keeps the previous shortcuts working. A shortcut
+/// that moves between the two slots (swap) stays registered and only changes its role.
+pub fn apply_shortcuts(
+    app: &AppHandle,
+    capture: Option<&str>,
+    palette: Option<&str>,
+) -> std::result::Result<(), String> {
+    let d = desktop(app);
+    let (old_c, old_p) = (*lock(&d.capture_shortcut), *lock(&d.palette_shortcut));
+    let target = |spec: Option<&str>, old: Option<Shortcut>| -> std::result::Result<Option<Shortcut>, String> {
+        match spec.map(str::trim) {
+            None => Ok(old),
+            Some("") => Ok(None),
+            Some(s) => parse_shortcut(s).map(Some),
+        }
+    };
+    let (new_c, new_p) = (target(capture, old_c)?, target(palette, old_p)?);
+    if new_c.is_some() && new_c == new_p {
+        return Err("Palette und Schnellerfassung brauchen verschiedene Tastenkürzel".into());
+    }
+    let ours = [old_c, old_p];
     let gs = app.global_shortcut();
-    // The lock is not held while (un)registering: the shortcut handler reads it.
-    let old = lock(slot).take();
-    if let Some(old) = old {
-        let _ = gs.unregister(old);
+    let mut added: Vec<Shortcut> = Vec::new();
+    // The slot locks are not held while (un)registering: the shortcut handler reads them.
+    for sc in [new_c, new_p].into_iter().flatten() {
+        if ours.contains(&Some(sc)) || added.contains(&sc) {
+            continue;
+        }
+        if let Err(e) = gs.register(sc) {
+            for a in added {
+                let _ = gs.unregister(a);
+            }
+            return Err(format!("Tastenkürzel „{}“ ist nicht verfügbar: {e}", sc.into_string()));
+        }
+        added.push(sc);
     }
-    if spec.trim().is_empty() {
-        return Ok(());
+    for sc in ours.into_iter().flatten() {
+        if Some(sc) != new_c && Some(sc) != new_p {
+            let _ = gs.unregister(sc);
+        }
     }
-    let sc = parse_shortcut(spec)?;
-    gs.register(sc).map_err(|e| e.to_string())?;
-    *lock(slot) = Some(sc);
+    *lock(&d.capture_shortcut) = new_c;
+    *lock(&d.palette_shortcut) = new_p;
     Ok(())
 }
 
+/// Parses `Ctrl+Shift+K`-style shortcuts. Ctrl+Alt is refused: on German keyboards it is
+/// AltGr, which types `@`, `€`, `{` … and would be swallowed by the global shortcut.
 pub fn parse_shortcut(spec: &str) -> std::result::Result<Shortcut, String> {
-    Shortcut::from_str(spec.trim()).map_err(|e| format!("Tastenkürzel „{}“ ungültig: {e}", spec.trim()))
+    let spec = spec.trim();
+    let sc = Shortcut::from_str(spec).map_err(|e| format!("Tastenkürzel „{spec}“ ungültig: {e}"))?;
+    if sc.mods.contains(Modifiers::CONTROL | Modifiers::ALT) {
+        return Err(format!(
+            "Tastenkürzel „{spec}“ nicht möglich: Strg+Alt entspricht AltGr und wird zum Tippen von Zeichen wie @ oder € gebraucht"
+        ));
+    }
+    Ok(sc)
 }
 
 /// Whether `shortcut` is the registered quick-capture shortcut.
@@ -364,6 +395,7 @@ pub struct DesktopInfo {
     autostart_available: bool,
     tray: bool,
     capture_shortcut_active: bool,
+    palette_shortcut_active: bool,
 }
 
 #[tauri::command]
@@ -375,6 +407,7 @@ pub fn desktop_info(app: AppHandle) -> DesktopInfo {
         autostart_available: matches!(autostart, Some(Ok(_))),
         tray: d.has_tray(),
         capture_shortcut_active: lock(&d.capture_shortcut).is_some(),
+        palette_shortcut_active: lock(&d.palette_shortcut).is_some(),
     }
 }
 
@@ -384,4 +417,22 @@ pub fn autostart_set(app: AppHandle, enabled: bool) -> Result<DesktopInfo> {
     let res = if enabled { m.enable() } else { m.disable() };
     res.map_err(|e| Error::State(format!("Autostart konnte nicht geändert werden: {e}")))?;
     Ok(desktop_info(app))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shortcuts_parse_and_refuse_altgr() {
+        let sc = parse_shortcut(" Ctrl+Shift+K ").unwrap();
+        assert!(sc.mods.contains(Modifiers::CONTROL | Modifiers::SHIFT));
+        assert!(parse_shortcut("Alt+Space").is_ok());
+        assert!(parse_shortcut("Ctrl+Shift+Space").is_ok());
+        for bad in ["Ctrl+Alt+K", "Alt+Ctrl+Space", "Ctrl+Alt+Shift+E"] {
+            let e = parse_shortcut(bad).unwrap_err();
+            assert!(e.contains("AltGr"), "{bad}: {e}");
+        }
+        assert!(parse_shortcut("Strg+Foo").unwrap_err().contains("ungültig"));
+    }
 }

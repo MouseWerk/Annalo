@@ -114,7 +114,7 @@ export function CommandPalette() {
       out.push({
         id: "ask",
         section: "Assistent",
-        title: question ? `Fragen: ${question}` : "Frage an den Assistenten …",
+        title: question ? `Fragen: ${question}` : "Frage an den Assistenten…",
         icon: ic(Sparkles),
         hint: "Enter",
         run: () => {
@@ -243,7 +243,7 @@ export function CommandPalette() {
           <input
             ref={input}
             value={q}
-            placeholder={mode === "pages" ? "Seite öffnen …" : "Suchen, Befehl, /zeit buchen oder ? fragen"}
+            placeholder={mode === "pages" ? "Seite öffnen…" : "Suchen, Befehl, /zeit buchen oder ? fragen"}
             onChange={(e) => {
               setQ(e.target.value);
               setSel(0);

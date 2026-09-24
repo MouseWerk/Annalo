@@ -4,7 +4,11 @@
  * A shortcut from a key press in the recorder field: `"Ctrl+Shift+Space"`, `""` (Entf/Backspace
  * clears), `null` (only modifiers so far: swallow) or `undefined` (let the key through: Tab, Esc).
  */
-export function recordShortcut(e: Pick<KeyboardEvent, "key" | "code" | "ctrlKey" | "altKey" | "shiftKey" | "metaKey">): string | null | undefined {
+export function recordShortcut(
+  e: Pick<KeyboardEvent, "key" | "code" | "ctrlKey" | "altKey" | "shiftKey" | "metaKey"> & Partial<Pick<KeyboardEvent, "getModifierState">>,
+): string | null | undefined {
+  // Ctrl+Alt is AltGr on German keyboards (@, €, {, [ …): a global shortcut would swallow it.
+  if (e.getModifierState?.("AltGraph") || e.key === "AltGraph" || (e.ctrlKey && e.altKey)) return null;
   const mods = [e.ctrlKey && "Ctrl", e.altKey && "Alt", e.shiftKey && "Shift", e.metaKey && "Super"].filter(Boolean) as string[];
   if (e.key === "Tab" || e.key === "Escape") return undefined;
   if (!mods.length && (e.key === "Backspace" || e.key === "Delete")) return "";

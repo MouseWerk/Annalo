@@ -185,7 +185,7 @@ function TemplatePicker({ req }: { req: Request }) {
             />
           </label>
         )}
-        {templates && templates.length > 3 && <Input value={q} onChange={(e) => (setQ(e.target.value), setSel(0))} onKeyDown={onKey} placeholder="Vorlage suchen …" aria-label="Vorlage suchen" data-autofocus={isPage ? undefined : ""} />}
+        {templates && templates.length > 3 && <Input value={q} onChange={(e) => (setQ(e.target.value), setSel(0))} onKeyDown={onKey} placeholder="Vorlage suchen…" aria-label="Vorlage suchen" data-autofocus={isPage ? undefined : ""} />}
         {templates === null ? (
           <div className="center-fill tpl-loading">
             <Spinner />

@@ -128,7 +128,7 @@ export function parseFrontmatter(fm: string): Property[] {
 const quote = (s: string) => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n")}"`;
 
 /** Plain scalars YAML would read as booleans, null, numbers or timestamps instead of text. */
-const YAML_TYPED_RE = /^(true|false|null|~|[-+]?\d[\d_.:eE+-]*|\d{4}-\d{2}-\d{2}T.*)$/i;
+const YAML_TYPED_RE = /^(true|false|null|~|[-+]?(\d[\d_.:eE+-]*|\.\d[\d_eE+-]*|\.inf|0x[\da-f_]+|0o[0-7_]+)|\.nan|\d{4}-\d{2}-\d{2}T.*)$/i;
 
 function fmtScalar(s: string, inList = false) {
   // Dates (`YYYY-MM-DD`) are date properties and stay plain; other typed-looking text is quoted.

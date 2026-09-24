@@ -101,9 +101,10 @@ input.prop-value-input[type="date"] { width: auto; color-scheme: light dark; }
 .prop-chip button:hover { opacity: 1; background: var(--bg-hover); }
 .prop-list-input { flex: 1; width: auto; min-width: 80px; }
 .prop-row.is-wbs .prop-value-input { font-family: var(--font-mono); font-size: var(--fs-sm); }
-.prop-row.is-wbs .prop-value > .prop-value-input:first-child, .prop-combo { flex: 0 1 26ch; min-width: 0; }
-.prop-combo { position: relative; }
-.prop-combo .prop-value-input { width: 100%; }
+.prop-row.is-wbs .prop-value > .prop-value-input:first-child { flex: 0 1 26ch; min-width: 0; }
+/* As wide as its text (14–26ch), so the picker icon sits right next to it. */
+.prop-combo { position: relative; flex: 0 1 auto; width: fit-content; min-width: 0; max-width: 100%; }
+.prop-combo .prop-value-input { width: auto; min-width: 14ch; max-width: 26ch; field-sizing: content; }
 .prop-sugg { position: absolute; top: calc(100% + 4px); left: 0; z-index: 40; }
 .prop-key-hint { grid-column: 2 / -1; padding: 0 6px 4px; color: var(--danger); font-size: var(--fs-xs); }
 .prop-key[aria-invalid="true"] { box-shadow: 0 0 0 1px var(--danger); }
@@ -151,8 +152,8 @@ input.prop-value-input[type="date"] { width: auto; color-scheme: light dark; }
 .prose li::marker { color: var(--text-3); }
 .prose hr { border: 0; border-top: 1px solid var(--border-strong); margin: 1.8em 0; }
 .prose mark { background: var(--mark); color: inherit; border-radius: 3px; padding: 0 2px; }
-.prose table { border-collapse: collapse; margin: 1em 0; width: 100%; font-size: 0.93em; }
-.prose th, .prose td { border: 1px solid var(--border-strong); padding: 6px 10px; text-align: left; vertical-align: top; }
+.prose table { border-collapse: collapse; margin: 1em 0; width: auto; font-size: 0.93em; }
+.prose th, .prose td { border: 1px solid var(--border-strong); padding: 6px 10px; text-align: left; vertical-align: top; min-width: 6em; }
 .prose th { background: var(--bg-hover); font-weight: 600; }
 .prose td p, .prose th p { margin: 0; }
 .prose .selectedCell { background: var(--accent-soft); }
@@ -359,5 +360,6 @@ input.prop-value-input[type="date"] { width: auto; color-scheme: light dark; }
 .prose blockquote.callout-quote { --c: var(--text-3); }
 .callout-marker { font-size: 0; }
 .callout-marker::before { content: attr(data-label); font-size: var(--fs-xs); font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--c); margin-right: 8px; }
+.callout-marker[data-label=""]::before { content: none; }
 .ProseMirror-focused .callout-marker:hover { font-size: var(--fs-sm); }
 .prose .callout-title { font-weight: 600; }

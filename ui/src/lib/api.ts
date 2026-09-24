@@ -99,8 +99,10 @@ export const api = {
   backups: () => call<T.BackupInfo[]>("backup_list"),
   appInfo: () => call<{ version: string; data_dir: string; platform: string }>("app_info"),
   dataDirStatus: () => call<T.DataDirStatus>("data_dir_status"),
-  /** Copies the workspace to `path`; it is used after a restart. */
-  setDataDir: (path: string) => call<T.DataDirStatus>("data_dir_set", { path }),
+  inspectDataDir: (path: string) => call<T.DataDirTarget>("data_dir_inspect", { path }),
+  /** Takes effect at the next start; `useExisting` opens a workspace already in `path`. */
+  setDataDir: (path: string, useExisting = false) => call<T.DataDirStatus>("data_dir_set", { path, useExisting }),
+  cancelDataDirMove: () => call<T.DataDirStatus>("data_dir_cancel"),
   restart: () => call<void>("app_restart"),
 
   // desktop

@@ -1,10 +1,14 @@
 //! Where the workspace lives.
 //!
-//! The data folder holds `workspace.db` (+ WAL files), `attachments/` and `backups/`.
-//! By default it is the app data folder; a bootstrap file `location.json`
+//! The data folder holds `workspace.db` (+ WAL files), `attachments/`, `backups/` and
+//! `secrets.json`. By default it is the app data folder; a bootstrap file `location.json`
 //! (`{"data_dir": "…"}`) in the app config folder points elsewhere, and the
 //! `AETHER_DATA_DIR` environment variable (tests) overrides both.
-//! Moving copies everything to the new folder; the old one is left untouched.
+//!
+//! Moving happens in two steps so no edit is lost: choosing a folder only records a
+//! pending move (`{"data_dir": old, "pending_move": new}`); the next start copies the
+//! closed workspace before the database is opened ([`prepare`]). The old folder is left
+//! untouched.
 
 use std::path::{Path, PathBuf};
 
@@ -16,30 +20,54 @@ use crate::error::{Error, Result};
 pub const DB_FILE: &str = "workspace.db";
 /// Name of the bootstrap file in the app config folder.
 pub const LOCATION_FILE: &str = "location.json";
-/// Folders next to the database that move with it.
+/// Staging folder inside the target while a move copies files.
+pub const STAGING_DIR: &str = ".aether-move-tmp";
+/// Folders and files next to the database that move with it (the database goes last).
 const DATA_DIRS: [&str; 2] = ["attachments", "backups"];
+const DATA_FILES: [&str; 1] = ["secrets.json"];
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Location {
     pub data_dir: String,
+    /// Folder the workspace moves to on the next start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_move: Option<String>,
+}
+
+/// The contents of `location.json` in `config_dir`, if it is readable.
+pub fn read_location_file(config_dir: &Path) -> Option<Location> {
+    let raw = std::fs::read_to_string(config_dir.join(LOCATION_FILE)).ok()?;
+    serde_json::from_str(&raw).ok()
 }
 
 /// The data folder `location.json` in `config_dir` points to, if any.
 pub fn read_location(config_dir: &Path) -> Option<PathBuf> {
-    let raw = std::fs::read_to_string(config_dir.join(LOCATION_FILE)).ok()?;
-    let loc: Location = serde_json::from_str(&raw).ok()?;
+    let loc = read_location_file(config_dir)?;
     let dir = loc.data_dir.trim();
     (!dir.is_empty()).then(|| PathBuf::from(dir))
 }
 
 /// Writes `location.json` (via a temporary file, so a crash never leaves half a file).
-pub fn write_location(config_dir: &Path, data_dir: &Path) -> Result<()> {
+pub fn write_location_file(config_dir: &Path, loc: &Location) -> Result<()> {
     std::fs::create_dir_all(config_dir)?;
-    let json = serde_json::to_string_pretty(&Location { data_dir: data_dir.display().to_string() })?;
+    let json = serde_json::to_string_pretty(loc)?;
     let tmp = config_dir.join(format!(".{LOCATION_FILE}.part"));
     std::fs::write(&tmp, json)?;
     std::fs::rename(&tmp, config_dir.join(LOCATION_FILE))?;
     Ok(())
+}
+
+/// Points `location.json` at `data_dir` (no pending move).
+pub fn write_location(config_dir: &Path, data_dir: &Path) -> Result<()> {
+    write_location_file(config_dir, &Location { data_dir: data_dir.display().to_string(), pending_move: None })
+}
+
+/// Records a move of the workspace from `from` to `to` for the next start.
+pub fn write_pending_move(config_dir: &Path, from: &Path, to: &Path) -> Result<()> {
+    write_location_file(
+        config_dir,
+        &Location { data_dir: from.display().to_string(), pending_move: Some(to.display().to_string()) },
+    )
 }
 
 /// The data folder to open: `env` (AETHER_DATA_DIR) wins, then `location.json`, then `default`.
@@ -64,51 +92,178 @@ impl Database {
     }
 }
 
-/// Copies the workspace in `from` (whose database is `db`) to the folder `to`: the database
-/// after a checkpoint, its WAL files, `attachments/` and `backups/`. Refuses a folder that
-/// already holds a workspace, the same folder, or one inside it. Returns the files copied.
-pub fn copy_workspace(db: &Database, from: &Path, to: &Path) -> Result<usize> {
+/// What happened while choosing the data folder at startup.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Notice {
+    /// `info`, `warning` or `error`.
+    pub kind: &'static str,
+    pub message: String,
+}
+
+impl Notice {
+    fn new(kind: &'static str, message: String) -> Self {
+        Notice { kind, message }
+    }
+}
+
+/// The data folder to open, and what the UI should be told about it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Startup {
+    pub dir: PathBuf,
+    pub notice: Option<Notice>,
+}
+
+/// Picks the data folder at startup, before the database is opened: carries out a pending
+/// move (on failure the old folder stays in use) and falls back to `default` when the
+/// chosen folder is missing or holds no workspace (e.g. a disconnected drive).
+pub fn prepare(env: Option<PathBuf>, config_dir: Option<&Path>, default: PathBuf) -> Startup {
+    if let Some(dir) = env.filter(|p| !p.as_os_str().is_empty()) {
+        return Startup { dir, notice: None };
+    }
+    let Some(config_dir) = config_dir else { return Startup { dir: default, notice: None } };
+    let Some(loc) = read_location_file(config_dir) else { return Startup { dir: default, notice: None } };
+    let current = Some(loc.data_dir.trim()).filter(|d| !d.is_empty()).map(PathBuf::from);
+    let mut notice = None;
+    if let Some(to) = loc.pending_move.as_deref().map(str::trim).filter(|d| !d.is_empty()).map(PathBuf::from) {
+        let from = current.clone().unwrap_or_else(|| default.clone());
+        match move_workspace(&from, &to).and_then(|_| write_location(config_dir, &to)) {
+            Ok(()) => {
+                let msg = format!(
+                    "Die Daten wurden nach {} verschoben. Der bisherige Ordner {} bleibt unverändert erhalten.",
+                    to.display(),
+                    from.display()
+                );
+                return Startup { dir: to, notice: Some(Notice::new("info", msg)) };
+            }
+            Err(e) => {
+                let keep = Location { data_dir: loc.data_dir.clone(), pending_move: None };
+                let _ = write_location_file(config_dir, &keep);
+                let msg = format!(
+                    "Die Daten konnten nicht nach {} verschoben werden ({e}). Es wird weiter der bisherige Ordner verwendet.",
+                    to.display()
+                );
+                notice = Some(Notice::new("error", msg));
+            }
+        }
+    }
+    let Some(dir) = current else { return Startup { dir: default, notice } };
+    if dir != default && !dir.join(DB_FILE).is_file() {
+        let why = if dir.is_dir() { "enthält keinen Arbeitsbereich" } else { "ist nicht erreichbar" };
+        let msg = format!(
+            "Der Datenordner {} {why}. Vorübergehend wird der Standardordner {} verwendet.",
+            dir.display(),
+            default.display()
+        );
+        return Startup { dir: default, notice: notice.or(Some(Notice::new("warning", msg))) };
+    }
+    Startup { dir, notice }
+}
+
+/// What a folder chosen as the new data folder looks like.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Target {
+    /// The folder already holds a workspace (`workspace.db`).
+    pub has_workspace: bool,
+    /// The folder is a network share or inside OneDrive/Dropbox.
+    pub synced: bool,
+}
+
+/// Checks that `to` can become the data folder of the workspace in `from`: an absolute,
+/// writable folder that is neither `from` nor inside it. Creates `to` if needed.
+pub fn check_target(from: &Path, to: &Path) -> Result<Target> {
     if to.as_os_str().is_empty() {
         return Err(Error::State("Kein Zielordner angegeben".into()));
     }
-    std::fs::create_dir_all(to)?;
-    let (from_c, to_c) = (from.canonicalize()?, to.canonicalize()?);
-    if from_c == to_c {
-        return Err(Error::State("Die Daten liegen bereits in diesem Ordner".into()));
+    if !to.is_absolute() {
+        return Err(Error::State("Bitte einen vollständigen Ordnerpfad wählen".into()));
     }
-    if to_c.starts_with(&from_c) {
-        return Err(Error::State("Der Zielordner liegt im bisherigen Datenordner".into()));
+    std::fs::create_dir_all(to)
+        .map_err(|e| Error::State(format!("Der Ordner {} kann nicht angelegt werden: {e}", to.display())))?;
+    let to_c = to.canonicalize()?;
+    if let Ok(from_c) = from.canonicalize() {
+        if from_c == to_c {
+            return Err(Error::State("Die Daten liegen bereits in diesem Ordner".into()));
+        }
+        if to_c.starts_with(&from_c) {
+            return Err(Error::State("Der Zielordner liegt im bisherigen Datenordner".into()));
+        }
     }
+    let probe = to.join(".aether-write-test");
+    std::fs::write(&probe, b"ok")
+        .map_err(|e| Error::State(format!("In den Ordner {} kann nicht geschrieben werden: {e}", to.display())))?;
+    let _ = std::fs::remove_file(&probe);
+    Ok(Target { has_workspace: to.join(DB_FILE).exists(), synced: is_synced_or_network(&to.display().to_string()) })
+}
+
+/// Copies the closed workspace in `from` to `to`: everything goes to a staging folder
+/// `to/.aether-move-tmp` first and is then renamed into place, the database last. An
+/// interrupted move leaves no half-copied workspace behind and can simply be repeated.
+/// Refuses a folder that already holds a workspace. Returns the files copied.
+///
+/// The database must be closed (or checkpointed) while this runs.
+pub fn copy_workspace(from: &Path, to: &Path) -> Result<usize> {
+    check_target(from, to)?;
     if to.join(DB_FILE).exists() {
         return Err(Error::State(format!("Im Zielordner liegt bereits eine Datenbank ({DB_FILE})")));
     }
-    db.checkpoint()?;
-    let mut n = 0;
-    for name in [DB_FILE.to_owned(), format!("{DB_FILE}-wal"), format!("{DB_FILE}-shm")] {
-        let src = from.join(&name);
-        if src.is_file() {
-            copy_file(&src, &to.join(&name))?;
-            n += 1;
-        }
+    if !from.join(DB_FILE).is_file() {
+        return Err(Error::State(format!("Im bisherigen Ordner {} liegt keine Datenbank", from.display())));
     }
+    let staging = to.join(STAGING_DIR);
+    if staging.exists() {
+        std::fs::remove_dir_all(&staging)?; // left over from an interrupted attempt
+    }
+    std::fs::create_dir_all(&staging)?;
+    let result = stage_and_commit(from, to, &staging);
+    let _ = std::fs::remove_dir_all(&staging);
+    result
+}
+
+/// The files of the database, main file last.
+fn db_files() -> [String; 3] {
+    [format!("{DB_FILE}-wal"), format!("{DB_FILE}-shm"), DB_FILE.to_owned()]
+}
+
+fn stage_and_commit(from: &Path, to: &Path, staging: &Path) -> Result<usize> {
+    let mut n = 0;
     for dir in DATA_DIRS {
         let src = from.join(dir);
         if src.is_dir() {
-            n += copy_dir(&src, &to.join(dir))?;
+            n += copy_dir(&src, &staging.join(dir))?;
+        }
+    }
+    for name in DATA_FILES.iter().map(|s| s.to_string()).chain(db_files()) {
+        let src = from.join(&name);
+        if src.is_file() {
+            std::fs::copy(&src, staging.join(&name))?;
+            n += 1;
+        }
+    }
+    // Commit: rename into place; the database file last, so a workspace only appears
+    // in `to` once everything else is there.
+    for name in DATA_DIRS.iter().chain(DATA_FILES.iter()).map(|s| s.to_string()).chain(db_files()) {
+        let src = staging.join(&name);
+        if src.exists() {
+            move_into(&src, &to.join(&name))?;
         }
     }
     Ok(n)
 }
 
-/// Writes under a temporary name and renames, so an interrupted copy leaves no truncated file.
-fn copy_file(src: &Path, dst: &Path) -> Result<()> {
-    let name = dst.file_name().and_then(|n| n.to_str()).unwrap_or("datei");
-    let tmp = dst.with_file_name(format!(".{name}.part"));
-    let copied = std::fs::copy(src, &tmp).and_then(|_| std::fs::rename(&tmp, dst));
-    if let Err(e) = copied {
-        let _ = std::fs::remove_file(&tmp);
-        return Err(e.into());
+/// Carries out a pending move of the closed workspace (see [`copy_workspace`]).
+pub fn move_workspace(from: &Path, to: &Path) -> Result<usize> {
+    copy_workspace(from, to)
+}
+
+/// Renames `src` to `dst`; merges into an existing folder entry by entry.
+fn move_into(src: &Path, dst: &Path) -> Result<()> {
+    if src.is_dir() && dst.is_dir() {
+        for entry in std::fs::read_dir(src)?.flatten() {
+            move_into(&entry.path(), &dst.join(entry.file_name()))?;
+        }
+        return Ok(());
     }
+    std::fs::rename(src, dst)?;
     Ok(())
 }
 
@@ -122,7 +277,7 @@ fn copy_dir(src: &Path, dst: &Path) -> Result<usize> {
         if kind.is_dir() {
             n += copy_dir(&entry.path(), &to)?;
         } else if kind.is_file() {
-            copy_file(&entry.path(), &to)?;
+            std::fs::copy(entry.path(), &to)?;
             n += 1;
         }
     }
@@ -170,29 +325,105 @@ mod tests {
         let _ = std::fs::remove_dir_all(&cfg);
     }
 
-    #[test]
-    fn copies_database_attachments_and_backups() {
-        let from = temp("from");
-        let to = temp("to").join("neu");
+    fn sample_workspace(from: &Path) -> i64 {
+        std::fs::create_dir_all(from).unwrap();
         let db = Database::open(from.join(DB_FILE)).unwrap();
         let p = db.create_page(None, "Notiz", None).unwrap();
         db.save_page_content(p.id, "Inhalt im WAL").unwrap();
+        drop(db);
         std::fs::create_dir_all(from.join("attachments")).unwrap();
         std::fs::write(from.join("attachments/bild.png"), [1u8, 2]).unwrap();
         std::fs::create_dir_all(from.join("backups/attachments")).unwrap();
         std::fs::write(from.join("backups/aether-1.db"), [3u8]).unwrap();
         std::fs::write(from.join("backups/attachments/bild.png"), [1u8, 2]).unwrap();
+        std::fs::write(from.join("secrets.json"), b"{}").unwrap();
+        p.id
+    }
 
-        assert!(copy_workspace(&db, &from, &from).is_err(), "same folder");
-        assert!(copy_workspace(&db, &from, &from.join("sub")).is_err(), "nested folder");
-        assert!(copy_workspace(&db, &from, &to).unwrap() >= 4);
+    #[test]
+    fn copies_database_attachments_backups_and_secrets() {
+        let from = temp("from");
+        let to = temp("to").join("neu");
+        let id = sample_workspace(&from);
+
+        assert!(copy_workspace(&from, &from).is_err(), "same folder");
+        assert!(copy_workspace(&from, &from.join("sub")).is_err(), "nested folder");
+        assert!(copy_workspace(&from, Path::new("relativ")).is_err(), "relative path");
+        // A failed earlier attempt left a staging folder: the retry cleans it up.
+        std::fs::create_dir_all(to.join(STAGING_DIR).join("attachments")).unwrap();
+        std::fs::write(to.join(STAGING_DIR).join(DB_FILE), b"halb").unwrap();
+        assert!(copy_workspace(&from, &to).unwrap() >= 5);
+        assert!(!to.join(STAGING_DIR).exists(), "staging folder removed");
         let copy = Database::open(to.join(DB_FILE)).unwrap();
-        assert_eq!(copy.page_doc(p.id).unwrap().content, "Inhalt im WAL");
+        assert_eq!(copy.page_doc(id).unwrap().content, "Inhalt im WAL");
         assert_eq!(std::fs::read(to.join("attachments/bild.png")).unwrap(), [1, 2]);
         assert!(to.join("backups/attachments/bild.png").is_file());
+        assert!(to.join("secrets.json").is_file());
         drop(copy);
-        assert!(copy_workspace(&db, &from, &to).is_err(), "never overwrites a workspace");
+        assert!(copy_workspace(&from, &to).is_err(), "never overwrites a workspace");
+        assert!(from.join(DB_FILE).is_file(), "the old folder stays");
         let _ = std::fs::remove_dir_all(&from);
         let _ = std::fs::remove_dir_all(to.parent().unwrap());
+    }
+
+    #[test]
+    fn target_check_reports_an_existing_workspace() {
+        let from = temp("chk-from");
+        let to = temp("chk-to");
+        assert_eq!(check_target(&from, &to).unwrap(), Target { has_workspace: false, synced: false });
+        std::fs::write(to.join(DB_FILE), b"").unwrap();
+        assert_eq!(check_target(&from, &to).unwrap(), Target { has_workspace: true, synced: false });
+        assert!(check_target(&from, &from).is_err());
+        let _ = std::fs::remove_dir_all(&from);
+        let _ = std::fs::remove_dir_all(&to);
+    }
+
+    #[test]
+    fn startup_performs_a_pending_move() {
+        let base = temp("pending");
+        let (cfg, default, to) = (base.join("cfg"), base.join("default"), base.join("neu"));
+        let id = sample_workspace(&default);
+        assert_eq!(prepare(None, Some(&cfg), default.clone()), Startup { dir: default.clone(), notice: None });
+
+        write_pending_move(&cfg, &default, &to).unwrap();
+        let s = prepare(None, Some(&cfg), default.clone());
+        assert_eq!(s.dir, to);
+        assert_eq!(s.notice.unwrap().kind, "info");
+        assert_eq!(
+            read_location_file(&cfg).unwrap(),
+            Location { data_dir: to.display().to_string(), pending_move: None }
+        );
+        assert_eq!(Database::open(to.join(DB_FILE)).unwrap().page_doc(id).unwrap().content, "Inhalt im WAL");
+        // Next start: plain location, no notice.
+        assert_eq!(prepare(None, Some(&cfg), default.clone()), Startup { dir: to.clone(), notice: None });
+
+        // A move into a folder that already holds a workspace fails: the old folder stays.
+        write_pending_move(&cfg, &to, &default).unwrap();
+        let s = prepare(None, Some(&cfg), default.clone());
+        assert_eq!(s.dir, to);
+        assert_eq!(s.notice.unwrap().kind, "error");
+        assert_eq!(read_location_file(&cfg).unwrap().pending_move, None, "pending move cleared");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn startup_falls_back_when_the_folder_is_missing() {
+        let base = temp("missing");
+        let (cfg, default) = (base.join("cfg"), base.join("default"));
+        write_location(&cfg, &base.join("usb-stick")).unwrap();
+        let s = prepare(None, Some(&cfg), default.clone());
+        assert_eq!(s.dir, default);
+        let n = s.notice.unwrap();
+        assert_eq!(n.kind, "warning");
+        assert!(n.message.contains("nicht erreichbar"), "{}", n.message);
+        // An existing folder without a workspace is not used either.
+        std::fs::create_dir_all(base.join("leer")).unwrap();
+        write_location(&cfg, &base.join("leer")).unwrap();
+        assert!(prepare(None, Some(&cfg), default.clone()).notice.unwrap().message.contains("keinen Arbeitsbereich"));
+        // The location file is kept, so the folder is used again once it is back.
+        assert_eq!(read_location(&cfg), Some(base.join("leer")));
+        // The environment variable wins.
+        assert_eq!(prepare(Some(base.join("env")), Some(&cfg), default).dir, base.join("env"));
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

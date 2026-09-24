@@ -716,14 +716,14 @@ button.side-section-title:hover { color: var(--text-2); }
 .key-input:focus-within { border-color: var(--border-focus); box-shadow: 0 0 0 3px var(--accent-soft); }
 .key-input input:placeholder-shown { font-family: var(--font-ui); }
 .key-input input { flex: 1; min-width: 0; border: 0; background: transparent; outline: none; font-family: var(--font-mono); font-size: var(--fs-sm); user-select: text; }
-.conn { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); font-size: var(--fs-sm); }
+.conn { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); font-size: var(--fs-sm); white-space: nowrap; }
 .conn span { display: inline-flex; align-items: center; gap: 6px; }
 .conn.ok { color: var(--success); }
 .conn.fail { color: var(--danger); }
 .model-input { display: grid; gap: 4px; justify-items: end; }
 .unit-input { display: flex; align-items: center; gap: 8px; }
 .unit-input .input { width: 80px; text-align: right; }
-.unit-input .input.time-input { width: 96px; text-align: left; }
+.unit-input .input.time-input { width: calc(7ch + 20px); text-align: left; }
 .shortcut-input .input { width: 220px; text-align: left; caret-color: transparent; }
 .map-list { display: grid; padding: 8px 0; gap: 4px; }
 .map-row { display: flex; align-items: center; gap: 10px; min-height: 34px; }

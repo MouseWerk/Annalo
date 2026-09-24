@@ -337,7 +337,7 @@ export function AssistantPanel() {
             ref={textarea}
             rows={1}
             value={input}
-            placeholder="Frage stellen oder Aufgabe beschreiben …"
+            placeholder="Frage stellen oder Aufgabe beschreiben…"
             aria-label="Nachricht an den Assistenten"
             onChange={(e) => {
               setInput(e.target.value);

@@ -16,7 +16,7 @@ import { popupRenderer, type PopupItem } from "./suggestion-popup";
 import { PageIcon } from "../components/icons";
 import { zeitToken } from "./zeit-suggest";
 import { FIRST_LINE_RE } from "../lib/frontmatter";
-import { TABLE_ACTIONS } from "./table-actions";
+import { TABLE_ACTIONS, tableActionEnabled } from "./table-actions";
 
 // ------------------------------------------------------------- wiki links
 
@@ -185,8 +185,8 @@ function slashItems(o: SlashOptions): SlashItem[] {
 }
 
 /** Row/column commands, offered while the cursor is in a table. */
-function tableSlashItems(): SlashItem[] {
-  return TABLE_ACTIONS.map((a) => ({
+function tableSlashItems(editor: Editor): SlashItem[] {
+  return TABLE_ACTIONS.filter((a) => tableActionEnabled(editor.state, a)).map((a) => ({
     id: `table-${a.id}`,
     title: a.title,
     icon: ic(a.icon),
@@ -235,7 +235,7 @@ export const SlashCommand = Extension.create<SlashOptions>({
         },
         items: ({ query, editor }) => {
           const q = query.toLowerCase().trim();
-          const all = editor.isActive("table") ? [...tableSlashItems(), ...slashItems(opts)] : slashItems(opts);
+          const all = editor.isActive("table") ? [...tableSlashItems(editor), ...slashItems(opts)] : slashItems(opts);
           return all.filter((i) => !q || fuzzyIncludes(`${i.title} ${i.keywords}`, q) || i.id.startsWith(q));
         },
         command: ({ editor, range, props }) => props.run(editor, range),
@@ -624,7 +624,7 @@ export function splitFrontmatter(md: string): { frontmatter: string; body: strin
 
 // ------------------------------------------------------------- callouts
 
-const CALLOUT_RE = /^\[!(\w+)\][+-]?\s*/;
+const CALLOUT_RE = /^\[!(\w+)\][+-]?[ \t]*/;
 const CALLOUT_LABELS: Record<string, string> = {
   note: "Notiz",
   info: "Info",
@@ -663,7 +663,8 @@ export const Callouts = Extension.create({
           // A custom title replaces the type label (Obsidian shows one or the other).
           const hasTitle = first!.firstChild?.isText === true && (first!.firstChild.text ?? "").slice(m[0].length).trim() !== "";
           const label = hasTitle ? "" : (CALLOUT_LABELS[type] ?? type);
-          decos.push(Decoration.inline(start, start + m[0].trimEnd().length, { class: "callout-marker", "data-label": label }));
+          // Covers the trailing space too, so the hidden marker leaves no gap before the title.
+          decos.push(Decoration.inline(start, start + m[0].length, { class: "callout-marker", "data-label": label }));
           // Title = rest of the first line (up to a line break).
           let end = start;
           let stop = false;
