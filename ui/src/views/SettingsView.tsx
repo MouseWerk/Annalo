@@ -11,7 +11,8 @@ import { applyTheme, exportVault, importVault, pickFolder } from "../lib/actions
 import { flushAllEditors } from "../editor/NoteEditor";
 import { fileSize, importSummary, relative } from "../lib/format";
 import { Badge, Button, Field, IconButton, Input, Segmented, Select, Switch, TextArea } from "../components/ui";
-import { recordShortcut } from "../lib/shortcut";
+import { formatShortcut, keys, recordShortcut } from "../lib/shortcut";
+import { IS_MAC } from "../lib/platform";
 import { NOT_CONFIGURED } from "../lib/updates";
 import { checkForUpdates, installUpdate, loadUpdateStatus, useUpdates } from "../components/Updates";
 import type { BackupInfo, MirrorStatus, ConnectionTest, DataDirStatus, DesktopInfo, GitSyncMode, GitSyncSettings, GitSyncStatus, GitTest, Page, Settings } from "../lib/types";
@@ -950,6 +951,21 @@ function GitSyncGroup({ draft, update, dbSize, onSynced }: { draft: Settings; up
   );
 }
 
+/** Wording of the window options: tray and login items are called differently on macOS. */
+const desk = IS_MAC
+  ? {
+      closeLabel: "Beim Schließen im Dock/Menüleiste weiterlaufen",
+      closeHint: "Schließen blendet das Fenster nur aus; Timer und Erinnerungen laufen weiter. Ein Klick auf das Dock-Symbol holt es zurück, ⌘Q beendet.",
+      autostartLabel: "Bei der Anmeldung starten",
+      autostartHint: "Startet bei der Anmeldung im Hintergrund (Symbol in der Menüleiste). Wird sofort übernommen.",
+    }
+  : {
+      closeLabel: "In den Infobereich schließen",
+      closeHint: "Schließen blendet das Fenster nur aus; Timer und Erinnerungen laufen weiter. Beenden über das Symbol im Infobereich.",
+      autostartLabel: "Mit Windows starten",
+      autostartHint: "Startet bei der Anmeldung minimiert im Infobereich. Wird sofort übernommen.",
+    };
+
 function DesktopSection({ draft, update }: { draft: Settings; update: (p: Partial<Settings>) => void }) {
   const [info, setInfo] = useState<DesktopInfo | null>(null);
   const s = useApp.getState;
@@ -970,34 +986,34 @@ function DesktopSection({ draft, update }: { draft: Settings; update: (p: Partia
     <>
       <header className="settings-head">
         <h1>Desktop</h1>
-        <p>Symbol im Infobereich, Autostart, Erinnerungen, Schnellsuche und Schnellerfassung.</p>
+        <p>{IS_MAC ? "Symbol in der Menüleiste" : "Symbol im Infobereich"}, Autostart, Erinnerungen, Schnellsuche und Schnellerfassung.</p>
       </header>
       <Group title="Fenster">
         <Row
-          label="In den Infobereich schließen"
+          label={desk.closeLabel}
           description={
             <>
-              Schließen blendet das Fenster nur aus; Timer und Erinnerungen laufen weiter. Beenden über das Symbol im Infobereich.
-              {info && !info.tray && <Badge tone="warning">Kein Infobereich verfügbar – das Fenster wird minimiert</Badge>}
+              {desk.closeHint}
+              {info && !info.tray && !IS_MAC && <Badge tone="warning">Kein Infobereich verfügbar – das Fenster wird minimiert</Badge>}
             </>
           }
         >
-          <Switch label="In den Infobereich schließen" checked={draft.close_to_tray} onChange={(v) => update({ close_to_tray: v })} />
+          <Switch label={desk.closeLabel} checked={draft.close_to_tray} onChange={(v) => update({ close_to_tray: v })} />
         </Row>
-        <Row label="Mit Windows starten" description="Startet bei der Anmeldung minimiert im Infobereich. Wird sofort übernommen.">
-          <Switch label="Mit Windows starten" checked={!!info?.autostart} onChange={setAutostart} />
+        <Row label={desk.autostartLabel} description={desk.autostartHint}>
+          <Switch label={desk.autostartLabel} checked={!!info?.autostart} onChange={setAutostart} />
         </Row>
       </Group>
       <Group title="Befehlspalette">
         <Row
           label="Tastenkürzel (global)"
-          description="Holt AETHER OS mit der Befehlspalette nach vorn. Ins Feld klicken und die Tasten drücken, z. B. Ctrl+Shift+K. Entf = aus. Ctrl+K funktioniert im Fenster immer."
+          description={`Holt AETHER OS mit der Befehlspalette nach vorn. Ins Feld klicken und die Tasten drücken, z. B. ${keys("Mod Shift K")}. Entf = aus. ${keys("Mod K")} funktioniert im Fenster immer.`}
         >
           <ShortcutField
             value={draft.palette_shortcut ?? ""}
             onChange={(v) => update({ palette_shortcut: v || null })}
             label="Tastenkürzel Befehlspalette"
-            placeholder="z. B. Ctrl+Shift+K"
+            placeholder={`z. B. ${IS_MAC ? "Cmd" : "Ctrl"}+Shift+K`}
             active={info ? (draft.palette_shortcut ?? "") === (view?.settings.palette_shortcut ?? "") && info.palette_shortcut_active : undefined}
           />
         </Row>
@@ -1039,7 +1055,11 @@ function DesktopSection({ draft, update }: { draft: Settings; update: (p: Partia
       <Group title="Schnellerfassung" description="Ein kleines Fenster über allen anderen: Text landet in der heutigen Tagesnotiz, „todo …“ oder „- [ ] …“ als Aufgabe, „/zeit …“ wird gebucht.">
         <Row
           label="Tastenkürzel (global)"
-          description="Ins Feld klicken und die Tasten drücken, z. B. Ctrl+Shift+Space. Ctrl+Alt geht nicht – das ist AltGr auf deutschen Tastaturen. Entf = aus."
+          description={
+            IS_MAC
+              ? `Ins Feld klicken und die Tasten drücken, z. B. ${formatShortcut("Cmd+Shift+Space")}. ⌥ allein geht nicht – damit tippt man Zeichen wie @ oder €. Entf = aus.`
+              : "Ins Feld klicken und die Tasten drücken, z. B. Ctrl+Shift+Space. Ctrl+Alt geht nicht – das ist AltGr auf deutschen Tastaturen. Entf = aus."
+          }
         >
           <ShortcutField
             value={draft.capture_shortcut}
@@ -1071,6 +1091,7 @@ function ShortcutField({ value, onChange, label, placeholder, active }: { value:
         aria-label={label}
         className="mono"
       />
+      {IS_MAC && value && <kbd>{formatShortcut(value)}</kbd>}
       {value && active !== undefined && (active ? <Badge tone="success">Aktiv</Badge> : <Badge tone="warning">Nicht registriert</Badge>)}
     </div>
   );
@@ -1207,23 +1228,24 @@ function AboutSection({ draft, update }: { draft: Settings; update: (p: Partial<
   const [status, setStatus] = useState<DataDirStatus | null>(null);
   const loadStatus = () => void api.dataDirStatus().then(setStatus, () => setStatus(null));
   useEffect(loadStatus, []);
-  const global = (spec: string | null | undefined, label: string): [string, string][] => (spec?.trim() ? [[spec.trim().replace(/\+/g, " "), label]] : []);
+  const global = (spec: string | null | undefined, label: string): [string, string][] => (spec?.trim() ? [[formatShortcut(spec, IS_MAC, " "), label]] : []);
   const shortcuts: [string, string][] = [
-    ["Ctrl K", "Befehlspalette & Suche"],
-    ["Ctrl O", "Seite öffnen"],
+    [keys("Mod K"), "Befehlspalette & Suche"],
+    [keys("Mod O"), "Seite öffnen"],
     ...global(view.settings.palette_shortcut, "Befehlspalette (global)"),
     ...global(view.settings.capture_shortcut, "Schnellerfassung (global)"),
     ...global(view.settings.search_shortcut, "Schnellsuche (global)"),
-    ["Ctrl N", "Neue Seite"],
-    ["Ctrl Shift D", "Heutige Tagesnotiz"],
-    ["Ctrl Shift T", "Timer starten / stoppen"],
-    ["Ctrl J", "Assistent"],
-    ["Ctrl W", "Tab schließen"],
-    ["Ctrl Tab", "Nächster Tab"],
-    ["Ctrl \\", "Seitenleiste"],
-    ["Ctrl Shift \\", "Seitenpanel"],
-    ["Ctrl .", "Fokusmodus"],
-    ["Ctrl ,", "Einstellungen"],
+    [keys("Mod N"), "Neue Seite"],
+    [keys("Mod Shift D"), "Heutige Tagesnotiz"],
+    [keys("Mod Shift T"), "Timer starten / stoppen"],
+    [keys("Mod J"), "Assistent"],
+    [keys("Mod W"), "Tab schließen"],
+    // ⌘Tab switches applications on macOS; Ctrl+Tab works there as well.
+    [keys("Ctrl Tab"), "Nächster Tab"],
+    [keys("Mod \\"), "Seitenleiste"],
+    [keys("Mod Shift \\"), "Seitenpanel"],
+    [keys("Mod ."), "Fokusmodus"],
+    [keys("Mod ,"), "Einstellungen"],
   ];
   return (
     <>

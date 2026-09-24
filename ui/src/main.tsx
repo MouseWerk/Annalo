@@ -10,6 +10,7 @@ import "./styles/editor.css";
 import { App } from "./App";
 import { CaptureApp } from "./components/CaptureApp";
 import { SearchApp } from "./components/SearchApp";
+import { IS_MAC } from "./lib/platform";
 
 // The quick-capture window loads the same bundle with `#capture` (or `?capture`),
 // the quick-search window with `#search`.
@@ -34,6 +35,8 @@ import("@tauri-apps/api/core")
   .then(({ invoke }) => invoke<boolean>("window_backdrop"))
   .then((mica) => mica && !captureMode && !searchMode && document.documentElement.classList.add("os-windows"))
   .catch(() => {});
+// macOS: the tab bar sits in the title bar (overlay); the chrome leaves room for the traffic lights.
+if (IS_MAC && !captureMode) document.documentElement.classList.add("os-macos");
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

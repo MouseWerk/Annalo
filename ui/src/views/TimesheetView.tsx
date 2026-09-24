@@ -13,6 +13,7 @@ import { useTimerSeconds, stopTimer } from "../components/Sidebar";
 import { LeistungsartSelect, NetzplanSelect, VorgangSelect, useWbs } from "./wbs";
 import { catsGrid, weekGaps } from "../lib/cats";
 import type { ExportFormat, ExportResult, ProjectTree, StatusFlag, TimeEntryRow } from "../lib/types";
+import { modLabel } from "../lib/shortcut";
 
 const STATUS: Record<StatusFlag, { label: string; tone: Tone }> = {
   running: { label: "Läuft", tone: "info" },
@@ -308,7 +309,7 @@ function WeekGrid({ rows, week, todayKey, target, workdays }: { rows: TimeEntryR
     s().toast({
       tone: "success",
       title: "Für CATS kopiert",
-      detail: "Netzplan, Vorgang, Leistungsart und Stunden je Tag – in CATS mit Ctrl V einfügen.",
+      detail: `Netzplan, Vorgang, Leistungsart und Stunden je Tag – in CATS mit ${modLabel()} V einfügen.`,
       action: open.length
         ? {
             label: "Als exportiert markieren",

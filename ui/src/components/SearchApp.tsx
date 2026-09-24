@@ -10,6 +10,7 @@ import { hoursFromMinutes } from "../lib/format";
 import { isZeit, keepQuery, quickItems, snippetHtml, type QsAction, type QsItem } from "../lib/quicksearch";
 import type { Page, SearchHit } from "../lib/types";
 import { PageIcon } from "./icons";
+import { keys } from "../lib/shortcut";
 
 const ic = (C: typeof Search) => <C size={16} strokeWidth={1.75} />;
 const ACTION_ICONS: Partial<Record<QsAction["type"], React.ReactNode>> = {
@@ -245,7 +246,7 @@ export function SearchApp() {
             <>
               <span><kbd>↑</kbd><kbd>↓</kbd> wählen</span>
               <span><kbd>Enter</kbd> öffnen</span>
-              <span><kbd>Ctrl Enter</kbd> neuer Tab</span>
+              <span><kbd>{keys("Mod Enter")}</kbd> neuer Tab</span>
               <span className="grow" />
               <span className="faint">/zeit bucht</span>
             </>

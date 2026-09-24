@@ -76,6 +76,41 @@ The database is backed up daily into `backups` there (or a folder chosen under S
 pages stay in the trash for 30 days. Each backup also refreshes a read-only Markdown copy of all pages (with images) and
 the bookings as `Zeiterfassung/YYYY-MM.csv` (Excel-ready) in `backups/markdown` (configurable under Settings → Sicherung).
 
+## macOS
+
+Releases contain `AETHER-OS_<version>_aarch64.dmg` (Apple Silicon) and `AETHER-OS_<version>_x64.dmg` (Intel), macOS 11
+or newer. Open the disk image and drag **AETHER OS** into *Programme*.
+
+The app is **ad-hoc signed but not notarized**, so Gatekeeper blocks the first start („kann nicht geöffnet werden, da
+der Entwickler nicht verifiziert werden kann“ or „ist beschädigt“). Once, either:
+
+- in Finder, right-click (Ctrl-click) *AETHER OS* in *Programme* → **Öffnen** → **Öffnen**
+  (on macOS 15: System Settings → Datenschutz & Sicherheit → „Dennoch öffnen“), or
+- in the Terminal: `xattr -cr "/Applications/AETHER OS.app"`
+
+On macOS the app follows the platform conventions: a German menu bar (⌘, settings, ⌘\ sidebar, ⌘. focus mode, ⌘Q
+quits after saving the open editors), the tab bar sits in the title bar, closing the window keeps the app running in
+the Dock and the menu bar (a click on the Dock icon brings the window back; Settings → Desktop to turn this off), and
+every in-app shortcut uses ⌘ instead of Ctrl. Quick capture defaults to ⌘⇧Space. „Bei der Anmeldung starten“ adds a
+LaunchAgent. The LiteLLM API key and the Git token are kept in the login keychain; idle detection uses CoreGraphics
+(no permission needed), usage statistics record the frontmost app's name.
+
+Build locally on a Mac (Xcode command line tools, Rust, Node 22): `cd src-tauri && cargo tauri build --bundles app,dmg`.
+
+**Developer ID signing and notarization (optional).** With an Apple Developer account the release workflow signs and
+notarizes automatically once these repository secrets exist (without them it stays ad-hoc signed):
+
+| Secret | Value |
+|---|---|
+| `APPLE_CERTIFICATE` | the „Developer ID Application“ certificate exported as `.p12`, base64-encoded (`base64 -i cert.p12 \| pbcopy`) |
+| `APPLE_CERTIFICATE_PASSWORD` | the password chosen when exporting the `.p12` |
+| `APPLE_SIGNING_IDENTITY` | the certificate name, e.g. `Developer ID Application: Name (TEAMID)` |
+| `APPLE_ID` | the Apple ID e-mail (for notarization) |
+| `APPLE_PASSWORD` | an app-specific password for that Apple ID (appleid.apple.com → Anmelden und Sicherheit) |
+| `APPLE_TEAM_ID` | the 10-character team ID (developer.apple.com → Membership) |
+
+The first three sign the app; with all six it is also notarized and stapled, and the `xattr` step is no longer needed.
+
 ## Automatische Updates einrichten
 
 The app updates itself from GitHub releases: at start, every 6 hours (Settings → Über → „Automatisch nach Updates
@@ -83,7 +118,7 @@ suchen“) and via „Jetzt nach Updates suchen“ it reads
 `https://github.com/mauricekleindienst/aetheros/releases/latest/download/latest.json`. A newer version shows a toast
 „Version X verfügbar“ with „Installieren und neu starten“ and the release notes („Was ist neu?“); nothing is installed
 without that click. Before installing, all open editors are saved; the signed NSIS installer then runs passively and
-restarts the app.
+restarts the app (on macOS the signed `.app.tar.gz` replaces the app bundle, then it restarts).
 
 Updates must be signed. The public key is committed (`src-tauri/updater.pub`) and compiled into release builds;
 the updater is **only active in builds made by the release workflow with the signing secrets**. Local and CI builds show
@@ -95,7 +130,8 @@ GitHub → the repository → **Settings → Secrets and variables → Actions �
 | `TAURI_SIGNING_PRIVATE_KEY` | the full content of the private key file (`aether-updater.key`) |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | its password |
 
-Then every tag `vX.Y.Z` produces a signed installer and `latest.json`. To rotate the key, generate a new pair with
+Then every tag `vX.Y.Z` produces a signed installer (Windows), signed update archives (macOS) and `latest.json`
+(`windows-x86_64`, `darwin-aarch64`, `darwin-x86_64`). To rotate the key, generate a new pair with
 `cargo tauri signer generate -w aether-updater.key`, replace `src-tauri/updater.pub` and both secrets; apps installed
 with the old key must be updated once by hand.
 
@@ -143,6 +179,8 @@ and a fake LiteLLM server for the assistant tests. It also saves screenshots of 
 | `docs/ARCHITECTURE.md` | Design notes |
 
 ## Keyboard
+
+On macOS use ⌘ where the table says Ctrl (the app shows ⌘⇧⌥⌃ glyphs there); Ctrl Tab stays Ctrl Tab.
 
 | Keys | Action |
 |---|---|

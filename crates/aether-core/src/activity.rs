@@ -1,7 +1,8 @@
 //! Idle detection and active-window tracking.
 //!
 //! The OS-specific part is the [`ActivityProbe`] trait; on Windows it is
-//! backed by `GetLastInputInfo` and `GetForegroundWindow`. The bookkeeping
+//! backed by `GetLastInputInfo` and `GetForegroundWindow`, on macOS by
+//! CoreGraphics' event-source idle time and `NSWorkspace`. The bookkeeping
 //! ([`IdleAccumulator`], [`WindowUsage`]) is platform independent and fed by
 //! periodic samples from the shell (e.g. every 5 s).
 
@@ -43,7 +44,11 @@ pub fn system_probe() -> Box<dyn ActivityProbe> {
     {
         Box::new(win32::Win32Probe)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        Box::new(macos::MacProbe)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         Box::new(NullProbe)
     }
@@ -187,6 +192,98 @@ mod win32 {
     }
 }
 
+#[cfg(target_os = "macos")]
+mod macos {
+    //! Plain C/Objective-C runtime calls instead of a binding crate: two framework
+    //! functions and five messages are all the probe needs.
+    use super::*;
+    use std::ffi::{CStr, c_char, c_void};
+
+    type Id = *mut c_void;
+    type Sel = *const c_void;
+
+    /// `kCGEventSourceStateCombinedSessionState`
+    const COMBINED_SESSION_STATE: i32 = 0;
+    /// `kCGAnyInputEventType` (`~0`)
+    const ANY_INPUT_EVENT: u32 = u32::MAX;
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGEventSourceSecondsSinceLastEventType(state: i32, event_type: u32) -> f64;
+    }
+
+    // NSWorkspace lives in AppKit; linking it makes sure the class is registered.
+    #[link(name = "AppKit", kind = "framework")]
+    unsafe extern "C" {}
+
+    #[link(name = "objc")]
+    unsafe extern "C" {
+        fn objc_getClass(name: *const c_char) -> Id;
+        fn sel_registerName(name: *const c_char) -> Sel;
+        fn objc_msgSend();
+        fn objc_autoreleasePoolPush() -> *mut c_void;
+        fn objc_autoreleasePoolPop(pool: *mut c_void);
+    }
+
+    /// Sends a message without arguments that returns an object (or a C string).
+    ///
+    /// # Safety
+    /// `receiver` must be nil or a valid object that responds to `selector` with a
+    /// pointer-sized return value.
+    unsafe fn send(receiver: Id, selector: &CStr) -> Id {
+        if receiver.is_null() {
+            return std::ptr::null_mut();
+        }
+        // SAFETY: objc_msgSend must be called through the exact prototype of the method
+        // (here `id (*)(id, SEL)`), which is what the caller guarantees.
+        unsafe {
+            let f = std::mem::transmute::<unsafe extern "C" fn(), unsafe extern "C" fn(Id, Sel) -> Id>(objc_msgSend);
+            f(receiver, sel_registerName(selector.as_ptr()))
+        }
+    }
+
+    /// Reads an `NSString` as UTF-8.
+    ///
+    /// # Safety
+    /// `string` must be nil or a valid `NSString`.
+    unsafe fn string(string: Id) -> Option<String> {
+        // SAFETY: `UTF8String` returns a NUL-terminated buffer owned by the string (or the
+        // current autorelease pool), valid until the pool is drained.
+        unsafe {
+            let utf8 = send(string, c"UTF8String") as *const c_char;
+            (!utf8.is_null()).then(|| CStr::from_ptr(utf8).to_string_lossy().into_owned())
+        }
+    }
+
+    pub struct MacProbe;
+
+    impl ActivityProbe for MacProbe {
+        fn idle_duration(&self) -> Option<Duration> {
+            // SAFETY: a pure query without pointers; needs no special permission.
+            let secs = unsafe { CGEventSourceSecondsSinceLastEventType(COMBINED_SESSION_STATE, ANY_INPUT_EVENT) };
+            (secs.is_finite() && secs >= 0.0).then(|| Duration::from_secs_f64(secs))
+        }
+
+        /// The frontmost application. Window titles would need the accessibility
+        /// permission, so the title is the application name as well.
+        fn foreground_window(&self) -> Option<WindowInfo> {
+            // SAFETY: every message goes to nil or to an object of the documented class
+            // (NSWorkspace → NSRunningApplication → NSString/NSURL), all returning objects.
+            // The pool releases the autoreleased results of this background thread.
+            unsafe {
+                let pool = objc_autoreleasePoolPush();
+                let workspace = send(objc_getClass(c"NSWorkspace".as_ptr()), c"sharedWorkspace");
+                let app = send(workspace, c"frontmostApplication");
+                let name = string(send(app, c"localizedName"));
+                let exe = string(send(send(app, c"executableURL"), c"lastPathComponent"));
+                objc_autoreleasePoolPop(pool);
+                let process = exe.or_else(|| name.clone())?;
+                Some(WindowInfo { title: name.unwrap_or_else(|| process.clone()), process })
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,5 +321,16 @@ mod tests {
         u.record(Some(&teams), true, s);
         u.record(None, false, s);
         assert_eq!(u.top(5), vec![("Code.exe".into(), 10), ("Teams.exe".into(), 5)]);
+    }
+
+    /// The probes run in CI on every platform: they must answer (or decline) without crashing.
+    #[test]
+    fn system_probe_answers() {
+        let probe = system_probe();
+        let idle = probe.idle_duration();
+        let _ = probe.foreground_window();
+        #[cfg(target_os = "macos")]
+        assert!(idle.is_some(), "CoreGraphics reports the idle time");
+        let _ = idle;
     }
 }

@@ -183,10 +183,17 @@ impl Default for Settings {
 }
 
 /// Ctrl+Alt+… is AltGr on German keyboards, so the default avoids it.
+#[cfg(not(target_os = "macos"))]
 pub const DEFAULT_CAPTURE_SHORTCUT: &str = "Ctrl+Shift+Space";
+/// macOS: Command is the primary modifier (⌃Space and ⌘Space switch input source/Spotlight).
+#[cfg(target_os = "macos")]
+pub const DEFAULT_CAPTURE_SHORTCUT: &str = "Cmd+Shift+Space";
 
 /// Quick search. Not Ctrl+Shift+F: that is the sidebar search inside the app.
+#[cfg(not(target_os = "macos"))]
 pub const DEFAULT_SEARCH_SHORTCUT: &str = "Ctrl+Shift+O";
+#[cfg(target_os = "macos")]
+pub const DEFAULT_SEARCH_SHORTCUT: &str = "Cmd+Shift+O";
 
 /// The former default palette shortcut. It opened the Windows window menu, so it is now off
 /// by default; [`Database::migrate_palette_default`] clears it from saved settings once.

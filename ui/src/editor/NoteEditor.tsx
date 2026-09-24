@@ -23,6 +23,7 @@ import { lacksReference, referenceOffset } from "./zeit-suggest";
 import type { ZeitGuess } from "../lib/types";
 import { ChevronDown, ChevronUp, Search, X } from "lucide-react";
 import type { PageDoc } from "../lib/types";
+import { keys } from "../lib/shortcut";
 
 /** Where a `/zeit` line is in the document: position of its paragraph, or -1. */
 function findLine(editor: Editor, line: string): number {
@@ -513,13 +514,13 @@ export function NoteEditor({
       )}
       {editor && (
         <BubbleMenu editor={editor} className="bubble" shouldShow={({ editor: e, state }) => find === null && !aiOpen.current && !state.selection.empty && !e.isActive("codeBlock") && !e.isActive("wikiLink") && !e.isActive("timeEntry") && !e.isActive("imageEmbed") && !e.isActive("image")}>
-          <IconButton icon={Bold} label="Fett (Ctrl B)" active={ui?.bold} onClick={() => editor.chain().focus().toggleBold().run()} tooltipSide="top" />
-          <IconButton icon={Italic} label="Kursiv (Ctrl I)" active={ui?.italic} onClick={() => editor.chain().focus().toggleItalic().run()} tooltipSide="top" />
+          <IconButton icon={Bold} label={`Fett (${keys("Mod B")})`} active={ui?.bold} onClick={() => editor.chain().focus().toggleBold().run()} tooltipSide="top" />
+          <IconButton icon={Italic} label={`Kursiv (${keys("Mod I")})`} active={ui?.italic} onClick={() => editor.chain().focus().toggleItalic().run()} tooltipSide="top" />
           <IconButton icon={Strikethrough} label="Durchgestrichen" active={ui?.strike} onClick={() => editor.chain().focus().toggleStrike().run()} tooltipSide="top" />
           <IconButton icon={Code} label="Code" active={ui?.code} onClick={() => editor.chain().focus().toggleCode().run()} tooltipSide="top" />
           <IconButton icon={Highlighter} label="Hervorheben" active={ui?.highlight} onClick={() => editor.chain().focus().toggleHighlight().run()} tooltipSide="top" />
           <span className="bubble-sep" />
-          <button type="button" className="bubble-ai" aria-label="Mit KI bearbeiten (Ctrl J)" data-tooltip="Mit KI bearbeiten (Ctrl J)" data-tooltip-side="top" onClick={() => openAi(editor)}>
+          <button type="button" className="bubble-ai" aria-label={`Mit KI bearbeiten (${keys("Mod J")})`} data-tooltip={`Mit KI bearbeiten (${keys("Mod J")})`} data-tooltip-side="top" onClick={() => openAi(editor)}>
             <Sparkles size={14} strokeWidth={1.75} aria-hidden />
             KI
           </button>

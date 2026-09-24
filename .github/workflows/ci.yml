@@ -52,3 +52,32 @@ jobs:
         with:
           name: aether-os-windows
           path: target/release/bundle/nsis/*.exe
+
+  macos:
+    name: macOS app (Apple Silicon)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.94.1
+        with:
+          components: clippy
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --prefix ui
+      # The macOS-only code (CoreGraphics idle probe, menu bar, title bar overlay, Dock reopen)
+      # is only compiled here.
+      - run: cargo clippy -p aether-os --all-targets -- -D warnings
+      - run: cargo test -p aether-core activity
+      - run: cargo install tauri-cli --version "^2" --locked
+      - name: Bundle the app (ad-hoc signed)
+        run: cargo tauri build --bundles app --target aarch64-apple-darwin
+        working-directory: src-tauri
+      # ditto keeps the bundle's symlinks and permissions (upload-artifact would not).
+      - run: ditto -c -k --keepParent "target/aarch64-apple-darwin/release/bundle/macos/AETHER OS.app" AETHER-OS-macos.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aether-os-macos
+          path: AETHER-OS-macos.zip

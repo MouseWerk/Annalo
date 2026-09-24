@@ -21,7 +21,9 @@
     "targets": [
       "nsis",
       "deb",
-      "appimage"
+      "appimage",
+      "app",
+      "dmg"
     ],
     "icon": [
       "icons/32x32.png",
@@ -31,6 +33,10 @@
       "icons/icon.ico",
       "icons/icon.icns"
     ],
+    "macOS": {
+      "minimumSystemVersion": "11.0",
+      "signingIdentity": "-"
+    },
     "windows": {
       "webviewInstallMode": {
         "type": "downloadBootstrapper",

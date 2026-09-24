@@ -14,6 +14,7 @@ import { SettingsView } from "../views/SettingsView";
 import { TagView } from "../views/TagView";
 import { TrashView } from "../views/TrashView";
 import { TasksView } from "../views/TasksView";
+import { keys } from "../lib/shortcut";
 
 const MIN_PANE = 280;
 
@@ -207,7 +208,7 @@ function PaneTabs({ pane, last }: { pane: Pane; last: boolean }) {
             </div>
           );
         })}
-        <IconButton icon={Plus} label="Neuer Tab (Ctrl T)" size={26} iconSize={15} onClick={() => s().openTab({ kind: "home" }, { newTab: true })} />
+        <IconButton icon={Plus} label={`Neuer Tab (${keys("Mod T")})`} size={26} iconSize={15} onClick={() => s().openTab({ kind: "home" }, { newTab: true })} />
       </div>
       <span className="tabbar-drag" data-tauri-drag-region />
       {pane.tabs.length > 0 && (
@@ -223,7 +224,7 @@ function PaneTabs({ pane, last }: { pane: Pane; last: boolean }) {
       {last && (
         <IconButton
           icon={PanelRight}
-          label="Seitenpanel (Ctrl Shift \)"
+          label={`Seitenpanel (${keys("Mod Shift \\")})`}
           active={panelOpen}
           size={26}
           iconSize={15}
