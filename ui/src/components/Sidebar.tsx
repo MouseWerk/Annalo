@@ -1,6 +1,6 @@
 // Left sidebar: navigation, favorites, page tree (drag & drop), tags, timer.
 
-import { useEffect, useRef, useState, type DragEvent } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import {
   ChevronRight, ChevronsDownUp, ChevronsUpDown, Columns2, CornerDownRight, FilePlus2, FolderTree, Hash, PencilLine, Plus, Search, Square, Star, StarOff, Timer, Trash2, X,
 } from "lucide-react";
@@ -10,9 +10,14 @@ import { PageIcon } from "./icons";
 import { Button, IconButton, useMenu } from "./ui";
 import { clock, h2 } from "../lib/format";
 import { createSubpage, deletePage } from "../views/PageView";
+import { COLLAPSED_EVENT, readCollapsed, writeCollapsed } from "../lib/collapsed";
 import type { PageNode, SearchHit } from "../lib/types";
 
 type SideTab = "files" | "search" | "bookmarks" | "tags";
+
+const JOURNAL_TITLE = "Journal";
+/** Id of the Journal folder that was already collapsed once by default. */
+const JOURNAL_SEEN_KEY = "aether.journal-collapsed";
 
 export function Sidebar() {
   const tree = useApp((s) => s.tree);
@@ -20,26 +25,41 @@ export function Sidebar() {
   const pages = useApp((s) => s.pages);
   const active = useApp((s) => s.tabs.find((t) => t.id === s.activeTabId) ?? null);
   const [tab, setTabState] = useState<SideTab>(() => (localStorage.getItem("aether.sidetab") as SideTab) || "files");
-  const [collapsed, setCollapsed] = useState<Set<number>>(() => {
-    try {
-      return new Set(JSON.parse(localStorage.getItem("aether.collapsed") ?? "[]"));
-    } catch {
-      return new Set();
-    }
-  });
+  const [collapsed, setCollapsed] = useState<Set<number>>(readCollapsed);
   const setTab = (t: SideTab) => {
     setTabState(t);
     localStorage.setItem("aether.sidetab", t);
   };
   const saveCollapsed = (next: Set<number>) => {
     setCollapsed(next);
-    localStorage.setItem("aether.collapsed", JSON.stringify([...next]));
+    writeCollapsed(next);
   };
   useEffect(() => {
     const onFocusSearch = () => setTab("search");
+    const onCollapsed = () => setCollapsed(readCollapsed());
     window.addEventListener("aether:sidebar-search", onFocusSearch);
-    return () => window.removeEventListener("aether:sidebar-search", onFocusSearch);
+    window.addEventListener(COLLAPSED_EVENT, onCollapsed);
+    return () => {
+      window.removeEventListener("aether:sidebar-search", onFocusSearch);
+      window.removeEventListener(COLLAPSED_EVENT, onCollapsed);
+    };
   }, []);
+  // The Journal grows by a page a day: it starts collapsed (once per Journal folder).
+  const activePageId = active?.kind === "page" ? active.pageId : undefined;
+  useEffect(() => {
+    const journal = tree.find((n) => n.parent_id == null && n.title === JOURNAL_TITLE && n.children.length > 0);
+    if (!journal) return;
+    let seen: string | null = null;
+    try {
+      seen = localStorage.getItem(JOURNAL_SEEN_KEY);
+      localStorage.setItem(JOURNAL_SEEN_KEY, String(journal.id));
+    } catch {
+      return;
+    }
+    const showsDaily = activePageId != null && journal.children.some((c) => c.id === activePageId);
+    if (seen !== String(journal.id) && !showsDaily && !collapsed.has(journal.id)) saveCollapsed(new Set(collapsed).add(journal.id));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tree]);
 
   const tabs: { id: SideTab; label: string; icon: typeof Search }[] = [
     { id: "files", label: "Dateien", icon: FolderTree },
@@ -47,7 +67,7 @@ export function Sidebar() {
     { id: "bookmarks", label: "Lesezeichen", icon: Star },
     { id: "tags", label: "Tags", icon: Hash },
   ];
-  const withChildren = [...pages.values()].filter((p) => p.children.length).map((p) => p.id);
+  const withChildren = useMemo(() => [...pages.values()].filter((p) => p.children.length).map((p) => p.id), [pages]);
   const allCollapsed = withChildren.length > 0 && withChildren.every((id) => collapsed.has(id));
 
   return (
@@ -81,7 +101,7 @@ export function Sidebar() {
                 </Button>
               </div>
             ) : (
-              <PageTree nodes={tree} activePageId={active?.kind === "page" ? active.pageId : undefined} collapsed={collapsed} setCollapsed={saveCollapsed} />
+              <PageTree nodes={tree} activePageId={activePageId} collapsed={collapsed} setCollapsed={saveCollapsed} />
             )}
           </div>
         </>
@@ -275,6 +295,23 @@ function TodayHours() {
 
 type DropPos = "before" | "inside" | "after";
 
+/** Handlers of a tree row; one stable object, so rows can skip re-rendering. */
+interface RowActions {
+  toggle: (id: number) => void;
+  open: (n: PageNode, e: React.MouseEvent) => void;
+  menu: (n: PageNode, e: React.MouseEvent) => void;
+  key: (n: PageNode, e: React.KeyboardEvent<HTMLDivElement>) => void;
+  dragStart: (n: PageNode, e: DragEvent) => void;
+  dragEnd: () => void;
+  dragOver: (n: PageNode, e: DragEvent<HTMLDivElement>) => void;
+  dragLeave: (n: PageNode) => void;
+  drop: (n: PageNode, e: DragEvent<HTMLDivElement>) => void;
+}
+
+/**
+ * The visible rows are rendered flat (with `aria-level`), each memoized: switching tabs only
+ * re-renders the old and the new active row, collapsing one folder only that row.
+ */
 function PageTree({
   nodes,
   activePageId,
@@ -392,82 +429,144 @@ function PageTree({
       else focusRow(n.parent_id);
     }
   };
-  const focusable = activePageId != null && s().pages.has(activePageId) ? activePageId : nodes[0]?.id;
 
-  const row = (n: PageNode, depth: number): React.ReactNode => {
-    const open = !collapsed.has(n.id);
-    const over = drag?.over === n.id ? drag.pos : undefined;
-    return (
-      <div key={n.id} role="treeitem" aria-expanded={n.children.length ? open : undefined}>
-        <div
-          className={`tree-row ${activePageId === n.id ? "active" : ""} ${over ? `drop-${over}` : ""}`}
-          style={{ paddingLeft: 6 + depth * 14 }}
-          data-id={n.id}
-          tabIndex={focusable === n.id ? 0 : -1}
-          aria-current={activePageId === n.id ? "page" : undefined}
-          draggable
-          onDragStart={(e: DragEvent) => {
-            e.dataTransfer.effectAllowed = "move";
-            // Own type, so dropping into the editor does not paste the id as text.
-            e.dataTransfer.setData("application/x-aether-page", String(n.id));
-            setDrag({ id: n.id });
-          }}
-          onDragEnd={() => setDrag(null)}
-          onDragOver={(e: DragEvent<HTMLDivElement>) => {
-            if (!drag || drag.id === n.id) return;
-            e.preventDefault();
-            const r = e.currentTarget.getBoundingClientRect();
-            const y = (e.clientY - r.top) / r.height;
-            const pos: DropPos = y < 0.28 ? "before" : y > 0.72 ? "after" : "inside";
-            if (drag.over !== n.id || drag.pos !== pos) setDrag({ ...drag, over: n.id, pos });
-          }}
-          onDragLeave={() => drag?.over === n.id && setDrag({ id: drag.id })}
-          onDrop={(e) => {
-            e.preventDefault();
-            onDrop(n, drag?.pos ?? "inside");
-          }}
-          onClick={(e) => s().openPage(n.id, { newTab: e.ctrlKey || e.metaKey, split: e.altKey })}
-          onAuxClick={(e) => e.button === 1 && s().openPage(n.id, { newTab: true })}
-          onContextMenu={(e) => openMenu(e, menuItems(n))}
-          onKeyDown={(e) => onRowKey(e, n)}
-        >
-          <span
-            className={`tree-twisty ${n.children.length ? "" : "leaf"}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              toggle(n.id);
-            }}
-          >
-            {n.children.length > 0 && <ChevronRight size={12} className={`chev ${open ? "open" : ""}`} />}
-          </span>
-          <PageIcon name={n.icon} size={15} className="tree-icon" />
-          <span className="tree-label">{n.title}</span>
-          <span className="tree-row-actions">
-            <IconButton
-              icon={Plus}
-              label="Unterseite"
-              size={20}
-              iconSize={13}
-              tooltipSide="right"
-              onClick={(e) => {
-                e.stopPropagation();
-                createSubpage(n.id);
-              }}
-            />
-          </span>
-        </div>
-        {open && n.children.length > 0 && <div role="group">{n.children.map((c) => row(c, depth + 1))}</div>}
-      </div>
-    );
-  };
+  // The latest closures, reached through one stable object.
+  const latest = useRef({ toggle, onDrop, onRowKey, menuItems, openMenu, drag, setDrag });
+  latest.current = { toggle, onDrop, onRowKey, menuItems, openMenu, drag, setDrag };
+  const actions = useMemo<RowActions>(
+    () => ({
+      toggle: (id) => latest.current.toggle(id),
+      open: (n, e) => s().openPage(n.id, { newTab: e.ctrlKey || e.metaKey, split: e.altKey }),
+      menu: (n, e) => latest.current.openMenu(e, latest.current.menuItems(n)),
+      key: (n, e) => latest.current.onRowKey(e, n),
+      dragStart: (n, e) => {
+        e.dataTransfer.effectAllowed = "move";
+        // Own type, so dropping into the editor does not paste the id as text.
+        e.dataTransfer.setData("application/x-aether-page", String(n.id));
+        latest.current.setDrag({ id: n.id });
+      },
+      dragEnd: () => latest.current.setDrag(null),
+      dragOver: (n, e) => {
+        const d = latest.current.drag;
+        if (!d || d.id === n.id) return;
+        e.preventDefault();
+        const r = e.currentTarget.getBoundingClientRect();
+        const y = (e.clientY - r.top) / r.height;
+        const pos: DropPos = y < 0.28 ? "before" : y > 0.72 ? "after" : "inside";
+        if (d.over !== n.id || d.pos !== pos) latest.current.setDrag({ ...d, over: n.id, pos });
+      },
+      dragLeave: (n) => {
+        const d = latest.current.drag;
+        if (d?.over === n.id) latest.current.setDrag({ id: d.id });
+      },
+      drop: (n, e) => {
+        e.preventDefault();
+        latest.current.onDrop(n, latest.current.drag?.pos ?? "inside");
+      },
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
+
+  // Visible rows in document order; recomputed only when the tree or the collapsed set changes.
+  const rows = useMemo(() => {
+    const out: { node: PageNode; depth: number }[] = [];
+    const walk = (list: PageNode[], depth: number) => {
+      for (const n of list) {
+        out.push({ node: n, depth });
+        if (n.children.length && !collapsed.has(n.id)) walk(n.children, depth + 1);
+      }
+    };
+    walk(nodes, 0);
+    return out;
+  }, [nodes, collapsed]);
+
+  const focusable = activePageId != null && s().pages.has(activePageId) ? activePageId : nodes[0]?.id;
 
   return (
     <div className="tree" role="tree" aria-label="Seiten" ref={treeRef}>
-      {nodes.map((n) => row(n, 0))}
+      {rows.map(({ node, depth }) => (
+        <TreeRow
+          key={node.id}
+          node={node}
+          depth={depth}
+          active={activePageId === node.id}
+          open={!collapsed.has(node.id)}
+          drop={drag?.over === node.id ? drag.pos : undefined}
+          focusable={focusable === node.id}
+          act={actions}
+        />
+      ))}
       {menu}
     </div>
   );
 }
+
+const TreeRow = memo(function TreeRow({
+  node: n,
+  depth,
+  active,
+  open,
+  drop,
+  focusable,
+  act,
+}: {
+  node: PageNode;
+  depth: number;
+  active: boolean;
+  open: boolean;
+  drop?: DropPos;
+  focusable: boolean;
+  act: RowActions;
+}) {
+  return (
+    <div
+      role="treeitem"
+      aria-level={depth + 1}
+      aria-expanded={n.children.length ? open : undefined}
+      className={`tree-row ${active ? "active" : ""} ${drop ? `drop-${drop}` : ""}`}
+      style={{ paddingLeft: 6 + depth * 14 }}
+      data-id={n.id}
+      tabIndex={focusable ? 0 : -1}
+      aria-current={active ? "page" : undefined}
+      draggable
+      onDragStart={(e) => act.dragStart(n, e)}
+      onDragEnd={act.dragEnd}
+      onDragOver={(e) => act.dragOver(n, e)}
+      onDragLeave={() => act.dragLeave(n)}
+      onDrop={(e) => act.drop(n, e)}
+      onClick={(e) => act.open(n, e)}
+      onAuxClick={(e) => e.button === 1 && useApp.getState().openPage(n.id, { newTab: true })}
+      onContextMenu={(e) => act.menu(n, e)}
+      onKeyDown={(e) => act.key(n, e)}
+    >
+      <span
+        className={`tree-twisty ${n.children.length ? "" : "leaf"}`}
+        onClick={(e) => {
+          e.stopPropagation();
+          act.toggle(n.id);
+        }}
+      >
+        {n.children.length > 0 && <ChevronRight size={12} className={`chev ${open ? "open" : ""}`} />}
+      </span>
+      <PageIcon name={n.icon} size={15} className="tree-icon" />
+      <span className="tree-label">{n.title}</span>
+      <span className="tree-row-actions">
+        <IconButton
+          icon={Plus}
+          label="Unterseite"
+          size={20}
+          iconSize={13}
+          tooltipSide="right"
+          onClick={(e) => {
+            e.stopPropagation();
+            createSubpage(n.id);
+          }}
+        />
+      </span>
+    </div>
+  );
+});
 
 // ------------------------------------------------------------- timer dock
 

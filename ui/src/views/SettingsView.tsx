@@ -6,6 +6,7 @@ import { CheckCircle2, DatabaseBackup, Monitor, Eye, EyeOff, FolderInput, Folder
 import { api } from "../lib/api";
 import { useApp } from "../store/app";
 import { applyTheme, exportVault, importVault, pickFolder } from "../lib/actions";
+import { flushAllEditors } from "../editor/NoteEditor";
 import { fileSize, relative } from "../lib/format";
 import { Badge, Button, Field, IconButton, Input, Segmented, Select, Switch, TextArea } from "../components/ui";
 import { recordShortcut } from "../lib/shortcut";
@@ -693,6 +694,17 @@ function DesktopSection({ draft, update }: { draft: Settings; update: (p: Partia
           <Switch label="Mit Windows starten" checked={!!info?.autostart} onChange={setAutostart} />
         </Row>
       </Group>
+      <Group title="Befehlspalette">
+        <Row label="Tastenkürzel (global)" description="Holt AETHER OS mit der Befehlspalette nach vorn, z. B. Alt+Space oder Ctrl+Shift+K. Leer = aus. Ctrl K funktioniert im Fenster immer.">
+          <Input
+            value={draft.palette_shortcut ?? ""}
+            onChange={(e) => update({ palette_shortcut: e.target.value || null })}
+            placeholder="Alt+Space"
+            aria-label="Tastenkürzel Befehlspalette"
+            className="mono"
+          />
+        </Row>
+      </Group>
       <Group title="Feierabend-Erinnerung" description="Hinweis an Arbeitstagen, wenn weniger als das Tagessoll gebucht ist. Ein Klick darauf öffnet die Zeiterfassung. Läuft nach 20 Uhr noch ein Timer, erinnert AETHER OS einmal daran.">
         <Row label="Erinnern um">
           <div className="unit-input">
@@ -762,12 +774,33 @@ function AppearanceSection({ draft, update }: { draft: Settings; update: (p: Par
   );
 }
 
+async function moveDataDir() {
+  const s = useApp.getState();
+  const dir = await pickFolder("Neuer Speicherort für die Daten");
+  if (!dir) return;
+  try {
+    await flushAllEditors();
+    const moved = await api.setDataDir(dir);
+    const warn = moved.synced ? " Achtung: Der Ordner ist synchronisiert oder liegt im Netzwerk – das kann die Datenbank beschädigen." : "";
+    const restart = await s.confirm({
+      title: "Neu starten?",
+      message: `Die Daten wurden nach ${moved.data_dir} kopiert und werden nach dem Neustart von dort geladen. Änderungen bis zum Neustart landen noch im alten Ordner.${warn}`,
+      confirmLabel: "Jetzt neu starten",
+    });
+    if (restart) await api.restart();
+    else s.toast({ tone: "warning", persistent: true, title: "Neustart ausstehend", detail: `Der neue Speicherort ${moved.data_dir} gilt ab dem nächsten Start.` });
+  } catch (e) {
+    s.error("Speicherort nicht geändert", e);
+  }
+}
+
 function AboutSection() {
   const view = useApp((s) => s.settings)!;
+  const palette = view.settings.palette_shortcut;
   const shortcuts: [string, string][] = [
     ["Ctrl K", "Befehlspalette & Suche"],
     ["Ctrl O", "Seite öffnen"],
-    ["Alt Space", "Befehlspalette (global)"],
+    ...(palette ? [[palette.replace(/\+/g, " "), "Befehlspalette (global)"] as [string, string]] : []),
     ["Ctrl Shift Space", "Schnellerfassung (global)"],
     ["Ctrl N", "Neue Seite"],
     ["Ctrl Shift D", "Heutige Tagesnotiz"],
@@ -789,6 +822,11 @@ function AboutSection() {
       <Group title="Daten">
         <Row label="Datenordner" description="Datenbank, Einstellungen und Schlüsselablage (unter Linux).">
           <span className="mono small selectable">{view.data_dir}</span>
+        </Row>
+        <Row label="Speicherort ändern" description="Kopiert Datenbank, Bilder und Sicherungen in einen anderen Ordner und startet neu. Der alte Ordner bleibt unverändert. Kein OneDrive-, Dropbox- oder Netzwerkordner.">
+          <Button icon={FolderInput} onClick={() => moveDataDir()}>
+            Speicherort ändern…
+          </Button>
         </Row>
       </Group>
       <Group title="Tastenkürzel">

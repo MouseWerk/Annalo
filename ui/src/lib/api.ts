@@ -11,6 +11,11 @@ export const api = {
   tree: () => call<T.PageNode[]>("workspace_tree"),
   page: (id: number) => call<T.PageDoc>("page_get", { id }),
   savePage: (id: number, content: string) => call<T.PageDoc>("page_save", { id, content }),
+  versions: (pageId: number) => call<T.VersionInfo[]>("page_versions", { pageId }),
+  versionContent: (versionId: number) => call<string>("page_version_content", { versionId }),
+  /** Stores the page's current content as a version; null when it equals the newest one. */
+  snapshotPage: (pageId: number) => call<number | null>("page_snapshot", { pageId }),
+  restoreVersion: (pageId: number, versionId: number) => call<T.PageDoc>("page_version_restore", { pageId, versionId }),
   createPage: (title: string, parentId: number | null = null, icon: string | null = "file-text", content?: string) =>
     call<T.Page>("page_create", { parentId, title, icon, content: content ?? null }),
   renamePage: (id: number, title: string, updateLinks = true) => call<number>("page_rename", { id, title, updateLinks }),
@@ -93,6 +98,10 @@ export const api = {
   backupNow: () => call<T.BackupInfo>("backup_now"),
   backups: () => call<T.BackupInfo[]>("backup_list"),
   appInfo: () => call<{ version: string; data_dir: string; platform: string }>("app_info"),
+  dataDirStatus: () => call<T.DataDirStatus>("data_dir_status"),
+  /** Copies the workspace to `path`; it is used after a restart. */
+  setDataDir: (path: string) => call<T.DataDirStatus>("data_dir_set", { path }),
+  restart: () => call<void>("app_restart"),
 
   // desktop
   desktopInfo: () => call<T.DesktopInfo>("desktop_info"),
@@ -151,6 +160,7 @@ const KINDS: Record<string, string> = {
   tool: "Werkzeug",
   entry: "Eintrag",
   backup: "Sicherung",
+  version: "Version",
 };
 
 /** Backend errors in German: `netzplan 'NP-1' not found` → `Netzplan „NP-1“ nicht gefunden`. */

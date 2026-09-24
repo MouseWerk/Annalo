@@ -40,6 +40,15 @@ test("imports an Obsidian vault from a path", async () => {
       break;
     }
   await app.waitText(".toast-title", /Vault importiert/);
+  // Imported folders start collapsed; expand Kunden and Acme.
+  for (const folder of ["Kunden", "Acme"]) {
+    await app.waitText(".sidebar .tree-row", new RegExp(`^${folder}$`));
+    for (const r of await app.$$(".sidebar .tree-row"))
+      if ((await app.textOf(r)) === folder) {
+        assert.equal(await r.getAttribute("aria-expanded"), "false", `${folder} starts collapsed`);
+        await (await r.$(".tree-twisty")).click();
+      }
+  }
   await app.waitText(".sidebar .tree-row", /Acme Kickoff/);
 });
 

@@ -190,6 +190,8 @@ export interface Settings {
   reminder_time: string | null;
   /** Global shortcut of the quick-capture window; "" = none. */
   capture_shortcut: string;
+  /** Global shortcut of the command palette (default "Alt+Space"); null = none. */
+  palette_shortcut: string | null;
 }
 export interface DesktopInfo {
   autostart: boolean;
@@ -324,6 +326,20 @@ export interface SavedAttachment {
   path: string;
   size: number;
   markdown: string;
+}
+/** A stored earlier state of a page (newest first in lists). */
+export interface VersionInfo {
+  id: number;
+  page_id: number;
+  created_at: string;
+  /** Bytes. */
+  size: number;
+  preview: string;
+}
+export interface DataDirStatus {
+  data_dir: string;
+  /** Network share or OneDrive/Dropbox folder. */
+  synced: boolean;
 }
 export interface ActivityTick {
   idle_seconds: number | null;

@@ -200,21 +200,28 @@ pub fn chunks(markdown: &str) -> Vec<String> {
 
 // ---------------------------------------------------------------- documents
 
-fn now_ts() -> String {
-    crate::db::ts(chrono::Utc::now())
-}
-
 impl Database {
-    /// Saves a page's Markdown and refreshes its chunks, links and tags.
+    /// Saves a page's Markdown and refreshes its chunks, links and tags. The previous
+    /// content may be kept as a version (see [`crate::versions`]).
     pub fn save_page_content(&self, id: i64, content: &str) -> Result<()> {
+        self.save_page_content_at(id, content, chrono::Utc::now())
+    }
+
+    pub(crate) fn save_page_content_at(
+        &self,
+        id: i64,
+        content: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<()> {
         self.atomic(|| {
-            let n = self.conn().execute(
+            let old: Option<String> =
+                self.conn().query_row("SELECT content FROM pages WHERE id = ?1", [id], |r| r.get(0)).optional()?;
+            let Some(old) = old else { return Err(Error::not_found("page", id.to_string())) };
+            self.snapshot_before_save(id, &old, content, now)?;
+            self.conn().execute(
                 "UPDATE pages SET content = ?2, updated_at = ?3 WHERE id = ?1",
-                params![id, content, now_ts()],
+                params![id, content, crate::db::ts(now)],
             )?;
-            if n == 0 {
-                return Err(Error::not_found("page", id.to_string()));
-            }
             self.reindex_page(id, content)
         })
     }
@@ -373,10 +380,13 @@ impl Database {
                 st.query_map([old.to_lowercase()], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?
             };
             let mut changed = 0;
+            let now = chrono::Utc::now();
             for (pid, content) in sources {
                 let updated = replace_link_target(&content, &old, title);
                 if updated != content {
-                    self.save_page_content(pid, &updated)?;
+                    // Rewritten by the rename, not by the user: keep what they wrote.
+                    self.store_version(pid, &content, now)?;
+                    self.save_page_content_at(pid, &updated, now)?;
                     changed += 1;
                 }
             }

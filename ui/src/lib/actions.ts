@@ -3,6 +3,7 @@
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
 import { useApp } from "../store/app";
+import { collapsePages, foldersBelow } from "./collapsed";
 
 export function applyTheme(theme: "system" | "light" | "dark") {
   const dark = theme === "dark" || (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
@@ -32,6 +33,8 @@ export async function importVault(path?: string) {
     if (!dir) return;
     const r = await api.importVault(dir);
     await s.refreshTree();
+    // Large vaults stay readable: the imported folders start collapsed.
+    collapsePages(foldersBelow(useApp.getState().pages.get(r.root_page_id)));
     s.openPage(r.root_page_id);
     s.toast({ tone: "success", title: "Vault importiert", detail: `${r.pages} Seiten, ${r.folders} Ordner${r.attachments ? `, ${r.attachments} Bilder` : ""}${r.skipped ? `, ${r.skipped} Dateien übersprungen` : ""}` });
   } catch (e) {
