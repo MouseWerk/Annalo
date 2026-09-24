@@ -15,6 +15,7 @@ import { Onboarding } from "./Onboarding";
 import { AetherLogo } from "./Logo";
 import { UpdateToast } from "./Updates";
 import type { Page } from "../lib/types";
+import { keys } from "../lib/shortcut";
 
 export function tabTitle(t: Tab, pages: Map<number, { title: string }>) {
   switch (t.kind) {
@@ -136,10 +137,10 @@ function StartPage() {
     s().openPage(p.id);
   };
   const actions = [
-    { icon: CalendarCheck2, label: "Heute", hint: "Ctrl Shift D", run: openToday },
-    { icon: FilePlus2, label: "Neue Seite", hint: "Ctrl N", run: () => createSubpage(null) },
-    { icon: Search, label: "Suchen", hint: "Ctrl K", run: () => s().set({ paletteOpen: true, paletteMode: "all", paletteQuery: "" }) },
-    { icon: ListChecks, label: "Aufgaben", hint: "Ctrl Shift A", run: () => s().openTab({ kind: "tasks" }) },
+    { icon: CalendarCheck2, label: "Heute", hint: keys("Mod Shift D"), run: openToday },
+    { icon: FilePlus2, label: "Neue Seite", hint: keys("Mod N"), run: () => createSubpage(null) },
+    { icon: Search, label: "Suchen", hint: keys("Mod K"), run: () => s().set({ paletteOpen: true, paletteMode: "all", paletteQuery: "" }) },
+    { icon: ListChecks, label: "Aufgaben", hint: keys("Mod Shift A"), run: () => s().openTab({ kind: "tasks" }) },
     { icon: Timer, label: "Zeiterfassung", hint: "Woche und Timer", run: () => s().openTab({ kind: "timesheet" }) },
   ];
   const hour = new Date().getHours();

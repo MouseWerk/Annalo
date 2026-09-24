@@ -13,6 +13,7 @@ import { AI_PRESETS, transformInstruction } from "../lib/aitext";
 import { useAiTransform } from "../lib/useAiTransform";
 import { usd } from "../lib/format";
 import { insertMarkdownBelow, rangeMarkdown, replaceWithMarkdown, type AiRange } from "./ai-insert";
+import { keys } from "../lib/shortcut";
 
 const BAR_WIDTH = 560;
 
@@ -229,7 +230,7 @@ export function InlineAiBar({
           <span>{ai.busy ? "Wird erstellt…" : "Auswahl wird mit KI bearbeitet"}</span>
         )}
         <span className="grow" />
-        <span>{done ? "Ctrl Enter ersetzen · " : ""}Esc verwerfen</span>
+        <span>{done ? `${keys("Mod Enter")} ersetzen · ` : ""}Esc verwerfen</span>
       </div>
     </div>
   );

@@ -17,6 +17,7 @@ import { hoursFromMinutes, isoDay, isoWeek, weekStart } from "../lib/format";
 import type { SearchHit } from "../lib/types";
 import { importVault, exportVault, toggleTheme } from "../lib/actions";
 import { newPageFromTemplate } from "./Templates";
+import { keys } from "../lib/shortcut";
 
 interface Item {
   id: string;
@@ -152,37 +153,37 @@ export function CommandPalette() {
     }
 
     const commands: Omit<Item, "section">[] = [
-      { id: "new", title: "Neue Seite", icon: ic(FilePlus2), hint: "Ctrl N", run: () => createSubpage(null) },
+      { id: "new", title: "Neue Seite", icon: ic(FilePlus2), hint: keys("Mod N"), run: () => createSubpage(null) },
       { id: "from-template", title: "Neue Seite aus Vorlage…", icon: ic(LayoutTemplate), run: () => newPageFromTemplate() },
       {
         id: "today",
         title: "Heutige Tagesnotiz",
         icon: ic(CalendarCheck2),
-        hint: "Ctrl Shift D",
+        hint: keys("Mod Shift D"),
         run: () => openToday(),
       },
-      { id: "calendar", title: "Kalender", subtitle: "Tagesnotiz eines anderen Tages öffnen", icon: ic(CalendarDays), hint: "Ctrl Shift C", run: () => setTimeout(() => openCalendar(), 0) },
+      { id: "calendar", title: "Kalender", subtitle: "Tagesnotiz eines anderen Tages öffnen", icon: ic(CalendarDays), hint: keys("Mod Shift C"), run: () => setTimeout(() => openCalendar(), 0) },
       ...(s().tabs.find((t) => t.id === s().activeTabId)?.kind === "page"
-        ? [{ id: "add-property", title: "Eigenschaft hinzufügen", subtitle: "Zur aktuellen Seite", icon: ic(ListPlus), hint: "Ctrl ;", run: () => setTimeout(requestAddProperty, 0) }]
+        ? [{ id: "add-property", title: "Eigenschaft hinzufügen", subtitle: "Zur aktuellen Seite", icon: ic(ListPlus), hint: keys("Mod ;"), run: () => setTimeout(requestAddProperty, 0) }]
         : []),
-      { id: "newtab", title: "Neuer Tab", icon: ic(Plus), hint: "Ctrl T", run: () => s().openTab({ kind: "home" }, { newTab: true }) },
+      { id: "newtab", title: "Neuer Tab", icon: ic(Plus), hint: keys("Mod T"), run: () => s().openTab({ kind: "home" }, { newTab: true }) },
       { id: "split", title: "Rechts teilen", icon: ic(Columns2), run: () => s().activeTabId && s().splitTab(s().activeTabId) },
-      { id: "search", title: "In allen Notizen suchen", icon: ic(Search), hint: "Ctrl Shift F", run: () => { if (!s().sidebarOpen) { s().set({ sidebarOpen: true }); savePref("aether.sidebar", true); } setTimeout(() => window.dispatchEvent(new Event("aether:sidebar-search")), 30); } },
+      { id: "search", title: "In allen Notizen suchen", icon: ic(Search), hint: keys("Mod Shift F"), run: () => { if (!s().sidebarOpen) { s().set({ sidebarOpen: true }); savePref("aether.sidebar", true); } setTimeout(() => window.dispatchEvent(new Event("aether:sidebar-search")), 30); } },
       { id: "back", title: "Zurück", icon: ic(ArrowLeft), hint: "Alt ←", run: () => s().goBack() },
       { id: "forward", title: "Vorwärts", icon: ic(ArrowRight), hint: "Alt →", run: () => s().goForward() },
       timer
-        ? { id: "timer", title: "Timer stoppen", icon: ic(Square), hint: "Ctrl Shift T", run: () => stopTimer() }
-        : { id: "timer", title: "Timer starten", icon: ic(Play), hint: "Ctrl Shift T", run: () => s().openTab({ kind: "timesheet" }) },
+        ? { id: "timer", title: "Timer stoppen", icon: ic(Square), hint: keys("Mod Shift T"), run: () => stopTimer() }
+        : { id: "timer", title: "Timer starten", icon: ic(Play), hint: keys("Mod Shift T"), run: () => s().openTab({ kind: "timesheet" }) },
       { id: "timesheet", title: "Zeiterfassung öffnen", icon: ic(Timer), run: () => s().openTab({ kind: "timesheet" }) },
-      { id: "tasks", title: "Aufgaben", subtitle: "Offene Aufgaben aus allen Notizen", icon: ic(ListChecks), hint: "Ctrl Shift A", run: () => s().openTab({ kind: "tasks" }) },
+      { id: "tasks", title: "Aufgaben", subtitle: "Offene Aufgaben aus allen Notizen", icon: ic(ListChecks), hint: keys("Mod Shift A"), run: () => s().openTab({ kind: "tasks" }) },
       { id: "projects", title: "Projekte öffnen", icon: ic(Briefcase), run: () => s().openTab({ kind: "projects" }) },
-      { id: "assistant", title: "Assistent fragen", icon: ic(Sparkles), hint: "Ctrl J", run: () => openAssistant() },
+      { id: "assistant", title: "Assistent fragen", icon: ic(Sparkles), hint: keys("Mod J"), run: () => openAssistant() },
       { id: "weekly-report", title: "Wochenbericht erstellen", subtitle: "Status-E-Mail aus Buchungen und erledigten Aufgaben", icon: ic(Mail), run: () => askWeeklyReport() },
       { id: "trash", title: "Papierkorb", icon: ic(Trash2), run: () => s().openTab({ kind: "trash" }) },
-      { id: "settings", title: "Einstellungen", icon: ic(Settings), hint: "Ctrl ,", run: () => s().openTab({ kind: "settings" }) },
-      { id: "sidebar", title: "Seitenleiste umschalten", icon: ic(PanelLeft), hint: "Ctrl \\", run: () => { const v = !s().sidebarOpen; s().set({ sidebarOpen: v }); savePref("aether.sidebar", v); } },
-      { id: "panel", title: "Seitenpanel umschalten", icon: ic(PanelRight), hint: "Ctrl Shift \\", run: () => { const v = !s().panelOpen; s().set({ panelOpen: v }); savePref("aether.panel", v); } },
-      { id: "focus", title: "Fokusmodus", icon: ic(Focus), hint: "Ctrl .", run: () => s().set({ focusMode: !s().focusMode }) },
+      { id: "settings", title: "Einstellungen", icon: ic(Settings), hint: keys("Mod ,"), run: () => s().openTab({ kind: "settings" }) },
+      { id: "sidebar", title: "Seitenleiste umschalten", icon: ic(PanelLeft), hint: keys("Mod \\"), run: () => { const v = !s().sidebarOpen; s().set({ sidebarOpen: v }); savePref("aether.sidebar", v); } },
+      { id: "panel", title: "Seitenpanel umschalten", icon: ic(PanelRight), hint: keys("Mod Shift \\"), run: () => { const v = !s().panelOpen; s().set({ panelOpen: v }); savePref("aether.panel", v); } },
+      { id: "focus", title: "Fokusmodus", icon: ic(Focus), hint: keys("Mod ."), run: () => s().set({ focusMode: !s().focusMode }) },
       { id: "theme", title: "Hell / Dunkel wechseln", icon: ic(Moon), run: () => toggleTheme() },
       { id: "import", title: "Obsidian-Vault importieren", icon: ic(FolderInput), run: () => importVault() },
       { id: "export", title: "Als Markdown-Ordner exportieren", icon: ic(Download), run: () => exportVault() },
@@ -302,7 +303,7 @@ export function CommandPalette() {
         <div className="pal-foot">
           <span><kbd>↑</kbd><kbd>↓</kbd> wählen</span>
           <span><kbd>Enter</kbd> öffnen</span>
-          <span><kbd>Ctrl Enter</kbd> neuer Tab</span>
+          <span><kbd>{keys("Mod Enter")}</kbd> neuer Tab</span>
           <span className="grow" />
           <span className="faint">/zeit buchen · ? fragen · # Tag</span>
         </div>

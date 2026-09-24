@@ -69,17 +69,25 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
     let quit = MenuItem::with_id(app, "quit", "Beenden", true, None::<&str>)?;
     let sep = || PredefinedMenuItem::separator(app);
     let menu = Menu::with_items(app, &[&open, &sep()?, &stop, &resume, &capture, &sep()?, &quit])?;
+    // macOS: a menu bar extra opens its menu on click (the Dock icon shows the window).
+    let mac = cfg!(target_os = "macos");
     let mut builder = TrayIconBuilder::with_id("main")
         .menu(&menu)
         .tooltip("AETHER OS")
-        .show_menu_on_left_click(false)
+        .show_menu_on_left_click(mac)
         .on_menu_event(on_menu)
-        .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+        .on_tray_icon_event(move |tray, event| {
+            if !mac
+                && let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } =
+                    event
+            {
                 show_main(tray.app_handle());
             }
         });
-    if let Some(icon) = app.default_window_icon() {
+    if mac {
+        // Monochrome template: macOS tints it for light/dark menu bars.
+        builder = builder.icon(tauri::include_image!("icons/tray-template.png")).icon_as_template(true);
+    } else if let Some(icon) = app.default_window_icon() {
         builder = builder.icon(icon.clone());
     }
     let tray = builder.build(app)?;
@@ -170,7 +178,7 @@ pub fn on_window_event(window: &Window, event: &WindowEvent) {
         // Without close-to-tray the UI destroys the main window; a hidden capture window
         // must not keep the process alive then.
         (MAIN, WindowEvent::Destroyed) => app.exit(0),
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "macos"))]
         (CAPTURE, WindowEvent::Focused(false)) => {
             let _ = window.hide();
         }
@@ -178,11 +186,16 @@ pub fn on_window_event(window: &Window, event: &WindowEvent) {
     }
 }
 
-/// Hides the main window to the tray (minimizes it when there is no tray icon).
+/// Hides the main window to the tray (minimizes it when there is no tray icon). On macOS
+/// it always hides: the Dock icon brings it back.
 #[tauri::command]
 pub fn window_hide(app: AppHandle) {
     if let Some(w) = app.get_webview_window(MAIN) {
-        let _ = if desktop(&app).has_tray() { w.hide() } else { w.minimize() };
+        #[cfg(target_os = "macos")]
+        let hide = true;
+        #[cfg(not(target_os = "macos"))]
+        let hide = desktop(&app).has_tray();
+        let _ = if hide { w.hide() } else { w.minimize() };
     }
 }
 
@@ -297,12 +310,31 @@ pub fn apply_shortcuts(
     Ok(())
 }
 
-/// Parses `Ctrl+Shift+K`-style shortcuts. Ctrl+Alt is refused: on German keyboards it is
-/// AltGr, which types `@`, `€`, `{` … and would be swallowed by the global shortcut.
+/// Parses `Ctrl+Shift+K`-style shortcuts (`Cmd`, `Command`, `Super`, `Meta` and `Win` all
+/// mean the Command/Windows key). Combinations that type characters are refused, since the
+/// global shortcut would swallow them: Ctrl+Alt is AltGr on German keyboards (`@`, `€`, `{` …),
+/// on macOS Option without Cmd/Ctrl types them (⌥L = `@`).
 pub fn parse_shortcut(spec: &str) -> std::result::Result<Shortcut, String> {
+    parse_shortcut_for(spec, cfg!(target_os = "macos"))
+}
+
+fn parse_shortcut_for(spec: &str, mac: bool) -> std::result::Result<Shortcut, String> {
     let spec = spec.trim();
-    let sc = Shortcut::from_str(spec).map_err(|e| format!("Tastenkürzel „{spec}“ ungültig: {e}"))?;
-    if sc.mods.contains(Modifiers::CONTROL | Modifiers::ALT) {
+    // The plugin knows Cmd/Command/Super; other recorders write Meta or Win.
+    let normalized = spec
+        .split('+')
+        .map(|t| match t.trim().to_ascii_lowercase().as_str() {
+            "meta" | "win" => "Super",
+            _ => t.trim(),
+        })
+        .collect::<Vec<_>>()
+        .join("+");
+    let sc = Shortcut::from_str(&normalized).map_err(|e| format!("Tastenkürzel „{spec}“ ungültig: {e}"))?;
+    if mac {
+        if sc.mods.contains(Modifiers::ALT) && !sc.mods.intersects(Modifiers::CONTROL | Modifiers::SUPER) {
+            return Err(format!("Tastenkürzel „{spec}“ nicht möglich: ⌥ ohne ⌘ oder Ctrl tippt Zeichen wie @ oder €"));
+        }
+    } else if sc.mods.contains(Modifiers::CONTROL | Modifiers::ALT) {
         return Err(format!(
             "Tastenkürzel „{spec}“ nicht möglich: Strg+Alt entspricht AltGr und wird zum Tippen von Zeichen wie @ oder € gebraucht"
         ));
@@ -425,14 +457,37 @@ mod tests {
 
     #[test]
     fn shortcuts_parse_and_refuse_altgr() {
-        let sc = parse_shortcut(" Ctrl+Shift+K ").unwrap();
+        let parse = |s| parse_shortcut_for(s, false);
+        let sc = parse(" Ctrl+Shift+K ").unwrap();
         assert!(sc.mods.contains(Modifiers::CONTROL | Modifiers::SHIFT));
-        assert!(parse_shortcut("Alt+Space").is_ok());
-        assert!(parse_shortcut("Ctrl+Shift+Space").is_ok());
+        assert!(parse("Alt+Space").is_ok());
+        assert!(parse("Ctrl+Shift+Space").is_ok());
         for bad in ["Ctrl+Alt+K", "Alt+Ctrl+Space", "Ctrl+Alt+Shift+E"] {
-            let e = parse_shortcut(bad).unwrap_err();
+            let e = parse(bad).unwrap_err();
             assert!(e.contains("AltGr"), "{bad}: {e}");
         }
-        assert!(parse_shortcut("Strg+Foo").unwrap_err().contains("ungültig"));
+        assert!(parse("Strg+Foo").unwrap_err().contains("ungültig"));
+    }
+
+    #[test]
+    fn shortcuts_accept_the_command_key_under_every_name() {
+        for mac in [false, true] {
+            let super_k = parse_shortcut_for("Super+Shift+K", mac).unwrap();
+            assert!(super_k.mods.contains(Modifiers::SUPER | Modifiers::SHIFT));
+            for spec in ["Cmd+Shift+K", "Command+Shift+K", "Meta+Shift+K", "win+shift+k", " Cmd + Shift + K "] {
+                assert_eq!(parse_shortcut_for(spec, mac), Ok(super_k), "{spec} (mac: {mac})");
+            }
+        }
+        assert!(parse_shortcut(aether_core::settings::DEFAULT_CAPTURE_SHORTCUT).is_ok());
+    }
+
+    #[test]
+    fn macos_refuses_option_alone_but_not_ctrl_option() {
+        let parse = |s| parse_shortcut_for(s, true);
+        assert!(parse("Ctrl+Alt+K").is_ok(), "no AltGr on a Mac");
+        assert!(parse("Cmd+Alt+K").is_ok());
+        for bad in ["Alt+L", "Alt+Shift+E", "Option+Space"] {
+            assert!(parse(bad).unwrap_err().contains("⌥"), "{bad}");
+        }
     }
 }

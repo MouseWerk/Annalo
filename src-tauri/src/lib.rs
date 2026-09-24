@@ -1,5 +1,8 @@
 //! AETHER OS desktop shell: exposes `aether-core` to the web UI over Tauri IPC.
 
+// Built on every platform (so Linux/Windows CI type-checks it); installed on macOS only.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod appmenu;
 mod desktop;
 mod secrets;
 mod updates;
@@ -1706,6 +1709,9 @@ fn create_main_window(app: &tauri::App, visible: bool) -> tauri::Result<()> {
         builder
     };
     let _ = mica;
+    // macOS: the tab bar sits in the title bar; the UI leaves room for the traffic lights (`os-macos`).
+    #[cfg(target_os = "macos")]
+    let builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay).hidden_title(true);
     builder.build()?;
     Ok(())
 }
@@ -1878,10 +1884,19 @@ pub fn run() {
     if let Some(updater) = updates::plugin() {
         builder = builder.plugin(updater);
     }
+    let autostart = tauri_plugin_autostart::Builder::new().arg(desktop::MINIMIZED_ARG);
+    // A login item in ~/Library/LaunchAgents (no AppleScript permission prompt).
+    #[cfg(target_os = "macos")]
+    let autostart = autostart.macos_launcher(tauri_plugin_autostart::MacosLauncher::LaunchAgent);
+    // macOS has a menu bar (⌘C/⌘V in the webview need its Edit menu); Windows and Linux keep none.
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.menu(appmenu::build).on_menu_event(appmenu::on_event);
+    }
     builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_autostart::Builder::new().arg(desktop::MINIMIZED_ARG).build())
+        .plugin(autostart.build())
         .plugin(tauri_plugin_opener::init())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -2090,8 +2105,19 @@ pub fn run() {
             updates::update_check,
             updates::update_install,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running AETHER OS");
+        .build(tauri::generate_context!())
+        .expect("error while running AETHER OS")
+        .run(on_run_event);
+}
+
+fn on_run_event(app: &AppHandle, event: tauri::RunEvent) {
+    // macOS: closing hides the window and the app stays in the Dock; clicking the Dock icon
+    // brings the window back.
+    #[cfg(target_os = "macos")]
+    if let tauri::RunEvent::Reopen { .. } = event {
+        desktop::show_main(app);
+    }
+    let _ = (app, event);
 }
 
 #[cfg(test)]

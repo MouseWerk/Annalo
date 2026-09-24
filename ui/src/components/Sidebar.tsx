@@ -12,6 +12,7 @@ import { clock, h2 } from "../lib/format";
 import { createSubpage, deletePage } from "../views/PageView";
 import { COLLAPSED_EVENT, readCollapsed, writeCollapsed } from "../lib/collapsed";
 import type { PageNode, SearchHit } from "../lib/types";
+import { keys } from "../lib/shortcut";
 
 type SideTab = "files" | "search" | "bookmarks" | "tags";
 
@@ -63,7 +64,7 @@ export function Sidebar() {
 
   const tabs: { id: SideTab; label: string; icon: typeof Search }[] = [
     { id: "files", label: "Dateien", icon: FolderTree },
-    { id: "search", label: "Suche (Ctrl Shift F)", icon: Search },
+    { id: "search", label: `Suche (${keys("Mod Shift F")})`, icon: Search },
     { id: "bookmarks", label: "Lesezeichen", icon: Star },
     { id: "tags", label: "Tags", icon: Hash },
   ];
@@ -372,8 +373,8 @@ function PageTree({
   };
 
   const menuItems = (n: PageNode) => [
-    { label: "In neuem Tab öffnen", icon: CornerDownRight, shortcut: "Ctrl Klick", onSelect: () => s().openPage(n.id, { newTab: true }) },
-    { label: "Rechts daneben öffnen", icon: Columns2, shortcut: "Alt Klick", onSelect: () => s().openPage(n.id, { split: true }) },
+    { label: "In neuem Tab öffnen", icon: CornerDownRight, shortcut: keys("Mod Klick"), onSelect: () => s().openPage(n.id, { newTab: true }) },
+    { label: "Rechts daneben öffnen", icon: Columns2, shortcut: keys("Alt Klick"), onSelect: () => s().openPage(n.id, { split: true }) },
     { label: "Unterseite anlegen", icon: FilePlus2, onSelect: () => createSubpage(n.id) },
     {
       label: n.favorite ? "Aus Favoriten entfernen" : "Zu Favoriten",

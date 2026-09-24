@@ -19,6 +19,7 @@ import { ADD_PROPERTY_EVENT, PropertyEditor, WorkCard, pageReference } from "./P
 import { VersionsDialog } from "./VersionsDialog";
 import { openCalendar } from "../components/CalendarPopover";
 import { MeetingSummaryDialog } from "./MeetingSummaryDialog";
+import { keys } from "../lib/shortcut";
 
 export function PageView({ pageId, tab, active }: { pageId: number; tab: Tab; active: boolean }) {
   const [doc, setDoc] = useState<PageDoc | null>(null);
@@ -237,7 +238,7 @@ function PageHeader({
       {daily && (
         <>
           <IconButton icon={ChevronLeft} label="Vorheriger Tag" size={26} iconSize={15} onClick={() => goDay(-1)} />
-          <IconButton icon={CalendarDays} label="Kalender (Ctrl Shift C)" size={26} iconSize={15} onClick={(e) => openCalendar(e.currentTarget, doc.daily_date ?? undefined)} />
+          <IconButton icon={CalendarDays} label={`Kalender (${keys("Mod Shift C")})`} size={26} iconSize={15} onClick={(e) => openCalendar(e.currentTarget, doc.daily_date ?? undefined)} />
           <IconButton icon={ChevronRight} label="Nächster Tag" size={26} iconSize={15} onClick={() => goDay(1)} />
         </>
       )}
@@ -375,7 +376,7 @@ function Properties({ doc, fm, onAdd }: { doc: PageDoc; fm: string; onAdd: () =>
         </button>
       ))}
       {!fm && (
-        <button type="button" className="prop-add" onClick={onAdd} title="Eigenschaft hinzufügen (Ctrl+;)">
+        <button type="button" className="prop-add" onClick={onAdd} title={`Eigenschaft hinzufügen (${keys("Mod ;")})`}>
           <Plus size={13} /> Eigenschaft hinzufügen
         </button>
       )}

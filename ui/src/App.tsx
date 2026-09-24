@@ -79,6 +79,16 @@ export function App() {
         if (await flushBeforeExit()) await api.quit().catch((e) => useApp.getState().error("Beenden fehlgeschlagen", e));
       }),
       on("tray://timer-stop", () => stopTimer()),
+      // macOS app menu (its key equivalents ⌘, ⌘\ ⌘. never reach the keydown handler below).
+      on<string>("menu://action", (action) => {
+        const st = useApp.getState();
+        if (action === "settings") st.openTab({ kind: "settings" });
+        else if (action === "sidebar") {
+          st.set({ sidebarOpen: !st.sidebarOpen });
+          savePref("aether.sidebar", !st.sidebarOpen);
+        } else if (action === "focus") st.set({ focusMode: !st.focusMode });
+        else if (action === "palette") st.set({ paletteOpen: true, paletteMode: "all", paletteQuery: "" });
+      }),
       // Clicked the end-of-day reminder (or came back after it).
       on("nav://timesheet", () => useApp.getState().openTab({ kind: "timesheet" })),
       // Global palette shortcut: toggles while the window is in front, otherwise always opens.

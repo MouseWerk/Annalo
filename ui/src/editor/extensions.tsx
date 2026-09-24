@@ -17,6 +17,7 @@ import { PageIcon } from "../components/icons";
 import { zeitToken } from "./zeit-suggest";
 import { FIRST_LINE_RE } from "../lib/frontmatter";
 import { TABLE_ACTIONS, tableActionEnabled } from "./table-actions";
+import { keys } from "../lib/shortcut";
 
 // ------------------------------------------------------------- wiki links
 
@@ -180,13 +181,13 @@ function slashItems(o: SlashOptions): SlashItem[] {
     { id: "zeit", title: "Zeit buchen", subtitle: "NP-8801/1020 2.5h Beschreibung", icon: ic(Timer), hint: "/zeit", section: "Zeiterfassung", keywords: "zeit time buchen stunden", run: (e, r) => e.chain().focus().deleteRange(r).insertContent("/zeit ").run() },
     { id: "subpage", title: "Unterseite", icon: ic(FilePlus2), section: "Einfügen", keywords: "seite page unterseite", run: (e, r) => e.chain().focus().deleteRange(r).insertContent("[[").run() },
     ...(o.onImage
-      ? [{ id: "image", title: "Bild", subtitle: "Datei wählen, oder einfügen mit Ctrl V", icon: ic(ImagePlus), section: "Einfügen", keywords: "bild image foto screenshot anhang", run: (e: Editor, r: Range) => (e.chain().deleteRange(r).run(), o.onImage!(e)) }]
+      ? [{ id: "image", title: "Bild", subtitle: `Datei wählen, oder einfügen mit ${keys("Mod V")}`, icon: ic(ImagePlus), section: "Einfügen", keywords: "bild image foto screenshot anhang", run: (e: Editor, r: Range) => (e.chain().deleteRange(r).run(), o.onImage!(e)) }]
       : []),
     ...(o.onTemplate
       ? [{ id: "template", title: "Vorlage einfügen", subtitle: "Seite aus „Vorlagen“", icon: ic(LayoutTemplate), section: "Einfügen", keywords: "vorlage template muster", run: (e: Editor, r: Range) => (e.chain().deleteRange(r).run(), o.onTemplate!(e)) }]
       : []),
     ...(o.onAi
-      ? [{ id: "ki", title: "KI bearbeiten", subtitle: "Absatz verbessern, kürzen, übersetzen …", hint: "Ctrl J", icon: ic(Sparkles), section: "KI", keywords: "ki ai assistent umschreiben verbessern kürzen übersetzen", run: (e: Editor, r: Range) => (e.chain().focus().deleteRange(r).run(), o.onAi!(e)) }]
+      ? [{ id: "ki", title: "KI bearbeiten", subtitle: "Absatz verbessern, kürzen, übersetzen …", hint: keys("Mod J"), icon: ic(Sparkles), section: "KI", keywords: "ki ai assistent umschreiben verbessern kürzen übersetzen", run: (e: Editor, r: Range) => (e.chain().focus().deleteRange(r).run(), o.onAi!(e)) }]
       : []),
     ...(o.onSummary
       ? [{ id: "summary", title: "Zusammenfassung", subtitle: "Besprechung zusammenfassen: Entscheidungen, Aufgaben", icon: ic(NotebookPen), section: "KI", keywords: "besprechung meeting protokoll summary ki aufgaben entscheidungen", run: (e: Editor, r: Range) => (e.chain().focus().deleteRange(r).run(), o.onSummary!(e)) }]
