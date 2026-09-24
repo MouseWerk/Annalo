@@ -124,6 +124,7 @@ Migration v2 converts the old block model: blocks are concatenated into
   Levels: warning ≥ 75 %, critical ≥ 90 % or EAC > plan, exceeded when booked > plan.
 - **CPM** (`netzplan.rs`): Kahn topological sort (cycle detection), forward pass FAZ/FEZ,
   backward pass SAZ/SEZ, GP = SAZ − FAZ, FP = min(FAZ of successors) − FEZ, and one walked critical path.
+- **Transformations** (`ai/transform.rs`, `ai_transform`): inline AI and meeting summaries send only the instruction and the text (no retrieval, no tools), streamed like chat answers. The page's content and tags go to the router as context, so `#privat` pages stay local. The answer is inserted as Markdown through the editor's parser in one undoable transaction (`ui/src/editor/ai-insert.ts`).
 - **Router** (`ai/router.rs`): transparent score (prompt/context length, code, reasoning
   cues, tool use, minus simple transformations) → local / standard / reasoning tier.
   Privacy markers override everything, including manual overrides.

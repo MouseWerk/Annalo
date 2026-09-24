@@ -9,7 +9,7 @@ import type { Node as PMNode } from "@tiptap/pm/model";
 import type { EditorView } from "@tiptap/pm/view";
 import Image from "@tiptap/extension-image";
 import {
-  AlertTriangle, Info, CheckSquare, Code2, FilePlus2, Heading1, Heading2, Heading3, Link2, List, ListOrdered, Minus, Quote, Table2, Text, Timer, CalendarDays, CalendarClock, Highlighter, ImagePlus, LayoutTemplate,
+  AlertTriangle, Info, CheckSquare, Code2, FilePlus2, Heading1, Heading2, Heading3, Link2, List, ListOrdered, Minus, Quote, Table2, Text, Timer, CalendarDays, CalendarClock, Highlighter, ImagePlus, LayoutTemplate, Sparkles, NotebookPen,
 } from "lucide-react";
 import { isoDay } from "../lib/format";
 import { popupRenderer, type PopupItem } from "./suggestion-popup";
@@ -146,6 +146,10 @@ export interface SlashOptions {
   onTemplate: ((editor: Editor) => void) | null;
   /** Opens a file chooser and inserts the chosen images. */
   onImage: ((editor: Editor) => void) | null;
+  /** Opens the inline AI bar on the current block. */
+  onAi: ((editor: Editor) => void) | null;
+  /** „Besprechung zusammenfassen“ for the page. */
+  onSummary: ((editor: Editor) => void) | null;
 }
 
 function slashItems(o: SlashOptions): SlashItem[] {
@@ -181,6 +185,12 @@ function slashItems(o: SlashOptions): SlashItem[] {
     ...(o.onTemplate
       ? [{ id: "template", title: "Vorlage einfügen", subtitle: "Seite aus „Vorlagen“", icon: ic(LayoutTemplate), section: "Einfügen", keywords: "vorlage template muster", run: (e: Editor, r: Range) => (e.chain().deleteRange(r).run(), o.onTemplate!(e)) }]
       : []),
+    ...(o.onAi
+      ? [{ id: "ki", title: "KI bearbeiten", subtitle: "Absatz verbessern, kürzen, übersetzen …", hint: "Ctrl J", icon: ic(Sparkles), section: "KI", keywords: "ki ai assistent umschreiben verbessern kürzen übersetzen", run: (e: Editor, r: Range) => (e.chain().focus().deleteRange(r).run(), o.onAi!(e)) }]
+      : []),
+    ...(o.onSummary
+      ? [{ id: "summary", title: "Zusammenfassung", subtitle: "Besprechung zusammenfassen: Entscheidungen, Aufgaben", icon: ic(NotebookPen), section: "KI", keywords: "besprechung meeting protokoll summary ki aufgaben entscheidungen", run: (e: Editor, r: Range) => (e.chain().focus().deleteRange(r).run(), o.onSummary!(e)) }]
+      : []),
   ];
 }
 
@@ -215,7 +225,7 @@ export function fuzzyIncludes(text: string, query: string) {
 export const SlashCommand = Extension.create<SlashOptions>({
   name: "slashCommand",
   addOptions() {
-    return { onTemplate: null, onImage: null };
+    return { onTemplate: null, onImage: null, onAi: null, onSummary: null };
   },
   addProseMirrorPlugins() {
     const opts = this.options;

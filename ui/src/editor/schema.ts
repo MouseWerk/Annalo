@@ -134,6 +134,10 @@ export interface SchemaOptions {
   uploadImage?: (file: File) => Promise<string | null>;
   onPickTemplate?: (editor: Editor) => void;
   onPickImage?: (editor: Editor) => void;
+  /** Slash „KI bearbeiten“: inline AI bar on the current block. */
+  onAi?: (editor: Editor) => void;
+  /** Slash „Zusammenfassung“: meeting summary of the page. */
+  onSummary?: (editor: Editor) => void;
   /** `/zeit` autocomplete: Netzplan/Vorgang options for the typed query. */
   zeitRefs?: (query: string) => Promise<ZeitSuggestItem[]>;
   /** `/zeit` autocomplete: Leistungsarten after `#`. */
@@ -162,7 +166,7 @@ export function buildExtensions(o: SchemaOptions = {}): Extensions {
     MarkdownFidelity,
     WikiLink.configure({ onOpen: o.onOpenLink ?? (() => {}), isKnown: o.isKnown ?? (() => true) }),
     WikiLinkSuggest.configure({ search: o.searchPages ?? (async () => []) }),
-    SlashCommand.configure({ onTemplate: o.onPickTemplate ?? null, onImage: o.onPickImage ?? null }),
+    SlashCommand.configure({ onTemplate: o.onPickTemplate ?? null, onImage: o.onPickImage ?? null, onAi: o.onAi ?? null, onSummary: o.onSummary ?? null }),
     ImageEmbed.configure({ resolve: o.attachmentUrl ?? ((n) => `attachments/${encodeURIComponent(n)}`), upload: o.uploadImage ?? null }),
     MarkdownImage.configure({ resolve: o.attachmentUrl ?? ((n) => n) }),
     TimeEntryChip,

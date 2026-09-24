@@ -123,6 +123,9 @@ export const api = {
   meter: () => call<T.SessionMeter>("ai_meter"),
   chat: (a: { requestId: string; messages: T.ChatMessage[]; useTools: boolean; tier: T.Tier | null; pageId: number | null }) =>
     call<T.ChatOutcome>("ai_chat", a),
+  /** Rewrites `text` by `instruction` (inline AI, meeting summary); streams like `chat`. */
+  transform: (a: { requestId: string; instruction: string; text: string; pageId: number | null; tier?: T.Tier | null }) =>
+    call<T.ChatOutcome>("ai_transform", { tier: null, ...a }),
   cancelChat: (requestId: string) => call<void>("ai_cancel", { requestId }),
   planTool: (name: string, args: string) => call<T.ToolPlan>("ai_plan_tool", { name, arguments: args }),
   runWorkspaceTool: (name: string, args: string) => call<string>("ai_run_workspace_tool", { name, arguments: args }),

@@ -9,6 +9,7 @@ pub mod metrics;
 pub mod rag;
 pub mod router;
 pub mod tools;
+pub mod transform;
 
 pub use client::{ChatMessage, ChatRequest, Completion, LiteLlmClient, StreamEvent};
 pub use metrics::{PriceTable, SessionMeter, UsageRecord};

@@ -40,6 +40,8 @@ assistant that runs against **your own LiteLLM server**.
 - Model routing: local, standard and reasoning models; `#privat` content always stays on the local model
 - Can book time, search and check budgets; system tools (PowerShell, git, HTTP) only run after you approve them
 - „Wochenbericht erstellen“ (Ctrl K) drafts this week's status e-mail from your bookings and done tasks; „In neue Seite einfügen“ saves it as „Wochenbericht KW nn“
+- Inline AI: select text and press Ctrl J (or „KI“ in the formatting toolbar, `/KI bearbeiten` for the current block): Verbessern, Kürzen, Übersetzen DE↔EN, In Stichpunkte, Als Tabelle, … or your own instruction; the result streams into a preview and replaces the text (one Ctrl Z undoes it) or goes below it
+- „Besprechung zusammenfassen“ (page menu, `/Zusammenfassung`): Zusammenfassung, Entscheidungen, Aufgaben (`- [ ] … @Person 📅 …`) and Offene Punkte, inserted at the end of the page or saved as „<Titel> – Zusammenfassung“; on a page with `vorgang:` and a time span (`10:00–11:30`) it adds a `/zeit` booking suggestion
 - Shows sources, time to first token, tokens/s, tokens and cost per answer and per session
 
 ## Connecting your LiteLLM server
@@ -103,7 +105,7 @@ and a fake LiteLLM server for the assistant tests. It also saves screenshots of 
 | Ctrl Shift C | Calendar of daily notes |
 | Ctrl Shift A | Tasks |
 | Ctrl Shift T | Start/stop timer |
-| Ctrl J | Assistant |
+| Ctrl J | Assistant; with text selected in a note: inline AI |
 | Ctrl F | Find in page |
 | Ctrl W / Ctrl Tab | Close / switch tab |
 | Ctrl \ / Ctrl Shift \ | Toggle sidebar / side panel |
