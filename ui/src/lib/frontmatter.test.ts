@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { edited, parseFrontmatter, propertyValue, serializeFrontmatter, splitItems, type Property } from "./frontmatter";
+import { FIRST_LINE_RE, edited, isValidKey, parseFrontmatter, propertyValue, serializeFrontmatter, splitItems, type Property } from "./frontmatter";
 
 const OBSIDIAN = `---
 title: Kickoff Systemintegration
@@ -88,6 +88,37 @@ describe("serializeFrontmatter", () => {
     expect(serializeFrontmatter([])).toBe("");
     const props = parseFrontmatter("---\na: 1\n# note\nb: 2\n---\n").slice(1);
     expect(serializeFrontmatter(props)).toBe("---\nb: 2\n# note\n---\n");
+  });
+
+  it("quotes text YAML would read as another type, but not dates", () => {
+    const vals = ["true", "No", "null", "~", "42", "-1.5", "1e3", "08:30", "2026-10-01T08:00"];
+    const props: Property[] = vals.map((v, i) => edited({ key: `k${i}`, type: "text", value: "", items: [] }, { value: v }));
+    const out = serializeFrontmatter(props);
+    expect(out).toContain('k0: "true"');
+    expect(out).toContain("k1: No");
+    expect(out).toContain('k4: "42"');
+    expect(out).toContain('k7: "08:30"');
+    expect(parseFrontmatter(out).map((p) => p.value)).toEqual(vals);
+    const date = edited({ key: "due", type: "text", value: "", items: [] }, { value: "2026-10-01" });
+    expect(serializeFrontmatter([date])).toBe("---\ndue: 2026-10-01\n---\n");
+    const list = edited({ key: "tags", type: "list", value: "", items: [] }, { items: ["2026", "a"] });
+    expect(serializeFrontmatter([list])).toBe('---\ntags: ["2026", a]\n---\n');
+  });
+
+  it("keeps a block whose first key is not ASCII", () => {
+    const fm = "---\nPriorität: hoch\ndue date: 2026-10-01\n---\n";
+    const props = parseFrontmatter(fm);
+    expect(props.map((p) => p.key)).toEqual(["Priorität", "due date"]);
+    expect(serializeFrontmatter(props)).toBe(fm);
+    expect(FIRST_LINE_RE.test("Priorität: hoch")).toBe(true);
+    expect(FIRST_LINE_RE.test("due date: x")).toBe(true);
+    expect(FIRST_LINE_RE.test("- a: b")).toBe(false);
+    expect(FIRST_LINE_RE.test("# x: y")).toBe(false);
+  });
+
+  it("validates property names", () => {
+    for (const k of ["vorgang", "Priorität", "due date", "a-b", "x#y", "ä"]) expect(isValidKey(k), k).toBe(true);
+    for (const k of ["", " a", "#a", "-a", "a:b", "[a", "{a", "'a", '"a', "&a", "*a", "!a", "|a", ">a", "%a", "@a", "`a", "?a", ",a"]) expect(isValidKey(k), k).toBe(false);
   });
 
   it("splits typed lists", () => {

@@ -115,7 +115,7 @@ export function AssistantPanel() {
     if (!q || busy) return;
     s().set({ pendingAsk: null });
     if (typeof q === "string") send(q);
-    else send(q.text, { pageTitle: q.pageTitle, tools: q.tools });
+    else send(q.text, { pageTitle: q.pageTitle, tools: q.tools, display: q.display });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingAsk, busy]);
 
@@ -165,14 +165,14 @@ export function AssistantPanel() {
     return results;
   };
 
-  async function send(textArg?: string, opts: { pageTitle?: string; tools?: boolean } = {}) {
+  async function send(textArg?: string, opts: { pageTitle?: string; tools?: boolean; display?: string } = {}) {
     const text = (textArg ?? input).trim();
     const tools = opts.tools ?? useTools;
     if (!text || busy) return;
     setInput("");
     setBusy(true);
     stick.current = true;
-    setTurns((ts) => [...ts, { id: uid(), kind: "user", text }]);
+    setTurns((ts) => [...ts, { id: uid(), kind: "user", text: opts.display ?? text }]);
     const turnStart = history.current.length;
     history.current.push({ role: "user", content: text });
     try {

@@ -4,7 +4,7 @@
 
 use std::collections::HashSet;
 
-use chrono::NaiveDate;
+use chrono::{DateTime, Local, NaiveDate, NaiveTime, TimeZone, Utc};
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
@@ -65,6 +65,24 @@ pub struct TaskFilter {
     /// Tag of the task itself or written outside task lines on its page.
     pub tag: Option<String>,
     pub page_id: Option<i64>,
+    /// Only tasks on pages saved since then: a local day `YYYY-MM-DD` (from its midnight) or
+    /// an RFC 3339 time. Tasks are derived from Markdown, so this is the closest to “done since”.
+    pub changed_since: Option<String>,
+}
+
+/// `changed_since` as a UTC timestamp comparable with `pages.updated_at`.
+fn changed_since_ts<Tz: TimeZone>(s: &str, tz: &Tz) -> Result<String> {
+    let s = s.trim();
+    let t = if let Some(d) = (s.len() == 10).then(|| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()).flatten() {
+        let midnight = d.and_time(NaiveTime::MIN);
+        tz.from_local_datetime(&midnight)
+            .earliest()
+            .or_else(|| tz.from_local_datetime(&(midnight + chrono::Duration::hours(1))).earliest())
+            .map(|t| t.with_timezone(&Utc))
+    } else {
+        DateTime::parse_from_rfc3339(s).ok().map(|t| t.with_timezone(&Utc))
+    };
+    t.map(crate::db::ts).ok_or_else(|| Error::Parse(format!("'changed_since' muss YYYY-MM-DD oder RFC 3339 sein: {s}")))
 }
 
 fn parse_date(s: &str) -> Option<String> {
@@ -201,6 +219,12 @@ impl Database {
             TaskStatus::All => None,
         };
         let tag = f.tag.as_deref().map(|t| t.trim().trim_start_matches('#').to_lowercase()).filter(|t| !t.is_empty());
+        let since = f
+            .changed_since
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| changed_since_ts(s, &Local))
+            .transpose()?;
         // Checkboxes in templates („Vorlagen“ and everything below it) are blueprints, not tasks.
         let mut st = self.conn().prepare_cached(
             "WITH RECURSIVE tpl(id) AS (
@@ -217,10 +241,11 @@ impl Database {
                AND (?2 IS NULL OR t.due <= ?2)
                AND (?3 IS NULL OR instr(' ' || t.tags || ' ', ' ' || ?3 || ' ') > 0)
                AND (?4 IS NULL OR t.page_id = ?4)
+               AND (?6 IS NULL OR p.updated_at >= ?6)
              ORDER BY t.done, t.due IS NULL, t.due, t.priority DESC, p.title COLLATE NOCASE, t.page_id, t.ordinal",
         )?;
         let rows = st
-            .query_map(params![done, f.due_before, tag, f.page_id, crate::templates::TEMPLATES_TITLE], |r| {
+            .query_map(params![done, f.due_before, tag, f.page_id, crate::templates::TEMPLATES_TITLE, since], |r| {
                 let tags: String = r.get(9)?;
                 Ok(Task {
                     page_id: r.get(0)?,
@@ -350,6 +375,31 @@ mod tests {
         assert_eq!(db.list_tasks(&all).unwrap().len(), 1);
         db.trash_page(p.id).unwrap();
         assert!(db.list_tasks(&all).unwrap().is_empty());
+    }
+
+    #[test]
+    fn changed_since_limits_to_recently_saved_pages() {
+        let db = Database::open_in_memory().unwrap();
+        let old = db.create_page(None, "Alt", None).unwrap();
+        let new = db.create_page(None, "Neu", None).unwrap();
+        db.save_page_content(old.id, "- [x] Längst erledigt").unwrap();
+        db.save_page_content(new.id, "- [x] Diese Woche").unwrap();
+        db.conn().execute("UPDATE pages SET updated_at = '2026-09-01T10:00:00Z' WHERE id = ?1", [old.id]).unwrap();
+        db.conn().execute("UPDATE pages SET updated_at = '2026-09-21T06:00:00Z' WHERE id = ?1", [new.id]).unwrap();
+        let done = |since: &str| {
+            let f = TaskFilter { status: TaskStatus::Done, changed_since: Some(since.into()), ..Default::default() };
+            db.list_tasks(&f).unwrap().into_iter().map(|t| t.text).collect::<Vec<_>>()
+        };
+        assert_eq!(done("2026-09-21T00:00:00Z"), ["Diese Woche"]);
+        assert_eq!(done("2026-08-01T00:00:00+02:00").len(), 2);
+        assert_eq!(done("").len(), 2, "empty does not filter");
+        let bad = TaskFilter { changed_since: Some("letzte Woche".into()), ..Default::default() };
+        assert!(db.list_tasks(&bad).is_err());
+
+        // A local day starts at local midnight.
+        let cet = chrono::FixedOffset::east_opt(7200).unwrap();
+        assert_eq!(changed_since_ts("2026-09-21", &cet).unwrap(), "2026-09-20T22:00:00Z");
+        assert_eq!(changed_since_ts("2026-09-21T08:00:00+02:00", &cet).unwrap(), "2026-09-21T06:00:00Z");
     }
 
     #[test]

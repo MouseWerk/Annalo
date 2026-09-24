@@ -3,7 +3,7 @@
 
 import { Tag, Timer, History } from "lucide-react";
 import { api } from "../lib/api";
-import { h1 } from "../lib/format";
+import { h2 } from "../lib/format";
 import { useApp } from "../store/app";
 import { rankLeistungsarten, rankRefs, recentRefs, refOptions, remainingHint, type RefOption } from "./zeit-suggest";
 import type { ZeitSuggestItem } from "./extensions";
@@ -37,6 +37,11 @@ function load(): Promise<ZeitData> {
   return data;
 }
 
+/** Drops the cached data, e.g. when the quick-capture window (with its own store) is shown again. */
+export function resetZeitCache() {
+  cache = null;
+}
+
 const icon = (C: typeof Timer) => <C size={15} strokeWidth={1.75} />;
 
 export async function zeitRefItems(query: string): Promise<ZeitSuggestItem[]> {
@@ -50,7 +55,7 @@ export async function zeitRefItems(query: string): Promise<ZeitSuggestItem[]> {
         id: o.ref,
         title: o.title ? `${o.ref} · ${o.title}` : o.ref,
         subtitle: isRecent ? o.project : undefined,
-        hint: remainingHint(o, h1),
+        hint: remainingHint(o, h2),
         section: isRecent ? "Zuletzt gebucht" : o.project,
         icon: icon(isRecent ? History : Timer),
         insert: o.ref,

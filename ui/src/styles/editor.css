@@ -60,7 +60,6 @@
 
 .props { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; margin: 10px 0 22px; font-size: var(--fs-sm); }
 .prop { display: inline-flex; align-items: center; gap: 5px; }
-.prop-btn { border: 0; background: none; color: var(--text-3); padding: 0; text-decoration: underline dotted; text-underline-offset: 3px; }
 .tag-chip {
   display: inline-flex;
   align-items: center;
@@ -95,14 +94,24 @@ input.prop-value-input[type="date"] { width: auto; color-scheme: light dark; }
 .prop-remove { opacity: 0; margin-top: 2px; }
 .prop-row:hover .prop-remove, .prop-row:focus-within .prop-remove { opacity: 1; }
 .prop-list { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; width: 100%; min-height: 26px; }
-.prop-chip { display: inline-flex; align-items: center; gap: 2px; height: 22px; padding: 0 3px 0 8px; border-radius: var(--r-xs); background: var(--accent-soft); color: var(--accent-text); font-size: var(--fs-sm); }
+/* Like .tag-chip in the meta line. */
+.prop-chip { display: inline-flex; align-items: center; gap: 2px; height: 22px; padding: 0 3px 0 7px; border-radius: var(--r-xs); background: var(--accent-soft); color: var(--accent-text); font-size: var(--fs-xs); font-weight: 500; }
+.prop-chip-hash { margin-right: -1px; opacity: 0.75; }
 .prop-chip button { display: grid; place-items: center; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 3px; background: none; color: inherit; opacity: 0.7; }
 .prop-chip button:hover { opacity: 1; background: var(--bg-hover); }
 .prop-list-input { flex: 1; width: auto; min-width: 80px; }
+.prop-row.is-wbs .prop-value-input { font-family: var(--font-mono); font-size: var(--fs-sm); }
+.prop-row.is-wbs .prop-value > .prop-value-input:first-child, .prop-combo { flex: 0 1 26ch; min-width: 0; }
+.prop-combo { position: relative; }
+.prop-combo .prop-value-input { width: 100%; }
+.prop-sugg { position: absolute; top: calc(100% + 4px); left: 0; z-index: 40; }
+.prop-key-hint { grid-column: 2 / -1; padding: 0 6px 4px; color: var(--danger); font-size: var(--fs-xs); }
+.prop-key[aria-invalid="true"] { box-shadow: 0 0 0 1px var(--danger); }
 .prop-picker { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; width: 100%; padding: 4px 0 2px; }
 .prop-picker .select { width: auto; max-width: 100%; min-width: 0; flex: 1 1 180px; }
 .prop-add { display: inline-flex; align-items: center; gap: 6px; justify-self: start; height: 28px; padding: 0 8px 0 7px; border: 0; border-radius: var(--r-sm); background: none; color: var(--text-3); font-size: var(--fs-sm); }
 .prop-add:hover { background: var(--bg-hover); color: var(--text-2); }
+.props .prop-add { height: 22px; margin-left: -7px; }
 
 /* Work card: the Vorgang a page is linked to */
 .work-card { display: grid; gap: 8px; margin: -8px 0 24px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--bg-raised); font-size: var(--fs-md); }
@@ -113,7 +122,6 @@ input.prop-value-input[type="date"] { width: auto; color-scheme: light dark; }
 .work-toggle { margin: 0; }
 .work-entries { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; font-size: var(--fs-sm); }
 .work-entries li { display: grid; grid-template-columns: 76px 56px minmax(0, 1fr); gap: 8px; padding: 3px 0; border-top: 1px solid var(--border); }
-.work-entries li.own .work-entry-desc { color: var(--accent-text); }
 .work-entry-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ------------------------------------------------------------------ prose */
@@ -277,7 +285,8 @@ input.prop-value-input[type="date"] { width: auto; color-scheme: light dark; }
 .sugg-text { flex: 1; min-width: 0; display: grid; }
 .sugg-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sugg-sub { color: var(--text-3); font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sugg-hint { color: var(--text-3); font-size: var(--fs-xs); font-family: var(--font-mono); }
+.sugg.zeit { width: 420px; max-width: calc(100vw - 16px); }
+.sugg-hint { flex: none; color: var(--text-3); font-size: var(--fs-xs); font-family: var(--font-ui); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .sugg-empty { padding: 12px; color: var(--text-3); text-align: center; }
 
 /* ------------------------------------------------------------- backlinks */

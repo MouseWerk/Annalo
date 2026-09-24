@@ -21,7 +21,7 @@ const saved = (pattern, msg) =>
 
 /** Adds a property through the editor UI and focuses its value. */
 const addProperty = async (key) => {
-  const add = (await (await app.$(".pane.active .properties .prop-add")).isExisting()) ? ".pane.active .properties .prop-add" : ".pane.active .props .prop-btn";
+  const add = (await (await app.$(".pane.active .properties .prop-add")).isExisting()) ? ".pane.active .properties .prop-add" : ".pane.active .props .prop-add";
   await app.click(add);
   await focused('input[aria-label="Name der neuen Eigenschaft"]');
   await app.type(key);
@@ -80,12 +80,24 @@ test("properties are edited in the editor UI and saved with the note", async () 
   await addProperty("tags");
   await app.type("kunde");
   await app.keys(["Enter"]);
-  await app.waitText(`${row("tags")} .prop-chip`, /kunde/);
+  await app.waitText(`${row("tags")} .prop-chip`, /#\s*kunde/);
+  // The tags property shows its chips; the meta line does not repeat them.
+  await app.browser.waitUntil(async () => !(await (await app.$(".pane.active .props .tag-chip")).isExisting()), { timeoutMsg: "tag shown twice" });
 
   await addProperty("status");
   await app.type("aktiv");
   await app.keys(["Enter"]);
   await saved(/^---\nvorgang: NP-8801\/1020\ntags: \[kunde\]\nstatus: aktiv\n---\n/, "new properties not saved");
+
+  // Invalid names are rejected with a hint.
+  await app.keys(["Control", ";"]);
+  await focused('input[aria-label="Name der neuen Eigenschaft"]');
+  await app.type("#x");
+  await app.waitText(".pane.active .properties .prop-key-hint", /Ungültiger Name/);
+  await app.keys(["Enter"]);
+  assert.ok(await (await app.$('input[aria-label="Name der neuen Eigenschaft"]')).isExisting(), "invalid name not taken");
+  await app.keys(["Escape"]);
+  assert.doesNotMatch(await content(), /#x/);
 
   // Rename a key.
   const key = await app.$(`${row("status")} .prop-key`);
@@ -106,6 +118,20 @@ test("properties are edited in the editor UI and saved with the note", async () 
   await app.browser.execute((s) => document.querySelector(s)?.click(), `${row("phase")} .prop-remove`);
   await saved(/^---\nvorgang: NP-8801\/1020\ntags: \[kunde\]\n---\n/, "removal not saved");
   await app.shot("page-properties");
+});
+
+test("the Vorgang field suggests references (↓ Enter)", async () => {
+  const input = `${row("vorgang")} .prop-value-input`;
+  await app.click(input);
+  await app.keys(["Control", "a"]);
+  await app.type("Anforderung");
+  await app.waitText(".pane.active .prop-sugg .sugg-item.sel", /NP-8801\/1010 · Anforderungsanalyse/);
+  await app.keys(["Enter"]);
+  await saved(/^---\nvorgang: NP-8801\/1010\n/, "suggested Vorgang not saved");
+  // Esc closes the list and keeps the value.
+  await app.keys(["Escape"]);
+  assert.equal(await (await app.$(".pane.active .prop-sugg")).isExisting(), false);
+  await app.waitText(".pane.active .work-card .work-title", /NP-8801\/1010/);
 });
 
 test("the Vorgang picker rewrites the reference and the card follows", async () => {

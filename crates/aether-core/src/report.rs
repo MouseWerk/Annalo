@@ -4,7 +4,7 @@
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap};
 
-use chrono::{NaiveDate, TimeZone};
+use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::db::{Database, EntryFilter};
@@ -47,6 +47,16 @@ pub struct SummaryItem {
     pub descriptions: Vec<String>,
 }
 
+/// First instant of local day `d`. `resolve` maps a local time to UTC (earliest of an
+/// ambiguous time, `None` inside a gap). Where midnight is skipped by a DST change
+/// (e.g. America/Santiago, Asia/Beirut), the day starts at the end of the gap, one hour later.
+fn day_start(d: NaiveDate, resolve: impl Fn(&NaiveDateTime) -> Option<DateTime<Utc>>) -> Result<DateTime<Utc>> {
+    let midnight = d.and_time(NaiveTime::MIN);
+    resolve(&midnight)
+        .or_else(|| resolve(&(midnight + Duration::hours(1))))
+        .ok_or_else(|| Error::State(format!("Ortszeit {midnight} existiert nicht")))
+}
+
 /// Summarizes the finished time entries whose start falls on the local days `from..=to`.
 /// Running timers are not counted.
 pub fn time_summary<Tz: TimeZone>(db: &Database, from: NaiveDate, to: NaiveDate, offset: &Tz) -> Result<TimeSummary> {
@@ -56,14 +66,8 @@ pub fn time_summary<Tz: TimeZone>(db: &Database, from: NaiveDate, to: NaiveDate,
     if (to - from).num_days() >= MAX_DAYS {
         return Err(Error::State(format!("Zeitraum länger als {MAX_DAYS} Tage")));
     }
-    let start_of = |d: NaiveDate| {
-        let dt = d.and_hms_opt(0, 0, 0).unwrap_or_default();
-        offset
-            .from_local_datetime(&dt)
-            .earliest()
-            .map(|t| t.with_timezone(&chrono::Utc))
-            .ok_or_else(|| Error::State(format!("ambiguous local time {dt}")))
-    };
+    let start_of =
+        |d: NaiveDate| day_start(d, |dt| offset.from_local_datetime(dt).earliest().map(|t| t.with_timezone(&Utc)));
     let end_day = to.succ_opt().ok_or_else(|| Error::State("date out of range".into()))?;
     let rows = db.list_time_entries(&EntryFilter {
         from: Some(start_of(from)?),
@@ -142,7 +146,7 @@ pub fn time_summary<Tz: TimeZone>(db: &Database, from: NaiveDate, to: NaiveDate,
 mod tests {
     use super::*;
     use crate::model::{EntrySource, NewTimeEntry};
-    use chrono::{FixedOffset, Utc};
+    use chrono::FixedOffset;
 
     fn cet() -> FixedOffset {
         FixedOffset::east_opt(2 * 3600).unwrap()
@@ -214,5 +218,19 @@ mod tests {
 
         assert!(time_summary(&db, day(22), day(21), &cet()).is_err());
         assert!(time_summary(&db, day(1), NaiveDate::from_ymd_opt(2027, 12, 1).unwrap(), &cet()).is_err());
+    }
+
+    #[test]
+    fn day_start_skips_a_missing_midnight() {
+        let d = day(6);
+        let utc = |dt: &NaiveDateTime| Some(dt.and_utc());
+        assert_eq!(day_start(d, utc).unwrap(), Utc.with_ymd_and_hms(2026, 9, 6, 0, 0, 0).unwrap());
+        // DST starts at midnight: 00:00–00:59 do not exist, the day starts at 01:00 (= 04:00 UTC at -3h).
+        let gap = |dt: &NaiveDateTime| {
+            (dt.time() >= NaiveTime::from_hms_opt(1, 0, 0).unwrap()).then(|| dt.and_utc() + Duration::hours(3))
+        };
+        assert_eq!(day_start(d, gap).unwrap(), Utc.with_ymd_and_hms(2026, 9, 6, 4, 0, 0).unwrap());
+        let err = day_start(d, |_| None).unwrap_err().to_string();
+        assert!(err.contains("existiert nicht"), "{err}");
     }
 }

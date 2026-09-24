@@ -1,19 +1,20 @@
 // A note: title, icon, properties, editor and backlinks.
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, Columns2, Printer, CornerDownRight, FileText, Hash, Link2, MoreHorizontal, PencilLine, SmilePlus, Star, Trash2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Columns2, Printer, CornerDownRight, FileText, Hash, Link2, MoreHorizontal, Plus, PencilLine, SmilePlus, Star, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import { useApp, type Tab } from "../store/app";
 import { ViewHeader } from "../components/ViewHeader";
 import { NoteEditor, flushAllEditors, reloadEditors, type NoteEditorHandle } from "../editor/NoteEditor";
 import { splitFrontmatter } from "../editor/extensions";
+import { parseFrontmatter } from "../lib/frontmatter";
 import { PAGE_ICONS, PageIcon } from "../components/icons";
 import { Button, EmptyState, IconButton, Spinner, useMenu } from "../components/ui";
 import { addDays, dateLong, isoDay, relative } from "../lib/format";
 import { linkContext } from "../components/linkContext";
 import type { PageDoc } from "../lib/types";
 import { restorePage } from "./TrashView";
-import { PropertyEditor, WorkCard, pageReference } from "./PageProperties";
+import { ADD_PROPERTY_EVENT, PropertyEditor, WorkCard, pageReference } from "./PageProperties";
 
 export function PageView({ pageId, tab, active }: { pageId: number; tab: Tab; active: boolean }) {
   const [doc, setDoc] = useState<PageDoc | null>(null);
@@ -45,6 +46,14 @@ export function PageView({ pageId, tab, active }: { pageId: number; tab: Tab; ac
       handle.current?.flush();
     };
   }, [pageId]);
+
+  // Palette „Eigenschaft hinzufügen“ / Ctrl+; acts on the focused pane's page.
+  useEffect(() => {
+    if (!active) return;
+    const onAdd = () => setAddingProp(true);
+    window.addEventListener(ADD_PROPERTY_EVENT, onAdd);
+    return () => window.removeEventListener(ADD_PROPERTY_EVENT, onAdd);
+  }, [active]);
 
   // The focused pane drives the outline, links panel and assistant context.
   useEffect(() => {
@@ -326,7 +335,9 @@ function Properties({ doc, fm, onAdd }: { doc: PageDoc; fm: string; onAdd: () =>
   const { body } = splitFrontmatter(doc.content);
   // Inline #tags are already clickable in the text; only show the others (frontmatter tags).
   const lower = body.toLowerCase();
-  const extraTags = doc.tags.filter((t) => !lower.includes(`#${t.toLowerCase()}`));
+  // A `tags:` property shows its own chips below: do not repeat them here.
+  const hasTagsProp = parseFrontmatter(fm).some((p) => /^tags?$/i.test(p.key));
+  const extraTags = hasTagsProp ? [] : doc.tags.filter((t) => !lower.includes(`#${t.toLowerCase()}`));
   return (
     <div className="props">
       <span className="prop faint">Bearbeitet {relative(doc.updated_at)}</span>
@@ -337,8 +348,8 @@ function Properties({ doc, fm, onAdd }: { doc: PageDoc; fm: string; onAdd: () =>
         </button>
       ))}
       {!fm && (
-        <button type="button" className="prop prop-btn" onClick={onAdd}>
-          Eigenschaft hinzufügen
+        <button type="button" className="prop-add" onClick={onAdd} title="Eigenschaft hinzufügen (Ctrl+;)">
+          <Plus size={13} /> Eigenschaft hinzufügen
         </button>
       )}
     </div>

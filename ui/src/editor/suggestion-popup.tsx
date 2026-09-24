@@ -21,9 +21,11 @@ interface PopupProps {
   items: PopupItem[];
   command: (item: PopupItem) => void;
   empty?: string;
+  /** Extra class on the list, e.g. `zeit` for the wider /zeit popup. */
+  className?: string;
 }
 
-export const SuggestionPopup = forwardRef<PopupHandle, PopupProps>(({ items, command, empty }, ref) => {
+export const SuggestionPopup = forwardRef<PopupHandle, PopupProps>(({ items, command, empty, className }, ref) => {
   const [sel, setSel] = useState(0);
   const list = useRef<HTMLDivElement>(null);
   useEffect(() => setSel(0), [items]);
@@ -50,7 +52,7 @@ export const SuggestionPopup = forwardRef<PopupHandle, PopupProps>(({ items, com
   }));
   let lastSection: string | undefined;
   return (
-    <div className="sugg" ref={list} role="listbox">
+    <div className={className ? `sugg ${className}` : "sugg"} ref={list} role="listbox">
       {items.length === 0 && <div className="sugg-empty">{empty ?? "Keine Treffer"}</div>}
       {items.map((it, i) => {
         const header = it.section && it.section !== lastSection ? it.section : null;
@@ -87,7 +89,7 @@ export const SuggestionPopup = forwardRef<PopupHandle, PopupProps>(({ items, com
  * Mounts a SuggestionPopup next to the caret and forwards keyboard events.
  * With `empty === null` the popup hides while nothing matches (and keys pass through).
  */
-export function popupRenderer<I extends PopupItem>(empty?: string | null): SuggestionOptions<I>["render"] {
+export function popupRenderer<I extends PopupItem>(empty?: string | null, className?: string): SuggestionOptions<I>["render"] {
   return () => {
     let renderer: ReactRenderer<PopupHandle, PopupProps> | null = null;
     let host: HTMLDivElement | null = null;
@@ -98,7 +100,8 @@ export function popupRenderer<I extends PopupItem>(empty?: string | null): Sugge
       if (!rect) return;
       const h = host.offsetHeight || 280;
       const below = rect.bottom + 6 + h < window.innerHeight;
-      host.style.left = `${Math.min(rect.left, window.innerWidth - 340)}px`;
+      const w = host.offsetWidth || 340;
+      host.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - w - 20))}px`;
       host.style.top = below ? `${rect.bottom + 6}px` : `${rect.top - h - 6}px`;
     };
     return {
@@ -108,13 +111,13 @@ export function popupRenderer<I extends PopupItem>(empty?: string | null): Sugge
         document.body.appendChild(host);
         renderer = new ReactRenderer(SuggestionPopup, {
           editor: props.editor,
-          props: { items: props.items, command: props.command as (i: PopupItem) => void, empty: empty ?? undefined },
+          props: { items: props.items, command: props.command as (i: PopupItem) => void, empty: empty ?? undefined, className },
         });
         host.appendChild(renderer.element);
         requestAnimationFrame(() => place(props));
       },
       onUpdate: (props) => {
-        renderer?.updateProps({ items: props.items, command: props.command as (i: PopupItem) => void, empty: empty ?? undefined });
+        renderer?.updateProps({ items: props.items, command: props.command as (i: PopupItem) => void, empty: empty ?? undefined, className });
         requestAnimationFrame(() => place(props));
       },
       onKeyDown: (props) => {

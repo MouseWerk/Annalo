@@ -13,13 +13,16 @@ export interface ZeitToken {
 }
 
 const ZEIT_PREFIX = /^\s*\/(?:zeit|time)\s+/i;
+/** A duration as first argument (`1.5h`, `90min`, `1:30`): the page's own Vorgang is booked. */
+export const DURATION_RE = /^\d+([.,]\d+)?(h|std|m|min)$|^\d{1,2}:\d{2}$/i;
 
 /** Finds the token at the caret, given the paragraph text before it; null when nothing is to complete. */
 export function zeitToken(before: string): ZeitToken | null {
   const m = ZEIT_PREFIX.exec(before);
   if (!m) return null;
   const rest = before.slice(m[0].length);
-  if (!/\s/.test(rest)) return { kind: "ref", query: rest, from: m[0].length };
+  // No reference to complete when the command starts with the duration (linked pages).
+  if (!/\s/.test(rest)) return DURATION_RE.test(rest) ? null : { kind: "ref", query: rest, from: m[0].length };
   const word = /\S*$/.exec(rest)![0];
   if (word.startsWith("#")) return { kind: "la", query: word.slice(1), from: before.length - word.length };
   return null;

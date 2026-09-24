@@ -3,13 +3,14 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  ArrowLeft, ArrowRight, Columns2, Plus, Briefcase, CalendarCheck2, Download, FilePlus2, FolderInput, Hash, Moon, PanelLeft, PanelRight, RefreshCw, Search, Settings, Sparkles, Square, Timer, Trash2, Play, Focus, ListChecks, LayoutTemplate, Mail,
+  ArrowLeft, ArrowRight, Columns2, Plus, Briefcase, CalendarCheck2, Download, FilePlus2, FolderInput, Hash, Moon, PanelLeft, PanelRight, RefreshCw, Search, Settings, Sparkles, Square, Timer, Trash2, Play, Focus, ListChecks, LayoutTemplate, Mail, ListPlus,
 } from "lucide-react";
 import { api } from "../lib/api";
 import { useApp, savePref } from "../store/app";
 import { openAssistant, openToday } from "./Ribbon";
 import { PageIcon } from "./icons";
 import { createSubpage } from "../views/PageView";
+import { requestAddProperty } from "../views/PageProperties";
 import { stopTimer } from "./Sidebar";
 import { hoursFromMinutes, isoDay, isoWeek, weekStart } from "../lib/format";
 import type { SearchHit } from "../lib/types";
@@ -159,6 +160,9 @@ export function CommandPalette() {
         hint: "Ctrl Shift D",
         run: () => openToday(),
       },
+      ...(s().tabs.find((t) => t.id === s().activeTabId)?.kind === "page"
+        ? [{ id: "add-property", title: "Eigenschaft hinzufügen", subtitle: "Zur aktuellen Seite", icon: ic(ListPlus), hint: "Ctrl ;", run: () => setTimeout(requestAddProperty, 0) }]
+        : []),
       { id: "newtab", title: "Neuer Tab", icon: ic(Plus), hint: "Ctrl T", run: () => s().openTab({ kind: "home" }, { newTab: true }) },
       { id: "split", title: "Rechts teilen", icon: ic(Columns2), run: () => s().activeTabId && s().splitTab(s().activeTabId) },
       { id: "search", title: "In allen Notizen suchen", icon: ic(Search), hint: "Ctrl Shift F", run: () => { if (!s().sidebarOpen) { s().set({ sidebarOpen: true }); savePref("aether.sidebar", true); } setTimeout(() => window.dispatchEvent(new Event("aether:sidebar-search")), 30); } },
@@ -312,11 +316,11 @@ export function askWeeklyReport(now = new Date()) {
   const kw = isoWeek(now);
   const text = [
     `Erstelle eine Status-E-Mail auf Deutsch für KW ${kw} (${from} bis ${to}).`,
-    `Hole die gebuchten Stunden mit dem Werkzeug time_summary (from "${from}", to "${to}") und die erledigten Aufgaben mit list_tasks (status "done").`,
+    `Hole die gebuchten Stunden mit dem Werkzeug time_summary (from "${from}", to "${to}") und die erledigten Aufgaben mit list_tasks (status "done", changed_since "${from}").`,
     "Gliederung: Betreff, kurze Zusammenfassung, Erledigt je Netzplan/Vorgang mit Stunden und Stichpunkten aus den Buchungstexten, erledigte Aufgaben, nächste Schritte, Summe der Stunden.",
     "Antworte nur mit der E-Mail in Markdown, ohne Vorbemerkung.",
   ].join("\n");
-  useApp.getState().set({ panelOpen: true, panelTab: "assistant", pendingAsk: { text, pageTitle: `Wochenbericht KW ${kw}`, tools: true } });
+  useApp.getState().set({ panelOpen: true, panelTab: "assistant", pendingAsk: { text, display: `Wochenbericht KW ${kw}`, pageTitle: `Wochenbericht KW ${kw}`, tools: true } });
 }
 
 const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");

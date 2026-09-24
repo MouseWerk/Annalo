@@ -11,6 +11,7 @@ import { Resizer, readSize } from "./components/Resizer";
 import { CommandPalette } from "./components/CommandPalette";
 import { RightPanel } from "./panels/RightPanel";
 import { createSubpage } from "./views/PageView";
+import { requestAddProperty } from "./views/PageProperties";
 import { flushAllEditors, reloadEditors } from "./editor/NoteEditor";
 import type { ActivityTick } from "./lib/types";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -136,6 +137,7 @@ export function App() {
           st.set({ panelOpen: !st.panelOpen });
           savePref("aether.panel", !st.panelOpen);
         });
+      else if (mod && e.key === ";") run(() => requestAddProperty());
       else if (mod && e.key === ".") run(() => st.set({ focusMode: !st.focusMode }));
       else if (mod && e.key === ",") run(() => st.openTab({ kind: "settings" }));
       else if (e.key === "Escape" && st.focusMode && !st.paletteOpen) st.set({ focusMode: false });
@@ -206,7 +208,9 @@ export function App() {
   };
 
   const showSidebar = sidebarOpen && !focus;
-  const showPanel = panelOpen && !focus;
+  // The welcome choice fills the window: no assistant/outline panel next to it.
+  const onboardingShown = useApp((st) => st.onboarding && st.tree.length === 0 && (st.tabs.find((t) => t.id === st.activeTabId)?.kind ?? "home") === "home");
+  const showPanel = panelOpen && !focus && !onboardingShown;
   const style = { "--sidebar-w": `${sideW}px`, "--panel-w": `${panelW}px` } as React.CSSProperties;
   return (
     <div className={`app ${focus ? "focus" : ""}`} style={style}>

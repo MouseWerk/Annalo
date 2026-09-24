@@ -16,6 +16,7 @@ type SideTab = "files" | "search" | "bookmarks" | "tags";
 
 export function Sidebar() {
   const tree = useApp((s) => s.tree);
+  const onboarding = useApp((s) => s.onboarding);
   const pages = useApp((s) => s.pages);
   const active = useApp((s) => s.tabs.find((t) => t.id === s.activeTabId) ?? null);
   const [tab, setTabState] = useState<SideTab>(() => (localStorage.getItem("aether.sidetab") as SideTab) || "files");
@@ -72,7 +73,8 @@ export function Sidebar() {
           </div>
           <div className="sidebar-scroll">
             {tree.length === 0 ? (
-              <div className="side-empty">
+              // During onboarding the welcome choice explains the empty workspace.
+              !onboarding && <div className="side-empty">
                 Noch keine Seiten.
                 <Button size="sm" icon={FilePlus2} onClick={() => createSubpage(null)}>
                   Neue Seite

@@ -1,7 +1,7 @@
 // First start: choose between sample data, an empty workspace and an Obsidian import.
 
-import { useState } from "react";
-import { FolderInput, LayoutDashboard, Server, Sparkles, SquareDashed } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { FilePlus2, FolderInput, LayoutDashboard, Server, Sparkles } from "lucide-react";
 import { api } from "../lib/api";
 import { importVault } from "../lib/actions";
 import { useApp } from "../store/app";
@@ -28,7 +28,7 @@ export function Onboarding() {
   };
   const choices = [
     {
-      icon: SquareDashed,
+      icon: FilePlus2,
       title: "Leer starten",
       text: "Ein leerer Arbeitsbereich für deine eigenen Notizen und Projekte.",
       run: () => finish(false),
@@ -49,6 +49,23 @@ export function Onboarding() {
       run: () => finish(true),
     },
   ];
+  const first = useRef<HTMLButtonElement>(null);
+  const run = useRef(choices.map((c) => c.run));
+  run.current = choices.map((c) => c.run);
+  useEffect(() => {
+    first.current?.focus();
+    // 1 / 2 / 3 pick a choice (not while typing somewhere else, e.g. the palette).
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (e.ctrlKey || e.metaKey || e.altKey || t?.closest("input, textarea, [contenteditable], .overlay")) return;
+      const i = ["1", "2", "3"].indexOf(e.key);
+      if (i < 0) return;
+      e.preventDefault();
+      run.current[i]?.();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   return (
     <div className="home">
       <div className="home-inner onboarding">
@@ -58,8 +75,11 @@ export function Onboarding() {
         <h1>Willkommen bei AETHER OS</h1>
         <p className="muted">Notizen, Projekte und Zeiterfassung an einem Ort. Wie möchtest du beginnen?</p>
         <div className="onb-choices">
-          {choices.map((c) => (
-            <button key={c.title} type="button" className="onb-choice" disabled={busy} onClick={c.run}>
+          {choices.map((c, i) => (
+            <button key={c.title} ref={i === 0 ? first : undefined} type="button" className="onb-choice" disabled={busy} onClick={c.run} aria-keyshortcuts={String(i + 1)}>
+              <kbd className="onb-key" aria-hidden>
+                {i + 1}
+              </kbd>
               <c.icon size={20} strokeWidth={1.75} />
               <span className="onb-title">{c.title}</span>
               <span className="onb-text">{c.text}</span>

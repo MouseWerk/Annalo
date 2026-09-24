@@ -15,6 +15,7 @@ import { isoDay } from "../lib/format";
 import { popupRenderer, type PopupItem } from "./suggestion-popup";
 import { PageIcon } from "../components/icons";
 import { zeitToken } from "./zeit-suggest";
+import { FIRST_LINE_RE } from "../lib/frontmatter";
 
 // ------------------------------------------------------------- wiki links
 
@@ -539,7 +540,7 @@ export const ZeitSuggest = Extension.create<{
             .setTextSelection(range.from + props.insert.length + 1)
             .run();
         },
-        render: popupRenderer<ZeitSuggestItem>(null),
+        render: popupRenderer<ZeitSuggestItem>(null, "zeit"),
       }),
     ];
   },
@@ -603,7 +604,7 @@ export const TagHighlight = Extension.create<{ onOpen: (tag: string) => void }>(
 export function splitFrontmatter(md: string): { frontmatter: string; body: string } {
   const m = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(md);
   // A leading horizontal rule is not frontmatter: the first line must be a `key:`.
-  if (!m || !/^[\w-]+\s*:/.test(m[1].split(/\r?\n/)[0])) return { frontmatter: "", body: md };
+  if (!m || !FIRST_LINE_RE.test(m[1].split(/\r?\n/)[0])) return { frontmatter: "", body: md };
   return { frontmatter: m[0].endsWith("\n") ? m[0] : m[0] + "\n", body: md.slice(m[0].length).replace(/^\r?\n/, "") };
 }
 

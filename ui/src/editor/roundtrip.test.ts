@@ -132,6 +132,10 @@ describe("splitFrontmatter", () => {
     const md = "---\nNur ein Absatz\n---\nRest\n";
     expect(splitFrontmatter(md)).toEqual({ frontmatter: "", body: md });
   });
+  it("erkennt Schlüssel mit Umlauten und Leerzeichen", () => {
+    expect(splitFrontmatter("---\nPriorität: hoch\n---\nText\n")).toEqual({ frontmatter: "---\nPriorität: hoch\n---\n", body: "Text\n" });
+    expect(splitFrontmatter("---\ndue date: 2026-10-01\n---\n").frontmatter).toBe("---\ndue date: 2026-10-01\n---\n");
+  });
   it("ohne Frontmatter", () => {
     expect(splitFrontmatter("# Titel\n")).toEqual({ frontmatter: "", body: "# Titel\n" });
   });

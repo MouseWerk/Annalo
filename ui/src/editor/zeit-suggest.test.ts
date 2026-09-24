@@ -12,6 +12,12 @@ describe("zeitToken", () => {
     expect(zeitToken("/zeit NP-8801/1020 1h #")).toEqual({ kind: "la", query: "", from: 22 });
     expect(zeitToken("/zeit NP-8801/1020 1h #de")).toEqual({ kind: "la", query: "de", from: 22 });
   });
+  it("does not complete a duration typed as first argument", () => {
+    for (const t of ["/zeit 1:30", "/zeit 2h", "/zeit 1,5h", "/zeit 90min", "/zeit 1.5std"]) expect(zeitToken(t), t).toBeNull();
+    expect(zeitToken("/zeit 1:30 text")).toBeNull();
+    expect(zeitToken("/zeit 1")).toEqual({ kind: "ref", query: "1", from: 6 });
+    expect(zeitToken("/zeit 1:30 #de")).toEqual({ kind: "la", query: "de", from: 11 });
+  });
   it("stays quiet elsewhere", () => {
     for (const t of ["/zeit", "/zeitNP", "zeit NP", "text /zeit NP", "/zeit NP-8801 ", "/zeit NP-8801 1.5h", "/zeit NP 1h #DEV Text"]) expect(zeitToken(t), t).toBeNull();
   });

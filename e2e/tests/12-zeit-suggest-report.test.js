@@ -94,11 +94,13 @@ test("/zeit: the booked reference is suggested first; Escape closes the popup", 
 test("time_summary tool sums the week", async () => {
   const today = new Date();
   const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  const out = JSON.parse(await app.invoke("ai_run_workspace_tool", { name: "time_summary", arguments: JSON.stringify({ from: iso(today), to: iso(today) }) }));
+  // Yesterday too: a 1 h booking made shortly after midnight starts on the previous day.
+  const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
+  const out = JSON.parse(await app.invoke("ai_run_workspace_tool", { name: "time_summary", arguments: JSON.stringify({ from: iso(yesterday), to: iso(today) }) }));
   const item = out.items.find((i) => i.label === "NP-8801/1020");
   assert.ok(item.hours >= 1, JSON.stringify(out));
   assert.ok(item.descriptions.includes("Test"));
-  assert.equal(out.days.length, 1);
+  assert.ok(out.days.length >= 1 && out.days.length <= 2, JSON.stringify(out.days));
   await assert.rejects(app.invoke("ai_run_workspace_tool", { name: "time_summary", arguments: JSON.stringify({ from: "gestern", to: iso(today) }) }));
 });
 
@@ -123,7 +125,9 @@ test("palette „Wochenbericht erstellen“ asks the assistant with time_summary
   assert.match(user, /Status-E-Mail/);
   assert.match(user, /KW \d+/);
   assert.match(user, /time_summary \(from "\d{4}-\d{2}-\d{2}", to "\d{4}-\d{2}-\d{2}"\)/);
-  assert.match(await app.text(".msg-user"), /Wochenbericht|Status-E-Mail/);
+  assert.match(user, /list_tasks \(status "done", changed_since "\d{4}-\d{2}-\d{2}"\)/);
+  // The bubble shows a short label, not the internal prompt.
+  assert.match(await app.text(".msg-user"), /^Wochenbericht KW \d+$/);
   await app.shot("weekly-report");
 
   // „In neue Seite einfügen“ creates „Wochenbericht KW nn“ with the answer.

@@ -8,6 +8,7 @@ import { useApp } from "../store/app";
 import { applyTheme, exportVault, importVault, pickFolder } from "../lib/actions";
 import { fileSize, relative } from "../lib/format";
 import { Badge, Button, Field, IconButton, Input, Segmented, Select, Switch, TextArea } from "../components/ui";
+import { recordShortcut } from "../lib/shortcut";
 import type { BackupInfo, ConnectionTest, DesktopInfo, Page, Settings } from "../lib/types";
 
 type Section = "ai" | "time" | "notes" | "backup" | "desktop" | "appearance" | "about";
@@ -695,32 +696,43 @@ function DesktopSection({ draft, update }: { draft: Settings; update: (p: Partia
       <Group title="Feierabend-Erinnerung" description="Hinweis an Arbeitstagen, wenn weniger als das Tagessoll gebucht ist. Ein Klick darauf öffnet die Zeiterfassung. Läuft nach 20 Uhr noch ein Timer, erinnert AETHER OS einmal daran.">
         <Row label="Erinnern um">
           <div className="unit-input">
-            <Switch label="Feierabend-Erinnerung" checked={reminderOn} onChange={(v) => update({ reminder_time: v ? "17:30" : null })} />
             {reminderOn && (
               <Input
                 type="time"
+                className="time-input"
                 value={draft.reminder_time ?? ""}
                 onChange={(e) => update({ reminder_time: e.target.value || null })}
                 aria-label="Uhrzeit der Erinnerung"
               />
             )}
             <span className="faint">{reminderOn ? "Uhr" : "Aus"}</span>
+            <Switch label="Feierabend-Erinnerung" checked={reminderOn} onChange={(v) => update({ reminder_time: v ? "17:30" : null })} />
           </div>
         </Row>
       </Group>
       <Group title="Schnellerfassung" description="Ein kleines Fenster über allen anderen: Text landet in der heutigen Tagesnotiz, „todo …“ oder „- [ ] …“ als Aufgabe, „/zeit …“ wird gebucht.">
         <Row
           label="Tastenkürzel (global)"
-          description={
-            <>
-              z. B. Ctrl+Shift+Space. Ctrl+Alt meiden – das ist AltGr auf deutschen Tastaturen. Leer = aus.
-              {info && draft.capture_shortcut === view?.settings.capture_shortcut && (
-                info.capture_shortcut_active ? <Badge tone="success">Aktiv</Badge> : <Badge tone="warning">Nicht registriert</Badge>
-              )}
-            </>
-          }
+          description="Ins Feld klicken und die Tasten drücken, z. B. Ctrl+Shift+Space. Ctrl+Alt meiden – das ist AltGr auf deutschen Tastaturen. Entf = aus."
         >
-          <Input value={draft.capture_shortcut} onChange={(e) => update({ capture_shortcut: e.target.value })} placeholder="Ctrl+Shift+Space" aria-label="Tastenkürzel Schnellerfassung" className="mono" />
+          <div className="unit-input shortcut-input">
+            <Input
+              value={draft.capture_shortcut}
+              onChange={(e) => update({ capture_shortcut: e.target.value })}
+              onKeyDown={(e) => {
+                const next = recordShortcut(e.nativeEvent);
+                if (next === undefined) return;
+                e.preventDefault();
+                if (next !== null) update({ capture_shortcut: next });
+              }}
+              placeholder="Tasten drücken …"
+              aria-label="Tastenkürzel Schnellerfassung"
+              className="mono"
+            />
+            {info && draft.capture_shortcut === view?.settings.capture_shortcut && (
+              info.capture_shortcut_active ? <Badge tone="success">Aktiv</Badge> : <Badge tone="warning">Nicht registriert</Badge>
+            )}
+          </div>
         </Row>
       </Group>
     </>

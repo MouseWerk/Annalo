@@ -565,7 +565,7 @@ button.side-section-title:hover { color: var(--text-2); }
 
 /* ------------------------------------------------------------------ views */
 
-.view-scroll, .page-scroll { height: 100%; overflow-y: auto; }
+.view-scroll, .page-scroll { height: 100%; overflow-y: auto; scrollbar-gutter: stable; }
 .view { max-width: 1120px; margin: 0 auto; padding: 32px 40px 80px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; align-content: start; }
 .view > * { min-width: 0; }
 .view.narrow { max-width: 760px; }
@@ -723,6 +723,8 @@ button.side-section-title:hover { color: var(--text-2); }
 .model-input { display: grid; gap: 4px; justify-items: end; }
 .unit-input { display: flex; align-items: center; gap: 8px; }
 .unit-input .input { width: 80px; text-align: right; }
+.unit-input .input.time-input { width: 96px; text-align: left; }
+.shortcut-input .input { width: 220px; text-align: left; caret-color: transparent; }
 .map-list { display: grid; padding: 8px 0; gap: 4px; }
 .map-row { display: flex; align-items: center; gap: 10px; min-height: 34px; }
 .map-row .input { flex: 1; }
@@ -803,6 +805,7 @@ button.side-section-title:hover { color: var(--text-2); }
 .onb-mark { width: 44px; height: 44px; display: grid; place-items: center; border-radius: var(--r-lg); background: var(--accent-soft); color: var(--accent-text); margin-bottom: 18px; }
 .onb-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-top: 28px; }
 .onb-choice {
+  position: relative;
   display: grid;
   justify-items: start;
   align-content: start;
@@ -818,6 +821,7 @@ button.side-section-title:hover { color: var(--text-2); }
 .onb-choice:hover:not(:disabled) { border-color: var(--border-strong); transform: translateY(-1px); color: var(--text-2); }
 .onb-choice:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .onb-choice svg { color: var(--text-2); margin-bottom: 4px; }
+.onb-key { position: absolute; top: 12px; right: 12px; }
 .onb-title { font-weight: 600; color: var(--text); }
 .onb-text { font-size: var(--fs-sm); line-height: 1.5; }
 .onb-server { display: inline-flex; align-items: center; gap: 6px; margin-top: 22px; padding: 4px 6px; border: 0; border-radius: var(--r-sm); background: none; color: var(--text-3); font-size: var(--fs-sm); }
@@ -833,7 +837,8 @@ button.side-section-title:hover { color: var(--text-2); }
   body, .app { background: #fff !important; height: auto !important; overflow: visible !important; }
   .app { display: block !important; }
   .ribbon, .sidebar, .panel, .resizer, .statusbar, .tabbar, .vh, .toasts, .pane:not(.active), .find-anchor, .bubble,
-  .timer-card, .bulk, .row-actions, .entry .icon-btn, .view-actions, .icon-picker, .props .prop-btn { display: none !important; }
+  .timer-card, .bulk, .row-actions, .entry .icon-btn, .view-actions, .icon-picker, .prop-add, .prop-row .icon-btn,
+  .prop-picker, .prop-sugg, .prop-key-hint, .work-head .btn, .properties-head svg, .work-toggle { display: none !important; }
   .main, .workspace, .pane, .pane-content, .page-view, .view-body, .page-scroll, .view-scroll { display: block !important; height: auto !important; overflow: visible !important; }
   .page, .view { max-width: none; padding: 0 !important; margin: 0; }
   .page-title-row { margin-left: 0 !important; }
@@ -847,6 +852,7 @@ button.side-section-title:hover { color: var(--text-2); }
 
 .capture {
   height: 100%;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -856,25 +862,35 @@ button.side-section-title:hover { color: var(--text-2); }
   border: 1px solid var(--border-strong);
   border-radius: var(--r-lg);
 }
+.capture-body { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
 .capture-field {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
-  padding: 0 12px;
-  height: 46px;
+  padding: 10px 12px;
+  min-height: 46px;
   background: var(--bg-input);
   border: 1px solid var(--border-focus);
   border-radius: var(--r-md);
 }
+.capture-field > svg { flex: none; margin-top: 3px; }
 .capture-input {
   flex: 1;
   min-width: 0;
   border: 0;
   outline: 0;
+  padding: 0;
+  resize: none;
+  overflow-y: auto;
   background: transparent;
+  color: var(--text);
+  font: inherit;
   font-size: var(--fs-lg);
+  line-height: 24px;
   user-select: text;
 }
+.capture-sugg { min-height: 0; }
+.capture-sugg .sugg { width: auto; max-height: 112px; padding: 2px; box-shadow: none; background: transparent; animation: none; }
 .capture-input::placeholder {
   color: var(--text-3);
 }

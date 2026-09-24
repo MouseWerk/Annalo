@@ -1,18 +1,28 @@
 // Page properties (frontmatter) editor and the work card of a page linked to a Vorgang.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Braces, CalendarDays, ChevronDown, ChevronRight, ListTree, Play, Plus, Tags, TriangleAlert, Type, Workflow, X, type LucideIcon } from "lucide-react";
+import { Braces, CalendarDays, ChevronDown, ChevronRight, FolderTree, Play, Plus, Tags, TriangleAlert, Type, Workflow, X, type LucideIcon } from "lucide-react";
+import type { SuggestionKeyDownProps } from "@tiptap/suggestion";
 import { api } from "../lib/api";
 import { useApp } from "../store/app";
 import { Badge, Button, IconButton, Progress } from "../components/ui";
-import { DATE_RE, LIST_KEYS, edited, parseFrontmatter, propertyValue, serializeFrontmatter, splitItems, type Property } from "../lib/frontmatter";
+import { DATE_RE, LIST_KEYS, edited, isValidKey, parseFrontmatter, propertyValue, serializeFrontmatter, splitItems, type Property } from "../lib/frontmatter";
 import { dateShort, h2, hoursFromMinutes } from "../lib/format";
 import { NetzplanSelect, VorgangSelect, useWbs } from "./wbs";
 import { LEVEL } from "./ProjectsView";
 import type { PageWork } from "../lib/types";
+import { SuggestionPopup, type PopupHandle } from "../editor/suggestion-popup";
+import { zeitRefItems } from "../editor/zeit-source";
+import type { ZeitSuggestItem } from "../editor/extensions";
 
 const TYPE_ICON: Record<Property["type"], LucideIcon> = { text: Type, date: CalendarDays, list: Tags, raw: Braces };
 const isWbsKey = (key: string) => /^(vorgang|netzplan)$/i.test(key);
+const isTagsKey = (key: string) => /^tags?$/i.test(key);
+const KEY_HINT = "Ungültiger Name: nicht mit Leerzeichen oder # - [ ] { } ' \" & * ! | > % @ ` ? , beginnen";
+
+/** Opens „Eigenschaft hinzufügen“ on the page of the focused pane (palette, Ctrl+;). */
+export const ADD_PROPERTY_EVENT = "aether:add-property";
+export const requestAddProperty = () => window.dispatchEvent(new Event(ADD_PROPERTY_EVENT));
 
 /** The WBS reference of a page's properties, as the core resolves it (`vorgang:` / `netzplan:`). */
 export function pageReference(fm: string): string | null {
@@ -27,6 +37,9 @@ export function pageReference(fm: string): string | null {
 export function PropertyEditor({ fm, onChange, adding, onAdded }: { fm: string; onChange: (fm: string) => void; adding: boolean; onAdded: () => void }) {
   const props = useMemo(() => parseFrontmatter(fm), [fm]);
   const [open, setOpen] = useState(true);
+  useEffect(() => {
+    if (adding) setOpen(true);
+  }, [adding]);
   const commit = (next: Property[]) => onChange(serializeFrontmatter(next));
   const update = (i: number, change: Partial<Property>) => commit(props.map((p, j) => (j === i ? edited(p, change) : p)));
   const taken = (key: string, except = -1) => props.some((p, j) => j !== except && p.key.toLowerCase() === key.toLowerCase());
@@ -47,7 +60,7 @@ export function PropertyEditor({ fm, onChange, adding, onAdded }: { fm: string; 
               prop={p}
               onChange={(c) => update(i, c)}
               onRename={(key) => {
-                if (!key || key === p.key) return false;
+                if (!key || key === p.key || !isValidKey(key)) return false;
                 if (taken(key, i)) {
                   useApp.getState().toast({ tone: "warning", title: `Eigenschaft „${key}“ gibt es schon` });
                   return false;
@@ -62,6 +75,7 @@ export function PropertyEditor({ fm, onChange, adding, onAdded }: { fm: string; 
             autoOpen={adding}
             onDone={onAdded}
             onAdd={(key) => {
+              if (!isValidKey(key)) return;
               if (taken(key)) {
                 useApp.getState().toast({ tone: "warning", title: `Eigenschaft „${key}“ gibt es schon` });
                 return;
@@ -82,12 +96,13 @@ function PropertyRow({ prop, onChange, onRename, onRemove }: { prop: Property; o
   const [key, setKey] = useState(prop.key);
   useEffect(() => setKey(prop.key), [prop.key]);
   const Icon = isWbsKey(prop.key) ? Workflow : TYPE_ICON[prop.type];
+  const invalid = key.trim() !== "" && !isValidKey(key.trim());
   const commitKey = () => {
     const k = key.trim();
     if (!onRename(k)) setKey(prop.key);
   };
   return (
-    <div className={`prop-row prop-type-${prop.type}`} data-prop-key={prop.key}>
+    <div className={`prop-row prop-type-${prop.type}${isWbsKey(prop.key) ? " is-wbs" : ""}`} data-prop-key={prop.key}>
       <span className="prop-icon" aria-hidden>
         <Icon size={14} />
       </span>
@@ -98,11 +113,12 @@ function PropertyRow({ prop, onChange, onRename, onRemove }: { prop: Property; o
           className="prop-key"
           value={key}
           aria-label="Name der Eigenschaft"
+          aria-invalid={invalid || undefined}
           spellCheck={false}
           onChange={(e) => setKey(e.target.value.replace(/[:\n]/g, ""))}
           onBlur={commitKey}
           onKeyDown={(e) => {
-            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+            if (e.key === "Enter" && !invalid) (e.target as HTMLInputElement).blur();
             if (e.key === "Escape") setKey(prop.key);
           }}
         />
@@ -111,12 +127,17 @@ function PropertyRow({ prop, onChange, onRename, onRemove }: { prop: Property; o
         <PropertyValue prop={prop} onChange={onChange} />
       </div>
       <IconButton icon={X} label="Eigenschaft entfernen" size={22} iconSize={13} className="prop-remove" onClick={onRemove} />
+      {invalid && (
+        <span className="prop-key-hint" role="alert">
+          {KEY_HINT}
+        </span>
+      )}
     </div>
   );
 }
 
 function PropertyValue({ prop, onChange }: { prop: Property; onChange: (c: Partial<Property>) => void }) {
-  if (prop.type === "list") return <ListValue items={prop.items} onChange={(items) => onChange({ items })} />;
+  if (prop.type === "list") return <ListValue items={prop.items} hashed={isTagsKey(prop.key)} onChange={(items) => onChange({ items })} />;
   if (prop.type === "raw") return <RawValue value={prop.value} onChange={(value) => onChange({ value })} />;
   if (prop.type === "date")
     return (
@@ -136,8 +157,11 @@ function TextValue({ prop, onChange }: { prop: Property; onChange: (v: string) =
   const [picker, setPicker] = useState(false);
   useEffect(() => setDraft(prop.value), [prop.value]);
   const commit = () => draft !== prop.value && onChange(draft);
-  return (
-    <>
+  const key = prop.key.toLowerCase();
+  const input =
+    key === "vorgang" ? (
+      <RefCombo value={prop.value} draft={draft} setDraft={setDraft} label={prop.key} onCommit={commit} onPick={(v) => v !== prop.value && onChange(v)} onRevert={() => setDraft(prop.value)} />
+    ) : (
       <input
         className="prop-value-input"
         value={draft}
@@ -151,11 +175,114 @@ function TextValue({ prop, onChange }: { prop: Property; onChange: (v: string) =
           if (e.key === "Escape") setDraft(prop.value);
         }}
       />
+    );
+  return (
+    <>
+      {input}
       {isWbsKey(prop.key) && (
-        <IconButton icon={ListTree} label={prop.key.toLowerCase() === "netzplan" ? "Netzplan wählen" : "Vorgang wählen"} size={22} iconSize={13} active={picker} onClick={() => setPicker((v) => !v)} />
+        <IconButton icon={FolderTree} label={key === "netzplan" ? "Netzplan wählen" : "Vorgang wählen"} size={22} iconSize={13} className="prop-pick" active={picker} onClick={() => setPicker((v) => !v)} />
       )}
-      {picker && <WbsPicker value={prop.value} netzplanOnly={prop.key.toLowerCase() === "netzplan"} onChange={onChange} onClose={() => setPicker(false)} />}
+      {picker && <WbsPicker value={prop.value} netzplanOnly={key === "netzplan"} onChange={onChange} onClose={() => setPicker(false)} />}
     </>
+  );
+}
+
+/** Text input with the `/zeit` reference suggestions (↑ ↓ Enter, Esc closes). */
+function RefCombo({ value, draft, setDraft, label, onCommit, onPick, onRevert }: {
+  value: string;
+  draft: string;
+  setDraft: (v: string) => void;
+  label: string;
+  onCommit: () => void;
+  onPick: (v: string) => void;
+  onRevert: () => void;
+}) {
+  const [list, setList] = useState<{ q: string; items: ZeitSuggestItem[] } | null>(null);
+  const items = list?.items ?? null;
+  const popup = useRef<PopupHandle>(null);
+  // Latest query; older answers are dropped, `null` = closed.
+  const query = useRef<string | null>(null);
+  // Enter picks the highlighted suggestion after ↑/↓, or for words typed since focusing (never
+  // from a stale list). Typed codes (`NP-8801`, `1020`) stay as written unless one matches exactly.
+  const typed = useRef(false);
+  const navigated = useRef(false);
+  const suggest = (q: string) => {
+    query.current = q;
+    navigated.current = false;
+    zeitRefItems(q)
+      .then((items) => query.current === q && setList({ q, items }))
+      .catch(() => {});
+  };
+  const close = () => {
+    query.current = null;
+    setList(null);
+  };
+  return (
+    <div className="prop-combo">
+      <input
+        className="prop-value-input"
+        value={draft}
+        placeholder="NP-8801/1020"
+        aria-label={label}
+        role="combobox"
+        aria-expanded={items !== null}
+        aria-autocomplete="list"
+        spellCheck={false}
+        onFocus={() => {
+          typed.current = false;
+          suggest(draft === value ? "" : draft.trim());
+        }}
+        onChange={(e) => {
+          typed.current = true;
+          setDraft(e.target.value);
+          suggest(e.target.value.trim());
+        }}
+        onBlur={() => {
+          close();
+          onCommit();
+        }}
+        onKeyDown={(e) => {
+          const nav = e.key === "ArrowDown" || e.key === "ArrowUp";
+          const text = draft.trim();
+          const exact = items?.find((it) => it.insert.toLowerCase() === text.toLowerCase());
+          if (e.key === "Enter" && exact && !navigated.current) {
+            e.preventDefault();
+            setDraft(exact.insert);
+            close();
+            onPick(exact.insert);
+            return;
+          }
+          const pick = e.key === "Enter" && (navigated.current || (typed.current && list?.q === text && !/\d/.test(text)));
+          if (items && (nav || pick) && popup.current?.onKeyDown({ event: e.nativeEvent } as SuggestionKeyDownProps)) {
+            if (nav) navigated.current = true;
+            e.preventDefault();
+            return;
+          }
+          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+          else if (e.key === "Escape") {
+            e.stopPropagation();
+            if (items) close();
+            else onRevert();
+          } else if (e.key === "ArrowDown" && !items) suggest(draft.trim());
+        }}
+      />
+      {items && (
+        <div className="prop-sugg">
+          <SuggestionPopup
+            ref={popup}
+            items={items}
+            className="zeit"
+            empty="Kein Vorgang gefunden – Enter übernimmt den Text"
+            command={(it) => {
+              const v = (it as ZeitSuggestItem).insert;
+              setDraft(v);
+              close();
+              onPick(v);
+            }}
+          />
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -178,7 +305,7 @@ function WbsPicker({ value, netzplanOnly, onChange, onClose }: { value: string; 
   );
 }
 
-function ListValue({ items, onChange }: { items: string[]; onChange: (items: string[]) => void }) {
+function ListValue({ items, hashed, onChange }: { items: string[]; hashed: boolean; onChange: (items: string[]) => void }) {
   const [draft, setDraft] = useState("");
   const add = () => {
     const more = splitItems(draft).filter((x) => !items.includes(x));
@@ -189,6 +316,7 @@ function ListValue({ items, onChange }: { items: string[]; onChange: (items: str
     <div className="prop-list">
       {items.map((item, i) => (
         <span key={`${i}:${item}`} className="prop-chip">
+          {hashed && <span className="prop-chip-hash" aria-hidden>#</span>}
           {item}
           <button type="button" aria-label={`${item} entfernen`} onClick={() => onChange(items.filter((_, j) => j !== i))}>
             <X size={11} />
@@ -243,8 +371,11 @@ function NewProperty({ autoOpen, onAdd, onDone }: { autoOpen: boolean; onAdd: (k
   useEffect(() => {
     if (autoOpen) setDraft("");
   }, [autoOpen]);
+  const invalid = !!draft?.trim() && !isValidKey(draft.trim());
   const finish = () => {
     const k = (draft ?? "").trim();
+    // Keep the row (and its hint) until the name is valid or the user presses Esc.
+    if (invalid) return;
     setDraft(null);
     onDone();
     if (k) onAdd(k);
@@ -266,17 +397,23 @@ function NewProperty({ autoOpen, onAdd, onDone }: { autoOpen: boolean; onAdd: (k
         value={draft}
         placeholder="Name, z. B. vorgang"
         aria-label="Name der neuen Eigenschaft"
+        aria-invalid={invalid || undefined}
         spellCheck={false}
         onChange={(e) => setDraft(e.target.value.replace(/[:\n]/g, ""))}
         onBlur={finish}
         onKeyDown={(e) => {
-          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+          if (e.key === "Enter" && !invalid) (e.target as HTMLInputElement).blur();
           if (e.key === "Escape") {
             setDraft(null);
             onDone();
           }
         }}
       />
+      {invalid && (
+        <span className="prop-key-hint" role="alert">
+          {KEY_HINT}
+        </span>
+      )}
     </div>
   );
 }
@@ -357,7 +494,10 @@ export function WorkCard({ pageId, reference, title }: { pageId: number; referen
                 <li key={e.id} className={e.page_id === pageId ? "own" : ""}>
                   <span className="faint">{dateShort(e.start_time)}</span>
                   <span className="num">{hoursFromMinutes(e.duration_minutes)} h</span>
-                  <span className="work-entry-desc">{e.description || "–"}</span>
+                  <span className="work-entry-desc">
+                    {e.description || "–"}
+                    {e.page_id === pageId && <span className="faint"> · diese Seite</span>}
+                  </span>
                 </li>
               ))}
             </ul>

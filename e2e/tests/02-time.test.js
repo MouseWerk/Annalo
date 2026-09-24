@@ -95,8 +95,8 @@ test("week grid sums hours per WBS line", async () => {
 });
 
 test("release entries, then export as SAP CATS", async () => {
-  const dayChecks = await app.$$(".entry-day-head .check");
-  await dayChecks[0].click();
+  // All days: shortly after midnight the bookings of this run fall on yesterday.
+  for (const c of await app.$$(".entry-day-head .check")) await c.click();
   await app.waitFor(".bulk");
   await app.click(".bulk .btn-secondary");
   await app.waitText(".toast-title", /freigegeben/);

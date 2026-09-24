@@ -316,6 +316,8 @@ export interface TaskFilter {
   due_before?: string | null;
   tag?: string | null;
   page_id?: number | null;
+  /** Only tasks on pages saved since this local day (YYYY-MM-DD) or RFC 3339 time. */
+  changed_since?: string | null;
 }
 export interface SavedAttachment {
   name: string;

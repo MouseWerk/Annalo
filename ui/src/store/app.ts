@@ -52,6 +52,8 @@ export interface PendingAsk {
   pageTitle?: string;
   /** Offer the tools even if the user switched them off. */
   tools?: boolean;
+  /** Shown as the user's message instead of the (internal) prompt text. */
+  display?: string;
 }
 
 interface State {

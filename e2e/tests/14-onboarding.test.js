@@ -11,12 +11,16 @@ after(async () => app?.close());
 test("a fresh workspace offers empty, import or sample data", async () => {
   await app.waitText(".onboarding h1", /Willkommen bei AETHER OS/);
   assert.equal((await app.$$(".onb-choice")).length, 3);
+  // The first choice has the focus; the side panels stay out of the way.
+  assert.equal(await app.browser.execute(() => document.activeElement?.classList.contains("onb-choice") ?? false), true);
+  assert.equal(await (await app.$(".panel")).isExisting(), false, "no right panel during onboarding");
+  assert.equal(await (await app.$(".side-empty")).isExisting(), false, "no empty-tree hint during onboarding");
   await app.shot("onboarding");
   assert.equal((await app.invoke("wbs_tree")).length, 0, "no sample data unless asked");
 });
 
-test("sample data on request, and the choice is remembered", async () => {
-  await app.click(".onb-choice:nth-child(3)");
+test("sample data on request (key 3), and the choice is remembered", async () => {
+  await app.keys(["3"]);
   await app.waitText(".pane.active .vh-title-text", /Willkommen/);
   assert.ok((await app.invoke("wbs_tree")).length > 0);
   assert.equal(await app.invoke("onboarding_needed"), false);

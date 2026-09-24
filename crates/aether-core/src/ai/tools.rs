@@ -55,7 +55,8 @@ pub fn definitions() -> Vec<Value> {
             json!({ "type": "object", "properties": {
                 "status": { "type": "string", "enum": ["open", "done", "all"], "description": "Standard: open" },
                 "due_before": { "type": "string", "description": "Nur fällig bis einschließlich YYYY-MM-DD" },
-                "tag": { "type": "string", "description": "Tag der Aufgabe oder ihrer Seite, ohne #" } } }),
+                "tag": { "type": "string", "description": "Tag der Aufgabe oder ihrer Seite, ohne #" },
+                "changed_since": { "type": "string", "description": "Nur Aufgaben auf Seiten, die seit diesem Tag (YYYY-MM-DD) geändert wurden, z. B. für „diese Woche erledigt“" } } }),
         ),
         f(
             "time_summary",

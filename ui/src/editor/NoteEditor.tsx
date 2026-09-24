@@ -61,6 +61,7 @@ export function NoteEditor({
   const saveTimer = useRef<number | undefined>(undefined);
   const dirty = useRef(false);
   const saving = useRef<Promise<void> | null>(null);
+  const editorRef = useRef<Editor | null>(null);
   const [status, setStatus] = useState<"saved" | "dirty" | "saving">("saved");
   const [linkDraft, setLinkDraft] = useState<string | null>(null);
   const cb = useRef({ onSaved, onOpenLink, onOpenTag, onFrontmatter });
@@ -161,6 +162,14 @@ export function NoteEditor({
         },
         book: async (line) => {
           try {
+            // The server books on the page's saved `vorgang:`: store pending edits (e.g. a
+            // just-changed property) first so the default reference is not a stale one.
+            const ed = editorRef.current;
+            if (ed) {
+              window.clearTimeout(saveTimer.current);
+              await save(ed);
+              await saving.current;
+            }
             const out = await api.logTime(line, doc.id);
             const s = useApp.getState();
             s.bumpEntries();
@@ -233,6 +242,7 @@ export function NoteEditor({
   );
 
   useEffect(() => {
+    editorRef.current = editor;
     if (!editor) return;
     const flushNow = async () => {
       window.clearTimeout(saveTimer.current);
@@ -242,6 +252,8 @@ export function NoteEditor({
     };
     const setFrontmatter = (fm: string) => {
       if (fm === frontmatter.current) return;
+      // Like focusing the editor: other panes with this page store their edits first.
+      window.dispatchEvent(new CustomEvent("aether:flush-page", { detail: { id: doc.id, from: instance.current } }));
       frontmatter.current = fm;
       dirty.current = true;
       setStatus("dirty");

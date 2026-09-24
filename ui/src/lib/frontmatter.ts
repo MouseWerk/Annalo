@@ -18,10 +18,17 @@ export interface Property {
 export const LIST_KEYS = new Set(["tags", "tag", "aliases", "alias", "cssclasses"]);
 export const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+/** Names the property editor accepts: plain YAML keys that read back as the same key. */
+export const VALID_KEY_RE = /^[^\s#:\-[\]{}'"&*!|>%@`?,][^:]*$/u;
+export const isValidKey = (key: string) => VALID_KEY_RE.test(key);
+
 const KEY_RE = /^([^\s#:\-[\]{}'"][^:]*?)\s*:(?:\s+(.*?))?\s*$/;
 const ITEM_RE = /^\s*-(?:\s+(.*?))?\s*$/;
-/** splitFrontmatter only recognizes a block whose first line looks like this. */
-const FIRST_LINE_RE = /^[\w-]+\s*:/;
+/**
+ * A frontmatter block is only recognized when its first line looks like this (a `key:` line
+ * with any Unicode key, e.g. `Priorität:` or `due date:`); shared with splitFrontmatter.
+ */
+export const FIRST_LINE_RE = /^[^\s#:\-[\]{}'"][^:]*:/u;
 
 /** Unquotes a plain or quoted YAML scalar; `null` when it is not a simple one. */
 function scalar(v: string): string | null {
@@ -120,8 +127,13 @@ export function parseFrontmatter(fm: string): Property[] {
 
 const quote = (s: string) => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n")}"`;
 
+/** Plain scalars YAML would read as booleans, null, numbers or timestamps instead of text. */
+const YAML_TYPED_RE = /^(true|false|null|~|[-+]?\d[\d_.:eE+-]*|\d{4}-\d{2}-\d{2}T.*)$/i;
+
 function fmtScalar(s: string, inList = false) {
-  const plain = s === s.trim() && scalar(s) === s && !/\n/.test(s) && !/^(- |-$|[#,?])/.test(s) && !(inList && /[,[\]]/.test(s));
+  // Dates (`YYYY-MM-DD`) are date properties and stay plain; other typed-looking text is quoted.
+  const typed = YAML_TYPED_RE.test(s) && !DATE_RE.test(s);
+  const plain = !typed && s === s.trim() && scalar(s) === s && !/\n/.test(s) && !/^(- |-$|[#,?])/.test(s) && !(inList && /[,[\]]/.test(s));
   return plain ? s : quote(s);
 }
 

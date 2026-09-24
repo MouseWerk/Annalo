@@ -31,11 +31,63 @@ pub fn frontmatter_value(markdown: &str, key: &str) -> Option<String> {
         if line.starts_with([' ', '\t']) || !k.trim().eq_ignore_ascii_case(key) {
             return None;
         }
-        let v = v.trim();
-        let v = v.strip_prefix('"').and_then(|s| s.strip_suffix('"')).unwrap_or(v);
-        let v = v.strip_prefix('\'').and_then(|s| s.strip_suffix('\'')).unwrap_or(v).trim();
-        (!v.is_empty()).then(|| v.to_owned())
+        yaml_scalar(v).filter(|v| !v.is_empty())
     })
+}
+
+/// A plain or quoted YAML scalar without its inline comment, trimmed. `None` for values the
+/// UI's property parser keeps as raw YAML (flow collections, anchors, block scalars, `a: b`).
+fn yaml_scalar(v: &str) -> Option<String> {
+    let v = v.trim();
+    // Only a comment may follow a closing quote.
+    let rest_ok = |rest: &str| {
+        let trimmed = rest.trim_start();
+        trimmed.is_empty() || (trimmed.starts_with('#') && trimmed.len() < rest.len())
+    };
+    if let Some(body) = v.strip_prefix('"') {
+        let mut out = String::new();
+        let mut chars = body.char_indices();
+        while let Some((i, c)) = chars.next() {
+            match c {
+                '\\' => match chars.next()?.1 {
+                    'n' => out.push('\n'),
+                    't' => out.push('\t'),
+                    c => out.push(c),
+                },
+                '"' => return rest_ok(&body[i + 1..]).then(|| out.trim().to_owned()),
+                c => out.push(c),
+            }
+        }
+        return None;
+    }
+    if let Some(body) = v.strip_prefix('\'') {
+        let mut out = String::new();
+        let mut chars = body.char_indices().peekable();
+        while let Some((i, c)) = chars.next() {
+            if c != '\'' {
+                out.push(c);
+            } else if chars.peek().is_some_and(|&(_, n)| n == '\'') {
+                chars.next();
+                out.push('\'');
+            } else {
+                return rest_ok(&body[i + 1..]).then(|| out.trim().to_owned());
+            }
+        }
+        return None;
+    }
+    // Unquoted: a comment starts at `#` after whitespace (or at the very start).
+    let end = v
+        .char_indices()
+        .find(|&(i, c)| c == '#' && (i == 0 || v[..i].ends_with([' ', '\t'])))
+        .map_or(v.len(), |(i, _)| i);
+    let v = v[..end].trim();
+    if v.starts_with(['[', ']', '{', '}', '&', '*', '!', '|', '>', '%', '@', '`'])
+        || v.contains(": ")
+        || v.ends_with(':')
+    {
+        return None;
+    }
+    Some(v.to_owned())
 }
 
 /// The WBS reference a page is linked to: `NP-8801/1020` or `NP-8801`.
@@ -195,6 +247,26 @@ mod tests {
         assert_eq!(page_reference("vorgang: NP-8801/1020\n"), None);
         assert_eq!(page_reference("---\nmeta:\n  vorgang: NP-1/1\n---\n"), None);
         assert_eq!(page_reference("---\ntitle: x\n---\nvorgang: NP-1\n"), None);
+        // Inline comments are not part of the value.
+        assert_eq!(page_reference("---\nvorgang: NP-8801/1020 # Integration\n---\n").as_deref(), Some("NP-8801/1020"));
+        assert_eq!(page_reference("---\nvorgang: \"NP-8801/1020\"  # x\n---\n").as_deref(), Some("NP-8801/1020"));
+        assert_eq!(page_reference("---\nvorgang: # nur Kommentar\n---\n"), None);
+    }
+
+    #[test]
+    fn scalar_values_match_the_property_parser() {
+        let v = |s: &str| yaml_scalar(s);
+        assert_eq!(v(" plain text ").as_deref(), Some("plain text"));
+        assert_eq!(v("a#b").as_deref(), Some("a#b"));
+        assert_eq!(v("x # c").as_deref(), Some("x"));
+        assert_eq!(v("\"a # b\"").as_deref(), Some("a # b"));
+        assert_eq!(v("\"say \\\"hi\\\"\"").as_deref(), Some("say \"hi\""));
+        assert_eq!(v("'it''s'").as_deref(), Some("it's"));
+        assert_eq!(v("'a' # c").as_deref(), Some("a"));
+        // Raw YAML on the UI side: no value here either.
+        for raw in ["[a, b]", "{a: 1}", "|", ">", "&anchor x", "*ref", "!tag x", "a: b", "\"open", "'x' y", "@x"] {
+            assert_eq!(v(raw), None, "{raw}");
+        }
     }
 
     #[test]
