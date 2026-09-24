@@ -20,7 +20,8 @@
     "active": true,
     "targets": [
       "nsis",
-      "msi"
+      "deb",
+      "appimage"
     ],
     "icon": [
       "icons/icon.png",
@@ -28,12 +29,16 @@
     ],
     "windows": {
       "webviewInstallMode": {
-        "type": "downloadBootstrapper"
+        "type": "downloadBootstrapper",
+        "silent": true
       },
       "nsis": {
         "installMode": "currentUser",
         "startMenuFolder": "AETHER OS",
-        "languages": ["German", "English"],
+        "languages": [
+          "German",
+          "English"
+        ],
         "displayLanguageSelector": false
       }
     }
