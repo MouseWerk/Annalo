@@ -57,7 +57,7 @@ export function TrashView() {
         <header className="view-header">
           <div>
             <h1>Papierkorb</h1>
-            <div className="view-sub">Gelöschte Seiten werden nach 30 Tagen endgültig entfernt.</div>
+            <div className="view-sub">Gelöschte Seiten werden nach {useApp.getState().settings?.settings.notes?.trash_retention_days ?? 30} Tagen endgültig entfernt.</div>
           </div>
           <div className="view-actions">
             <Button variant="danger" icon={Trash2} onClick={empty} disabled={!list?.length}>

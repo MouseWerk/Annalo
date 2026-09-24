@@ -19,6 +19,8 @@ import { importVault, exportVault, toggleTheme } from "../lib/actions";
 import { newPageFromTemplate } from "./Templates";
 import { snippetHtml } from "../lib/quicksearch";
 import { keys } from "../lib/shortcut";
+import { t, useT } from "../lib/i18n";
+import { hint } from "../lib/keymap";
 
 interface Item {
   id: string;
@@ -50,6 +52,7 @@ function fuzzy(text: string, q: string): number {
 const ic = (C: typeof Search) => <C size={16} strokeWidth={1.75} />;
 
 export function CommandPalette() {
+  useT();
   const open = useApp((s) => s.paletteOpen);
   const mode = useApp((s) => s.paletteMode);
   const initial = useApp((s) => s.paletteQuery);
@@ -154,43 +157,43 @@ export function CommandPalette() {
     }
 
     const commands: Omit<Item, "section">[] = [
-      { id: "new", title: "Neue Seite", icon: ic(FilePlus2), hint: keys("Mod N"), run: () => createSubpage(null) },
-      { id: "from-template", title: "Neue Seite aus Vorlage…", icon: ic(LayoutTemplate), run: () => newPageFromTemplate() },
+      { id: "new", title: t("cmd.newPage"), icon: ic(FilePlus2), hint: hint("new_page"), run: () => createSubpage(null) },
+      { id: "from-template", title: t("cmd.fromTemplate"), icon: ic(LayoutTemplate), run: () => newPageFromTemplate() },
       {
         id: "today",
-        title: "Heutige Tagesnotiz",
+        title: t("cmd.dailyNote"),
         icon: ic(CalendarCheck2),
-        hint: keys("Mod Shift D"),
+        hint: hint("daily_note"),
         run: () => openToday(),
       },
-      { id: "calendar", title: "Kalender", subtitle: "Tagesnotiz eines anderen Tages öffnen", icon: ic(CalendarDays), hint: keys("Mod Shift C"), run: () => setTimeout(() => openCalendar(), 0) },
-      ...(s().tabs.find((t) => t.id === s().activeTabId)?.kind === "page"
-        ? [{ id: "add-property", title: "Eigenschaft hinzufügen", subtitle: "Zur aktuellen Seite", icon: ic(ListPlus), hint: keys("Mod ;"), run: () => setTimeout(requestAddProperty, 0) }]
+      { id: "calendar", title: t("cmd.calendar"), subtitle: t("cmd.calendarSub"), icon: ic(CalendarDays), hint: hint("calendar"), run: () => setTimeout(() => openCalendar(), 0) },
+      ...(s().tabs.find((x) => x.id === s().activeTabId)?.kind === "page"
+        ? [{ id: "add-property", title: t("cmd.addProperty"), subtitle: t("cmd.addPropertySub"), icon: ic(ListPlus), hint: hint("add_property"), run: () => setTimeout(requestAddProperty, 0) }]
         : []),
-      { id: "newtab", title: "Neuer Tab", icon: ic(Plus), hint: keys("Mod T"), run: () => s().openTab({ kind: "home" }, { newTab: true }) },
-      { id: "split", title: "Rechts teilen", icon: ic(Columns2), run: () => s().activeTabId && s().splitTab(s().activeTabId) },
-      { id: "search", title: "In allen Notizen suchen", icon: ic(Search), hint: keys("Mod Shift F"), run: () => { if (!s().sidebarOpen) { s().set({ sidebarOpen: true }); savePref("aether.sidebar", true); } setTimeout(() => window.dispatchEvent(new Event("aether:sidebar-search")), 30); } },
-      { id: "back", title: "Zurück", icon: ic(ArrowLeft), hint: "Alt ←", run: () => s().goBack() },
-      { id: "forward", title: "Vorwärts", icon: ic(ArrowRight), hint: "Alt →", run: () => s().goForward() },
+      { id: "newtab", title: t("cmd.newTab"), icon: ic(Plus), hint: hint("new_tab"), run: () => s().openTab({ kind: "home" }, { newTab: true }) },
+      { id: "split", title: t("cmd.split"), icon: ic(Columns2), run: () => s().activeTabId && s().splitTab(s().activeTabId) },
+      { id: "search", title: t("cmd.search"), icon: ic(Search), hint: hint("search"), run: () => { if (!s().sidebarOpen) { s().set({ sidebarOpen: true }); savePref("aether.sidebar", true); } setTimeout(() => window.dispatchEvent(new Event("aether:sidebar-search")), 30); } },
+      { id: "back", title: t("cmd.back"), icon: ic(ArrowLeft), hint: hint("back"), run: () => s().goBack() },
+      { id: "forward", title: t("cmd.forward"), icon: ic(ArrowRight), hint: hint("forward"), run: () => s().goForward() },
       timer
-        ? { id: "timer", title: "Timer stoppen", icon: ic(Square), hint: keys("Mod Shift T"), run: () => stopTimer() }
-        : { id: "timer", title: "Timer starten", icon: ic(Play), hint: keys("Mod Shift T"), run: () => s().openTab({ kind: "timesheet" }) },
-      { id: "timesheet", title: "Zeiterfassung öffnen", icon: ic(Timer), run: () => s().openTab({ kind: "timesheet" }) },
-      { id: "tasks", title: "Aufgaben", subtitle: "Offene Aufgaben aus allen Notizen", icon: ic(ListChecks), hint: keys("Mod Shift A"), run: () => s().openTab({ kind: "tasks" }) },
-      { id: "projects", title: "Projekte öffnen", icon: ic(Briefcase), run: () => s().openTab({ kind: "projects" }) },
-      { id: "assistant", title: "Assistent fragen", icon: ic(Sparkles), hint: keys("Mod J"), run: () => openAssistant() },
-      { id: "weekly-report", title: "Wochenbericht erstellen", subtitle: "Status-E-Mail aus Buchungen und erledigten Aufgaben", icon: ic(Mail), run: () => askWeeklyReport() },
-      { id: "trash", title: "Papierkorb", icon: ic(Trash2), run: () => s().openTab({ kind: "trash" }) },
-      { id: "settings", title: "Einstellungen", icon: ic(Settings), hint: keys("Mod ,"), run: () => s().openTab({ kind: "settings" }) },
-      { id: "sidebar", title: "Seitenleiste umschalten", icon: ic(PanelLeft), hint: keys("Mod \\"), run: () => { const v = !s().sidebarOpen; s().set({ sidebarOpen: v }); savePref("aether.sidebar", v); } },
-      { id: "panel", title: "Seitenpanel umschalten", icon: ic(PanelRight), hint: keys("Mod Shift \\"), run: () => { const v = !s().panelOpen; s().set({ panelOpen: v }); savePref("aether.panel", v); } },
-      { id: "focus", title: "Fokusmodus", icon: ic(Focus), hint: keys("Mod ."), run: () => s().set({ focusMode: !s().focusMode }) },
-      { id: "theme", title: "Hell / Dunkel wechseln", icon: ic(Moon), run: () => toggleTheme() },
-      { id: "import", title: "Obsidian-Vault importieren", icon: ic(FolderInput), run: () => importVault() },
-      { id: "export", title: "Als Markdown-Ordner exportieren", icon: ic(Download), run: () => exportVault() },
+        ? { id: "timer", title: t("cmd.stopTimer"), icon: ic(Square), hint: hint("timer"), run: () => stopTimer() }
+        : { id: "timer", title: t("cmd.startTimer"), icon: ic(Play), hint: hint("timer"), run: () => s().openTab({ kind: "timesheet" }) },
+      { id: "timesheet", title: t("cmd.timesheet"), icon: ic(Timer), run: () => s().openTab({ kind: "timesheet" }) },
+      { id: "tasks", title: t("cmd.tasks"), subtitle: t("cmd.tasksSub"), icon: ic(ListChecks), hint: hint("tasks"), run: () => s().openTab({ kind: "tasks" }) },
+      { id: "projects", title: t("cmd.projects"), icon: ic(Briefcase), run: () => s().openTab({ kind: "projects" }) },
+      { id: "assistant", title: t("cmd.askAssistant"), icon: ic(Sparkles), hint: hint("assistant"), run: () => openAssistant() },
+      { id: "weekly-report", title: t("cmd.weeklyReport"), subtitle: t("cmd.weeklyReportSub"), icon: ic(Mail), run: () => askWeeklyReport() },
+      { id: "trash", title: t("cmd.trash"), icon: ic(Trash2), run: () => s().openTab({ kind: "trash" }) },
+      { id: "settings", title: t("cmd.settings"), icon: ic(Settings), hint: hint("settings"), run: () => s().openTab({ kind: "settings" }) },
+      { id: "sidebar", title: t("cmd.toggleSidebar"), icon: ic(PanelLeft), hint: hint("toggle_sidebar"), run: () => { const v = !s().sidebarOpen; s().set({ sidebarOpen: v }); savePref("aether.sidebar", v); } },
+      { id: "panel", title: t("cmd.togglePanel"), icon: ic(PanelRight), hint: hint("toggle_panel"), run: () => { const v = !s().panelOpen; s().set({ panelOpen: v }); savePref("aether.panel", v); } },
+      { id: "focus", title: t("cmd.focusMode"), icon: ic(Focus), hint: hint("focus_mode"), run: () => s().set({ focusMode: !s().focusMode }) },
+      { id: "theme", title: t("cmd.theme"), icon: ic(Moon), run: () => toggleTheme() },
+      { id: "import", title: t("cmd.importVault"), icon: ic(FolderInput), run: () => importVault() },
+      { id: "export", title: t("cmd.exportMd"), icon: ic(Download), run: () => exportVault() },
       {
         id: "index",
-        title: "Semantischen Suchindex aktualisieren",
+        title: t("cmd.reindex"),
         icon: ic(RefreshCw),
         run: async () => {
           try {
@@ -208,7 +211,7 @@ export function CommandPalette() {
         .filter((x) => x.score > 0)
         .sort((a, b) => (lower ? b.score - a.score : 0))
         .slice(0, lower ? 5 : 20)
-        .map(({ c }) => ({ ...c, section: "Befehle" })),
+        .map(({ c }) => ({ ...c, section: t("palette.commands") })),
     );
 
     for (const h of hits) {
@@ -241,13 +244,13 @@ export function CommandPalette() {
   let lastSection = "";
   return (
     <div className="overlay overlay-top" onMouseDown={(e) => e.target === e.currentTarget && close()}>
-      <div className="palette" role="dialog" aria-modal="true" aria-label="Befehlspalette">
+      <div className="palette" role="dialog" aria-modal="true" aria-label={t("cmd.palette")}>
         <div className="pal-input">
           <Search size={16} className="faint" />
           <input
             ref={input}
             value={q}
-            placeholder={mode === "pages" ? "Seite öffnen…" : "Suchen, Befehl, /zeit buchen oder ? fragen"}
+            placeholder={mode === "pages" ? t("palette.openPage") : t("palette.placeholder")}
             onChange={(e) => {
               setQ(e.target.value);
               setSel(0);

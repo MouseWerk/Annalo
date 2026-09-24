@@ -1,38 +1,81 @@
-// Settings: LiteLLM server + token, models and routing; time tracking;
-// notes (vault import/export); backups; appearance; about.
+// Settings: grouped sections with a search over all rows. The connection sections (KI,
+// Netzwerk, Sicherung, Desktop) and the preferences (Darstellung, Editor, Notizen, Zeit,
+// Benachrichtigungen, Datenschutz, Start, Sprache, Tastatur) plus Verwaltung and Über.
 
 import { AetherLogo } from "../components/Logo";
-import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, DatabaseBackup, Download, ExternalLink, Monitor, Eye, EyeOff, FolderInput, FolderOpen, FolderOutput, KeyRound, Loader2, Palette, PlugZap, Plus, RefreshCw, Server, Sparkles, Timer, Trash2, NotebookPen, Info, Upload, XCircle } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, useLayoutEffect } from "react";
+import { Bell, CheckCircle2, DatabaseBackup, Download, ExternalLink, Globe, Monitor, Eye, EyeOff, FolderInput, FolderOpen, FolderOutput, Keyboard, KeyRound, Languages, Loader2, Palette, PenLine, PlugZap, Plus, Power, RefreshCw, Search, Server, Shield, SlidersHorizontal, Sparkles, Timer, Trash2, NotebookPen, Info, Upload, X, XCircle } from "lucide-react";
 import { api, on } from "../lib/api";
 import { collapsePages, foldersBelow } from "../lib/collapsed";
 import { useApp } from "../store/app";
 import { applyTheme, exportVault, importVault, pickFolder } from "../lib/actions";
 import { flushAllEditors } from "../editor/NoteEditor";
-import { fileSize, importSummary, relative } from "../lib/format";
-import { Badge, Button, Field, IconButton, Input, Segmented, Select, Switch, TextArea } from "../components/ui";
+import { fileSize, importSummary, relative, weekdayLabels } from "../lib/format";
+import { Badge, Button, Field, IconButton, Input, Select, Switch, TextArea } from "../components/ui";
 import { formatShortcut, keys, recordShortcut } from "../lib/shortcut";
 import { IS_MAC } from "../lib/platform";
 import { NOT_CONFIGURED } from "../lib/updates";
 import { checkForUpdates, installUpdate, loadUpdateStatus, useUpdates } from "../components/Updates";
+import { useT, type TKey } from "../lib/i18n";
+import { COMMANDS, comboLabel, effectiveKeymap } from "../lib/keymap";
 import type { BackupInfo, MirrorStatus, ConnectionTest, DataDirStatus, DesktopInfo, GitSyncMode, GitSyncSettings, GitSyncStatus, GitTest, Page, Settings } from "../lib/types";
+import { CommitInput, FilterContext, Group, NumberInput, Row } from "./settings/common";
+import { AppearanceSection } from "./settings/AppearanceSection";
+import { EditorSection } from "./settings/EditorSection";
+import { LocaleSection, NotesPrefGroups, NotificationsSection, PrivacySection, StartSection, TimePrefGroups } from "./settings/PrefSections";
+import { AiPrefGroups } from "./settings/AiPrefGroups";
+import { KeyboardSection } from "./settings/KeyboardSection";
+import { NetworkSection, withPacResults } from "./settings/NetworkSection";
+import { AdminSection } from "./settings/AdminSection";
 
-type Section = "ai" | "time" | "notes" | "backup" | "desktop" | "appearance" | "about";
-const SECTIONS: { id: Section; label: string; icon: typeof Server }[] = [
-  { id: "ai", label: "KI & LiteLLM", icon: Sparkles },
-  { id: "time", label: "Zeiterfassung", icon: Timer },
-  { id: "notes", label: "Notizen", icon: NotebookPen },
-  { id: "backup", label: "Sicherung", icon: DatabaseBackup },
-  { id: "desktop", label: "Desktop", icon: Monitor },
-  { id: "appearance", label: "Darstellung", icon: Palette },
-  { id: "about", label: "Über", icon: Info },
+type Section = "appearance" | "locale" | "start" | "keyboard" | "editor" | "notes" | "time" | "ai" | "privacy" | "network" | "notifications" | "backup" | "desktop" | "admin" | "about";
+const NAV: { label: TKey; items: { id: Section; label: TKey; icon: typeof Server }[] }[] = [
+  {
+    label: "navgroup.general",
+    items: [
+      { id: "appearance", label: "nav.appearance", icon: Palette },
+      { id: "locale", label: "nav.locale", icon: Languages },
+      { id: "start", label: "nav.start", icon: Power },
+      { id: "keyboard", label: "nav.keyboard", icon: Keyboard },
+    ],
+  },
+  {
+    label: "navgroup.work",
+    items: [
+      { id: "editor", label: "nav.editor", icon: PenLine },
+      { id: "notes", label: "nav.notes", icon: NotebookPen },
+      { id: "time", label: "nav.time", icon: Timer },
+    ],
+  },
+  {
+    label: "navgroup.ai",
+    items: [
+      { id: "ai", label: "nav.ai", icon: Sparkles },
+      { id: "privacy", label: "nav.privacy", icon: Shield },
+    ],
+  },
+  {
+    label: "navgroup.system",
+    items: [
+      { id: "network", label: "nav.network", icon: Globe },
+      { id: "notifications", label: "nav.notifications", icon: Bell },
+      { id: "backup", label: "nav.backup", icon: DatabaseBackup },
+      { id: "desktop", label: "nav.desktop", icon: Monitor },
+      { id: "admin", label: "nav.admin", icon: SlidersHorizontal },
+      { id: "about", label: "nav.about", icon: Info },
+    ],
+  },
 ];
+/** Sections that save every change immediately (no save bar). */
+const INSTANT = new Set<Section>(["appearance", "locale", "backup", "about"]);
 
 export function SettingsView() {
+  const t = useT();
   const view = useApp((s) => s.settings);
   const [section, setSection] = useState<Section>("ai");
   const [draft, setDraft] = useState<Settings | null>(null);
   const [saving, setSaving] = useState(false);
+  const [query, setQuery] = useState("");
   const s = useApp.getState;
 
   useEffect(() => {
@@ -49,78 +92,141 @@ export function SettingsView() {
   if (!view || !draft) return null;
 
   const update = (patch: Partial<Settings>) => setDraft({ ...draft, ...patch });
-  const save = async (next = draft) => {
-    if (next.thresholds.warning >= next.thresholds.critical)
-      return s().toast({ tone: "warning", title: "Nicht gespeichert", detail: "Die Warnschwelle muss unter der kritischen Schwelle liegen." });
+  const save = async (next = draft): Promise<boolean> => {
+    if (next.thresholds.warning >= next.thresholds.critical) {
+      s().toast({ tone: "warning", title: t("settings.notSaved"), detail: t("settings.thresholdOrder") });
+      return false;
+    }
     setSaving(true);
     try {
-      const saved = await api.saveSettings(next);
+      let toSave = next;
+      // PAC: the answers for the app's hosts are computed here (the core has no JS engine).
+      if (toSave.network.mode === "pac") toSave = await withPacResults(toSave);
+      const saved = await api.saveSettings(toSave);
       s().set({ settings: saved });
       applyTheme(saved.settings.theme);
-      s().toast({ tone: "success", title: "Einstellungen gespeichert" });
+      s().toast({ tone: "success", title: t("settings.saved") });
+      return true;
     } catch (e) {
-      s().error("Speichern fehlgeschlagen", e);
+      s().error(t("settings.saveFailed"), e);
+      return false;
     } finally {
       setSaving(false);
     }
   };
+  const instant = (p: Partial<Settings>) => {
+    const next = { ...draft, ...p };
+    setDraft(next);
+    void save(next);
+  };
+  const updaterFor = (id: Section) => (INSTANT.has(id) ? instant : update);
 
+  const render = (id: Section) => {
+    const u = updaterFor(id);
+    switch (id) {
+      case "appearance":
+        return <AppearanceSection draft={draft} update={u} />;
+      case "locale":
+        return <LocaleSection draft={draft} update={u} />;
+      case "start":
+        return <StartSection draft={draft} update={u} />;
+      case "keyboard":
+        return <KeyboardSection draft={draft} update={u} />;
+      case "editor":
+        return <EditorSection draft={draft} update={u} />;
+      case "notes":
+        return (
+          <>
+            <NotesSection draft={draft} update={u} />
+            <NotesPrefGroups draft={draft} update={u} />
+          </>
+        );
+      case "time":
+        return (
+          <>
+            <TimeSection draft={draft} update={u} />
+            <TimePrefGroups draft={draft} update={u} />
+          </>
+        );
+      case "ai":
+        return (
+          <>
+            <AiSection draft={draft} update={u} />
+            <AiPrefGroups draft={draft} update={u} />
+          </>
+        );
+      case "privacy":
+        return <PrivacySection draft={draft} update={u} />;
+      case "network":
+        return <NetworkSection draft={draft} update={u} />;
+      case "notifications":
+        return <NotificationsSection draft={draft} update={u} />;
+      case "backup":
+        return <BackupSection draft={draft} update={u} />;
+      case "desktop":
+        return <DesktopSection draft={draft} update={u} />;
+      case "admin":
+        return <AdminSection save={save} />;
+      case "about":
+        return <AboutSection draft={draft} update={u} />;
+    }
+  };
+
+  const searching = query.trim().length > 0;
+  const all = NAV.flatMap((g) => g.items).filter((x) => x.id !== "about" && x.id !== "admin");
   return (
     <div className="settings">
-      <nav className="settings-nav" aria-label="Einstellungen">
-        <div className="settings-nav-title">Einstellungen</div>
-        {SECTIONS.map((x) => (
-          <button key={x.id} type="button" className={`settings-nav-item ${section === x.id ? "active" : ""}`} onClick={() => setSection(x.id)}>
-            <x.icon size={15} strokeWidth={1.75} />
-            {x.label}
-          </button>
+      <nav className="settings-nav" aria-label={t("settings.title")}>
+        <div className="settings-nav-title">{t("settings.title")}</div>
+        <div className="settings-search">
+          <Search size={13} className="faint" />
+          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("settings.search")} aria-label={t("settings.search")} spellCheck={false} onKeyDown={(e) => e.key === "Escape" && setQuery("")} />
+          {searching && <IconButton icon={X} label={t("common.clear")} size={20} iconSize={12} onClick={() => setQuery("")} />}
+        </div>
+        {NAV.map((g) => (
+          <div key={g.label} className="settings-nav-group" role="group" aria-label={t(g.label)}>
+            <div className="settings-nav-group-label">{t(g.label)}</div>
+            {g.items.map((x) => (
+              <button
+                key={x.id}
+                type="button"
+                data-section={x.id}
+                className={`settings-nav-item ${!searching && section === x.id ? "active" : ""}`}
+                onClick={() => {
+                  setQuery("");
+                  setSection(x.id);
+                }}
+              >
+                <x.icon size={15} strokeWidth={1.75} />
+                {t(x.label)}
+              </button>
+            ))}
+          </div>
         ))}
       </nav>
       <div className="settings-scroll">
         <div className="settings-body">
-          {section === "ai" && <AiSection draft={draft} update={update} />}
-          {section === "time" && <TimeSection draft={draft} update={update} />}
-          {section === "notes" && <NotesSection draft={draft} update={update} />}
-          {section === "backup" && (
-            <BackupSection
-              draft={draft}
-              update={(p) => {
-                const next = { ...draft, ...p };
-                setDraft(next);
-                save(next);
-              }}
-            />
-          )}
-          {section === "desktop" && <DesktopSection draft={draft} update={update} />}
-          {section === "appearance" && (
-            <AppearanceSection
-              draft={draft}
-              update={(p) => {
-                const next = { ...draft, ...p };
-                setDraft(next);
-                save(next);
-              }}
-            />
-          )}
-          {section === "about" && (
-            <AboutSection
-              draft={draft}
-              update={(p) => {
-                const next = { ...draft, ...p };
-                setDraft(next);
-                save(next);
-              }}
-            />
+          {searching ? (
+            <FilterContext.Provider value={query}>
+              {all.map((x) => (
+                <SearchSection key={x.id} title={t(x.label)} onOpen={() => (setQuery(""), setSection(x.id))}>
+                  {render(x.id)}
+                </SearchSection>
+              ))}
+              <p className="faint small settings-search-empty">{t("settings.noHits", { query })}</p>
+            </FilterContext.Provider>
+          ) : (
+            render(section)
           )}
         </div>
         {dirty && (
-          <div className="savebar" role="region" aria-label="Ungespeicherte Änderungen">
-            <span>Ungespeicherte Änderungen</span>
+          <div className="savebar" role="region" aria-label={t("settings.unsaved")}>
+            <span>{t("settings.unsaved")}</span>
             <Button variant="ghost" onClick={() => setDraft(structuredClone(view.settings))}>
-              Verwerfen
+              {t("common.discard")}
             </Button>
             <Button variant="primary" onClick={() => save()} loading={saving}>
-              Speichern
+              {t("common.save")}
             </Button>
           </div>
         )}
@@ -129,26 +235,19 @@ export function SettingsView() {
   );
 }
 
-function Group({ title, description, children }: { title: string; description?: string; children: React.ReactNode }) {
+/** One section in the search results; hidden when none of its rows match. */
+function SearchSection({ title, onOpen, children }: { title: string; onOpen: () => void; children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [empty, setEmpty] = useState(false);
+  useLayoutEffect(() => {
+    setEmpty(!ref.current?.querySelector(".set-group:not([hidden]) .set-row"));
+  });
   return (
-    <section className="set-group">
-      <div className="set-group-head">
-        <h2>{title}</h2>
-        {description && <p>{description}</p>}
-      </div>
-      <div className="set-group-body">{children}</div>
-    </section>
-  );
-}
-
-function Row({ label, description, children, stack }: { label: string; description?: React.ReactNode; children: React.ReactNode; stack?: boolean }) {
-  return (
-    <div className={`set-row ${stack ? "stack" : ""}`}>
-      <div className="set-row-text">
-        <div className="set-row-label">{label}</div>
-        {description && <div className="set-row-desc">{description}</div>}
-      </div>
-      <div className="set-row-control">{children}</div>
+    <div className="settings-hit-section" hidden={empty} ref={ref}>
+      <button type="button" className="settings-hit-title" onClick={onOpen}>
+        {title}
+      </button>
+      <div className="settings-hit-body">{children}</div>
     </div>
   );
 }
@@ -156,6 +255,7 @@ function Row({ label, description, children, stack }: { label: string; descripti
 // -------------------------------------------------------------------- AI
 
 function AiSection({ draft, update }: { draft: Settings; update: (p: Partial<Settings>) => void }) {
+  const t = useT();
   const view = useApp((s) => s.settings)!;
   const [key, setKey] = useState("");
   const [showKey, setShowKey] = useState(false);
@@ -197,17 +297,17 @@ function AiSection({ draft, update }: { draft: Settings; update: (p: Partial<Set
   return (
     <>
       <header className="settings-head">
-        <h1>KI & LiteLLM</h1>
+        <h1>{t("set.ai.title")}</h1>
         <p>AETHER OS spricht mit deinem LiteLLM-Server. Lokale Modelle (Ollama, vLLM) und Cloud-Modelle werden dort konfiguriert.</p>
       </header>
 
-      <Group title="Server" description="Adresse deines LiteLLM-Proxys und der Zugangstoken (Virtual Key oder Master Key).">
-        <Row stack label="Server-URL" description="z. B. https://llm.firma.de oder http://localhost:4000">
+      <Group title={t("set.ai.server")} description="Adresse deines LiteLLM-Proxys und der Zugangstoken (Virtual Key oder Master Key).">
+        <Row stack label={t("set.ai.serverUrl")} description="z. B. https://llm.firma.de oder http://localhost:4000">
           <Input value={draft.litellm_base_url} onChange={(e) => update({ litellm_base_url: e.target.value })} placeholder="https://" aria-label="Server-URL" className="grow" />
         </Row>
         <Row
           stack
-          label="API-Token"
+          label={t("set.ai.apiToken")}
           description={
             <>
               {view.api_key_set ? <Badge tone="success">Hinterlegt</Badge> : <Badge>Nicht gesetzt</Badge>}
@@ -234,7 +334,7 @@ function AiSection({ draft, update }: { draft: Settings; update: (p: Partial<Set
           </Button>
           {view.api_key_set && <IconButton icon={Trash2} label="Token entfernen" onClick={() => saveKey(null)} />}
         </Row>
-        <Row label="Verbindung" description="Fragt die verfügbaren Modelle beim Server ab.">
+        <Row label={t("set.ai.connection")} description="Fragt die verfügbaren Modelle beim Server ab.">
           <div className={`conn ${test ? (test.ok ? "ok" : "fail") : ""}`}>
             {testing ? (
               <>
@@ -257,34 +357,26 @@ function AiSection({ draft, update }: { draft: Settings; update: (p: Partial<Set
         {test && !test.ok && test.error && <p className="error-note mono small">{test.error}</p>}
       </Group>
 
-      <Group title="Modelle" description="Welche Modelle des Servers für welche Aufgaben verwendet werden.">
-        <Row label="Automatisches Routing" description="Einfache Aufgaben gehen an das lokale Modell, komplexe an stärkere Modelle.">
+      <Group title={t("set.ai.models")} description="Welche Modelle des Servers für welche Aufgaben verwendet werden.">
+        <Row label={t("set.ai.autoRoute")} description="Einfache Aufgaben gehen an das lokale Modell, komplexe an stärkere Modelle.">
           <Switch checked={draft.auto_route} onChange={(v) => update({ auto_route: v })} label="Automatisches Routing" />
         </Row>
-        <Row label="Lokal / schnell" description="Für kurze Fragen, Umformulierungen und vertrauliche Inhalte.">
+        <Row label={t("set.ai.local")} description="Für kurze Fragen, Umformulierungen und vertrauliche Inhalte.">
           <ModelInput value={router.local_model} models={models} onChange={(v) => setRouter({ local_model: v })} label="Lokales Modell" />
         </Row>
-        <Row label="Standard" description={draft.auto_route ? "Für die meisten Aufgaben." : "Wird für alle Anfragen verwendet."}>
+        <Row label={t("set.ai.standard")} description={draft.auto_route ? "Für die meisten Aufgaben." : "Wird für alle Anfragen verwendet."}>
           <ModelInput value={router.standard_model} models={models} onChange={(v) => setRouter({ standard_model: v })} label="Standardmodell" />
         </Row>
-        <Row label="Reasoning" description="Für Analysen, Planung und Code.">
+        <Row label={t("set.ai.reasoning")} description="Für Analysen, Planung und Code.">
           <ModelInput value={router.reasoning_model} models={models} onChange={(v) => setRouter({ reasoning_model: v })} label="Reasoning-Modell" />
         </Row>
-        <Row label="Embeddings" description="Für die semantische Suche in Notizen. Leer = nur Stichwortsuche.">
+        <Row label={t("set.ai.embeddings")} description="Für die semantische Suche in Notizen. Leer = nur Stichwortsuche.">
           <ModelInput value={draft.embedding_model ?? ""} models={models} onChange={(v) => update({ embedding_model: v || null })} label="Embedding-Modell" allowEmpty />
         </Row>
       </Group>
 
-      <Group title="Datenschutz & Verhalten">
-        <Row stack label="Vertraulichkeits-Markierungen" description="Inhalte mit diesen Tags gehen immer nur an das lokale Modell.">
-          <Input
-            value={router.private_markers.join(", ")}
-            onChange={(e) => setRouter({ private_markers: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })}
-            className="grow"
-            aria-label="Markierungen"
-          />
-        </Row>
-        <Field label="Zusätzliche Anweisungen an den Assistenten" hint="z. B. Rolle, Tonalität, bevorzugte Formate">
+      <Group title={t("set.ai.behavior")}>
+        <Field label={t("set.ai.instructions")} hint="z. B. Rolle, Tonalität, bevorzugte Formate">
           <TextArea rows={4} value={draft.assistant_instructions} onChange={(e) => update({ assistant_instructions: e.target.value })} placeholder="Ich bin SAP-Berater im Projekt … Antworte knapp." />
         </Field>
       </Group>
@@ -316,40 +408,8 @@ function ModelInput({ value, models, onChange, label, allowEmpty }: { value: str
 
 // ------------------------------------------------------------------ time
 
-/** Number field that keeps what is typed and only validates and clamps on blur/Enter. */
-function NumberInput({ value, min, max, step = 1, onCommit, ...rest }: { value: number; min: number; max: number; step?: number; onCommit: (v: number) => void } & Omit<React.InputHTMLAttributes<HTMLInputElement>, "value" | "min" | "max" | "step" | "onChange">) {
-  const [raw, setRaw] = useState(String(value));
-  const [editing, setEditing] = useState(false);
-  useEffect(() => {
-    if (!editing) setRaw(String(value));
-  }, [value, editing]);
-  const parsed = raw.trim() === "" ? NaN : Number(raw.replace(",", "."));
-  const commit = () => {
-    const v = Number.isFinite(parsed) ? Math.round(Math.min(max, Math.max(min, parsed)) / step) * step : value;
-    setRaw(String(v));
-    if (v !== value) onCommit(v);
-  };
-  return (
-    <Input
-      {...rest}
-      type="number"
-      min={min}
-      max={max}
-      step={step}
-      value={raw}
-      aria-invalid={!Number.isFinite(parsed) || parsed < min || parsed > max}
-      onFocus={() => setEditing(true)}
-      onChange={(e) => setRaw(e.target.value)}
-      onBlur={() => {
-        setEditing(false);
-        commit();
-      }}
-      onKeyDown={(e) => e.key === "Enter" && commit()}
-    />
-  );
-}
-
 function TimeSection({ draft, update }: { draft: Settings; update: (p: Partial<Settings>) => void }) {
+  const t = useT();
   const [las, setLas] = useState<[string, string][]>([]);
   const [newLa, setNewLa] = useState({ code: "", desc: "" });
   const [mapKey, setMapKey] = useState("");
@@ -364,27 +424,27 @@ function TimeSection({ draft, update }: { draft: Settings; update: (p: Partial<S
   return (
     <>
       <header className="settings-head">
-        <h1>Zeiterfassung</h1>
+        <h1>{t("set.time.title")}</h1>
         <p>Leerlauferkennung, Budgetwarnungen und Angaben für SAP- und Jira-Exporte.</p>
       </header>
-      <Group title="Timer">
-        <Row label="Leerlauf ab" description="Pausen ohne Tastatur- oder Mauseingabe, die länger dauern, werden beim Stoppen zum Abziehen angeboten.">
+      <Group title={t("set.time.timer")}>
+        <Row label={t("set.time.idle")} description="Pausen ohne Tastatur- oder Mauseingabe, die länger dauern, werden beim Stoppen zum Abziehen angeboten.">
           <div className="unit-input">
             <NumberInput min={1} max={120} value={draft.idle_threshold_minutes} onCommit={(v) => update({ idle_threshold_minutes: v })} aria-label="Minuten" />
             <span className="faint">Minuten</span>
           </div>
         </Row>
       </Group>
-      <Group title="Arbeitszeit" description="Tage unter dem Soll werden in der Wochenübersicht markiert.">
-        <Row label="Soll pro Arbeitstag">
+      <Group title={t("set.time.workTime")} description="Tage unter dem Soll werden in der Wochenübersicht markiert.">
+        <Row label={t("set.time.target")}>
           <div className="unit-input">
             <NumberInput min={0.5} max={16} step={0.25} value={draft.daily_target_hours} onCommit={(v) => update({ daily_target_hours: v })} aria-label="Stunden" />
             <span className="faint">Stunden</span>
           </div>
         </Row>
-        <Row label="Arbeitstage">
+        <Row label={t("set.time.workdays")}>
           <div className="day-toggle" role="group" aria-label="Arbeitstage">
-            {["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"].map((d, i) => {
+            {weekdayLabels(1).map((d, i) => {
               const on = draft.workdays.includes(i + 1);
               return (
                 <button
@@ -401,14 +461,14 @@ function TimeSection({ draft, update }: { draft: Settings; update: (p: Partial<S
           </div>
         </Row>
       </Group>
-      <Group title="Budgetwarnungen" description="Gilt für Netzpläne und Vorgänge.">
-        <Row label="Warnung ab">
+      <Group title={t("set.time.budget")} description="Gilt für Netzpläne und Vorgänge.">
+        <Row label={t("set.time.warnAt")}>
           <div className="unit-input">
             <NumberInput min={1} max={100} value={pct(draft.thresholds.warning)} onCommit={(v) => update({ thresholds: { ...draft.thresholds, warning: v / 100 } })} aria-label="Warnung in Prozent" />
             <span className="faint">% verbraucht</span>
           </div>
         </Row>
-        <Row label="Kritisch ab" description="Oder wenn die Prognose (gebucht + Restaufwand) den Plan übersteigt.">
+        <Row label={t("set.time.criticalAt")} description="Oder wenn die Prognose (gebucht + Restaufwand) den Plan übersteigt.">
           <div className="unit-input">
             <NumberInput min={1} max={100} value={pct(draft.thresholds.critical)} onCommit={(v) => update({ thresholds: { ...draft.thresholds, critical: v / 100 } })} aria-label="Kritisch in Prozent" />
             <span className="faint">% verbraucht</span>
@@ -419,11 +479,11 @@ function TimeSection({ draft, update }: { draft: Settings; update: (p: Partial<S
         )}
       </Group>
       <Group title="SAP CATS">
-        <Row label="Personalnummer (PERNR)">
+        <Row label={t("set.time.pernr")}>
           <Input value={draft.pernr ?? ""} onChange={(e) => update({ pernr: e.target.value || null })} placeholder="00012345" aria-label="Personalnummer" />
         </Row>
       </Group>
-      <Group title="Jira-Zuordnung" description="Netzplan oder Netzplan/Vorgang zu Jira-Issue. Die spezifischere Zuordnung gewinnt.">
+      <Group title={t("set.time.jira")} description="Netzplan oder Netzplan/Vorgang zu Jira-Issue. Die spezifischere Zuordnung gewinnt.">
         <div className="map-list">
           {Object.entries(draft.jira_issue_map).map(([k, v]) => (
             <div key={k} className="map-row">
@@ -462,7 +522,7 @@ function TimeSection({ draft, update }: { draft: Settings; update: (p: Partial<S
           </div>
         </div>
       </Group>
-      <Group title="Leistungsarten" description="Werden direkt gespeichert.">
+      <Group title={t("set.time.leistungsarten")} description="Werden direkt gespeichert.">
         <div className="map-list">
           {las.map(([code, desc]) => (
             <div key={code} className="map-row">
@@ -515,6 +575,7 @@ function TimeSection({ draft, update }: { draft: Settings; update: (p: Partial<S
 // ----------------------------------------------------------------- notes
 
 function NotesSection({ draft, update }: { draft: Settings; update: (p: Partial<Settings>) => void }) {
+  const t = useT();
   const [path, setPath] = useState("");
   const [templates, setTemplates] = useState<Page[]>([]);
   useEffect(() => {
@@ -524,14 +585,11 @@ function NotesSection({ draft, update }: { draft: Settings; update: (p: Partial<
   return (
     <>
       <header className="settings-head">
-        <h1>Notizen</h1>
+        <h1>{t("set.notes.title")}</h1>
         <p>Alle Notizen sind Markdown und liegen lokal. Du kannst jederzeit aus Obsidian importieren oder alles als Markdown-Ordner exportieren.</p>
       </header>
-      <Group title="Start">
-        <Row label="Tagesnotiz beim Start öffnen">
-          <Switch checked={draft.open_daily_on_start} onChange={(v) => update({ open_daily_on_start: v })} label="Tagesnotiz beim Start" />
-        </Row>
-        <Row label="Vorlage für Tagesnotizen" description="Gilt für neu angelegte Tagesnotizen. Vorlagen sind die Seiten unter „Vorlagen“.">
+      <Group title={t("set.notes.templates")}>
+        <Row label={t("set.notes.dailyTemplate")} description="Gilt für neu angelegte Tagesnotizen. Vorlagen sind die Seiten unter „Vorlagen“.">
           <Select
             value={draft.daily_template == null ? "" : String(draft.daily_template)}
             onChange={(e) => update({ daily_template: e.target.value ? Number(e.target.value) : null })}
@@ -549,25 +607,25 @@ function NotesSection({ draft, update }: { draft: Settings; update: (p: Partial<
         </Row>
       </Group>
       <Group title="Obsidian" description="Ordner werden zu Seiten, [[Links]] und #Tags bleiben erhalten. Bilder werden als Anhänge übernommen, andere Dateien übersprungen.">
-        <Row label="Vault importieren">
+        <Row label={t("set.notes.importVault")}>
           <Button icon={FolderInput} onClick={() => importVault()}>
             Ordner wählen…
           </Button>
         </Row>
-        <Row stack label="Pfad direkt angeben" description="Alternativ zum Dialog.">
+        <Row stack label={t("set.notes.path")} description="Alternativ zum Dialog.">
           <Input value={path} onChange={(e) => setPath(e.target.value)} placeholder="C:\\Users\\du\\Obsidian\\Vault" className="grow" aria-label="Vault-Pfad" />
           <Button onClick={() => path.trim() && importVault(path.trim())} disabled={!path.trim()}>
             Importieren
           </Button>
         </Row>
-        <Row label="Als Markdown exportieren" description="Schreibt jede Seite als .md-Datei, Unterseiten als Ordner.">
+        <Row label={t("set.notes.exportMd")} description="Schreibt jede Seite als .md-Datei, Unterseiten als Ordner.">
           <Button icon={FolderOutput} onClick={() => exportVault()}>
             Zielordner wählen…
           </Button>
         </Row>
       </Group>
-      <Group title="Beispieldaten">
-        <Row label="Beispieldaten entfernen" description="Löscht das Beispielprojekt PRJ-2026-X mit seinen Zeiten und die Beispielseiten. Deine eigenen Seiten und Tagesnotizen bleiben erhalten.">
+      <Group title={t("set.notes.samples")}>
+        <Row label={t("set.notes.removeSamples")} description="Löscht das Beispielprojekt PRJ-2026-X mit seinen Zeiten und die Beispielseiten. Deine eigenen Seiten und Tagesnotizen bleiben erhalten.">
           <Button
             variant="danger"
             icon={Trash2}
@@ -594,6 +652,7 @@ function NotesSection({ draft, update }: { draft: Settings; update: (p: Partial<
 }
 
 function BackupSection({ draft, update }: { draft: Settings; update: (p: Partial<Settings>) => void }) {
+  const t = useT();
   const view = useApp((s) => s.settings)!;
   const [list, setList] = useState<BackupInfo[] | null>(null);
   const [mirror, setMirror] = useState<MirrorStatus | null>(null);
@@ -640,10 +699,10 @@ function BackupSection({ draft, update }: { draft: Settings; update: (p: Partial
   return (
     <>
       <header className="settings-head">
-        <h1>Sicherung</h1>
+        <h1>{t("set.backup.title")}</h1>
         <p>Die Datenbank wird einmal täglich automatisch gesichert. Eine Sicherung ist eine vollständige Kopie von workspace.db. Zum Wiederherstellen die Datei bei geschlossener App in den Datenordner kopieren und in workspace.db umbenennen.</p>
       </header>
-      <Group title="Automatische Sicherung" description="Wird beim Start und danach stündlich geprüft; gesichert wird, wenn die letzte Sicherung älter als 24 Stunden ist.">
+      <Group title={t("set.backup.auto")} description="Wird beim Start und danach stündlich geprüft; gesichert wird, wenn die letzte Sicherung älter als 24 Stunden ist.">
         <Row
           label="Ordner"
           description={
@@ -662,7 +721,7 @@ function BackupSection({ draft, update }: { draft: Settings; update: (p: Partial
             </Button>
           )}
         </Row>
-        <Row label="Anzahl behalten" description="Ältere Sicherungen werden gelöscht.">
+        <Row label={t("set.backup.keep")} description="Ältere Sicherungen werden gelöscht.">
           <div className="unit-input">
             <NumberInput min={1} max={365} value={draft.backup_keep} onCommit={(v) => update({ backup_keep: v })} aria-label="Anzahl Sicherungen" />
             <span className="faint">Sicherungen</span>
@@ -673,7 +732,7 @@ function BackupSection({ draft, update }: { draft: Settings; update: (p: Partial
         title="Markdown-Kopie"
         description="Nach jeder Sicherung werden alle Seiten als Markdown-Dateien (mit Bildern) und die Buchungen als Zeiterfassung/JJJJ-MM.csv in einen Ordner geschrieben – lesbar auch ohne AETHER OS. Der Ordner wird jedes Mal vollständig ersetzt."
       >
-        <Row label="Markdown-Kopie bei jeder Sicherung">
+        <Row label={t("set.backup.mirror")}>
           <Switch label="Markdown-Kopie bei jeder Sicherung" checked={draft.markdown_mirror} onChange={(v) => update({ markdown_mirror: v })} />
         </Row>
         {draft.markdown_mirror && (
@@ -717,8 +776,8 @@ function BackupSection({ draft, update }: { draft: Settings; update: (p: Partial
           </>
         )}
       </Group>
-      <Group title="Sicherungen">
-        <Row label="Jetzt sichern" description="Legt sofort eine zusätzliche Sicherung an.">
+      <Group title={t("set.backup.backups")}>
+        <Row label={t("set.backup.now")} description="Legt sofort eine zusätzliche Sicherung an.">
           <Button icon={DatabaseBackup} onClick={backupNow} loading={busy}>
             Jetzt sichern
           </Button>
@@ -737,14 +796,6 @@ function BackupSection({ draft, update }: { draft: Settings; update: (p: Partial
       <GitSyncGroup draft={draft} update={update} dbSize={list?.[0]?.size_bytes ?? null} onSynced={reload} />
     </>
   );
-}
-
-/** Text input that reports its value on blur or Enter (the backup section saves on every change). */
-function CommitInput({ value, onCommit, ...rest }: { value: string; onCommit: (v: string) => void } & Omit<React.InputHTMLAttributes<HTMLInputElement>, "value" | "onChange">) {
-  const [raw, setRaw] = useState(value);
-  useEffect(() => setRaw(value), [value]);
-  const commit = () => raw.trim() !== value && onCommit(raw.trim());
-  return <Input {...rest} value={raw} onChange={(e) => setRaw(e.target.value)} onBlur={commit} onKeyDown={(e) => e.key === "Enter" && commit()} />;
 }
 
 const BIG_DB = 50 * 1024 * 1024;
@@ -1097,29 +1148,6 @@ function ShortcutField({ value, onChange, label, placeholder, active }: { value:
   );
 }
 
-function AppearanceSection({ draft, update }: { draft: Settings; update: (p: Partial<Settings>) => void }) {
-  return (
-    <>
-      <header className="settings-head">
-        <h1>Darstellung</h1>
-      </header>
-      <Group title="Farbschema">
-        <Row label="Modus">
-          <Segmented
-            value={draft.theme}
-            options={[
-              { value: "system", label: "System" },
-              { value: "light", label: "Hell" },
-              { value: "dark", label: "Dunkel" },
-            ]}
-            onChange={(v) => update({ theme: v })}
-          />
-        </Row>
-      </Group>
-    </>
-  );
-}
-
 /** Offers to restart now; the move (or switch) happens at the next start either way. */
 async function offerRestart(dir: string, what: string) {
   const s = useApp.getState();
@@ -1178,6 +1206,7 @@ async function moveDataDir(onChanged: () => void) {
 }
 
 function UpdatesGroup({ draft, update }: { draft: Settings; update: (p: Partial<Settings>) => void }) {
+  const t = useT();
   const { status, available, phase, checkedAt } = useUpdates();
   useEffect(() => void loadUpdateStatus(), []);
   if (!status) return null;
@@ -1189,7 +1218,7 @@ function UpdatesGroup({ draft, update }: { draft: Settings; update: (p: Partial<
   else if (checkedAt) state = `AETHER OS ist aktuell (geprüft ${relative(checkedAt.toISOString())}).`;
   else state = "Noch nicht geprüft.";
   return (
-    <Group title="Updates" description="Neue Versionen kommen als signierte Installer von GitHub. Installiert wird nur nach deinem Klick; offene Notizen werden vorher gespeichert.">
+    <Group title={t("set.about.updates")} description="Neue Versionen kommen als signierte Installer von GitHub. Installiert wird nur nach deinem Klick; offene Notizen werden vorher gespeichert.">
       <Row label="Status" description={<span className="update-state">{state}</span>}>
         <div className="unit-input">
           {available && status.enabled && (
@@ -1223,29 +1252,19 @@ function UpdatesGroup({ draft, update }: { draft: Settings; update: (p: Partial<
 }
 
 function AboutSection({ draft, update }: { draft: Settings; update: (p: Partial<Settings>) => void }) {
+  const t = useT();
   const view = useApp((s) => s.settings)!;
   const version = useUpdates((s) => s.status?.current_version) ?? view.version;
   const [status, setStatus] = useState<DataDirStatus | null>(null);
   const loadStatus = () => void api.dataDirStatus().then(setStatus, () => setStatus(null));
   useEffect(loadStatus, []);
   const global = (spec: string | null | undefined, label: string): [string, string][] => (spec?.trim() ? [[formatShortcut(spec, IS_MAC, " "), label]] : []);
+  const keymap = effectiveKeymap(view.settings.keymap);
   const shortcuts: [string, string][] = [
-    [keys("Mod K"), "Befehlspalette & Suche"],
-    [keys("Mod O"), "Seite öffnen"],
-    ...global(view.settings.palette_shortcut, "Befehlspalette (global)"),
-    ...global(view.settings.capture_shortcut, "Schnellerfassung (global)"),
-    ...global(view.settings.search_shortcut, "Schnellsuche (global)"),
-    [keys("Mod N"), "Neue Seite"],
-    [keys("Mod Shift D"), "Heutige Tagesnotiz"],
-    [keys("Mod Shift T"), "Timer starten / stoppen"],
-    [keys("Mod J"), "Assistent"],
-    [keys("Mod W"), "Tab schließen"],
-    // ⌘Tab switches applications on macOS; Ctrl+Tab works there as well.
-    [keys("Ctrl Tab"), "Nächster Tab"],
-    [keys("Mod \\"), "Seitenleiste"],
-    [keys("Mod Shift \\"), "Seitenpanel"],
-    [keys("Mod ."), "Fokusmodus"],
-    [keys("Mod ,"), "Einstellungen"],
+    ...COMMANDS.filter((c) => keymap[c.id]).map((c): [string, string] => [comboLabel(keymap[c.id]), t(c.label)]),
+    ...global(view.settings.palette_shortcut, t("keys.globalPalette")),
+    ...global(view.settings.capture_shortcut, t("keys.globalCapture")),
+    ...global(view.settings.search_shortcut, t("keys.globalSearch")),
   ];
   return (
     <>
@@ -1259,8 +1278,8 @@ function AboutSection({ draft, update }: { draft: Settings; update: (p: Partial<
         </div>
       </header>
       <UpdatesGroup draft={draft} update={update} />
-      <Group title="Daten">
-        <Row label="Datenordner" description="Datenbank, Einstellungen und Schlüsselablage (unter Linux).">
+      <Group title={t("set.about.data")}>
+        <Row label={t("set.about.dataDir")} description="Datenbank, Einstellungen und Schlüsselablage (unter Linux).">
           <span className="mono small selectable">{view.data_dir}</span>
         </Row>
         {status?.pending_move && (
@@ -1283,16 +1302,16 @@ function AboutSection({ draft, update }: { draft: Settings; update: (p: Partial<
             </div>
           </Row>
         )}
-        <Row label="Speicherort ändern" description="Kopiert Datenbank, Bilder und Sicherungen beim nächsten Start in einen anderen Ordner. Der alte Ordner bleibt unverändert. Kein OneDrive-, Dropbox- oder Netzwerkordner.">
+        <Row label={t("set.about.moveData")} description="Kopiert Datenbank, Bilder und Sicherungen beim nächsten Start in einen anderen Ordner. Der alte Ordner bleibt unverändert. Kein OneDrive-, Dropbox- oder Netzwerkordner.">
           <Button icon={FolderInput} onClick={() => moveDataDir(loadStatus)}>
             Speicherort ändern…
           </Button>
         </Row>
       </Group>
-      <Group title="Tastenkürzel">
+      <Group title={t("set.about.shortcuts")}>
         <div className="shortcut-list">
           {shortcuts.map(([k, d]) => (
-            <div key={k} className="shortcut">
+            <div key={`${k}-${d}`} className="shortcut">
               <span>{d}</span>
               <span className="keys">
                 {k.split(" ").map((x) => (

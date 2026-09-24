@@ -19,9 +19,15 @@ export const AI_PRESETS: AiPreset[] = [
   { id: "formal", label: "Förmlicher", instruction: "Formuliere den Text förmlicher und sachlicher (Geschäftston, Sie-Form), bei gleichem Inhalt." },
 ];
 
+/** The presets of the inline AI bar: the user's (Settings → KI) or the built-in ones. */
+export function inlinePresets(custom?: { label: string; instruction: string }[] | null): AiPreset[] {
+  if (!custom) return AI_PRESETS;
+  return custom.filter((p) => p.label.trim() && p.instruction.trim()).map((p, i) => ({ id: `custom-${i}`, label: p.label.trim(), instruction: p.instruction.trim() }));
+}
+
 /** The instruction of a preset or free text (trimmed); null when empty. */
-export function transformInstruction(presetOrText: string): string | null {
-  const preset = AI_PRESETS.find((p) => p.id === presetOrText);
+export function transformInstruction(presetOrText: string, presets: AiPreset[] = AI_PRESETS): string | null {
+  const preset = presets.find((p) => p.id === presetOrText);
   if (preset) return preset.instruction;
   const t = presetOrText.trim();
   return t ? t : null;
@@ -44,8 +50,9 @@ export function cleanAiMarkdown(answer: string): string {
 
 export const SUMMARY_HEADINGS = ["Zusammenfassung", "Entscheidungen", "Aufgaben", "Offene Punkte"] as const;
 
-/** The instruction for „Besprechung zusammenfassen“. */
-export function meetingSummaryInstruction(): string {
+/** The instruction for „Besprechung zusammenfassen“: the user's template or the built-in one. */
+export function meetingSummaryInstruction(template?: string | null): string {
+  if (template?.trim()) return template.trim();
   return [
     "Fasse die folgende Besprechungsnotiz zusammen. Gliedere die Antwort genau in diese vier Abschnitte und nichts sonst:",
     "",

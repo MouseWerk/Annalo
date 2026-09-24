@@ -168,9 +168,16 @@ impl Database {
         self.atomic(|| self.list_trash()?.iter().map(|e| self.purge_page(e.page.id)).sum())
     }
 
-    /// Purges entries trashed more than [`RETENTION_DAYS`] before `now`.
+    /// Purges entries trashed more than the retention (Settings → Notizen, default
+    /// [`RETENTION_DAYS`]) before `now`.
     pub fn purge_expired_trash(&self, now: DateTime<Utc>) -> Result<usize> {
-        let cutoff = stamp(now - Duration::days(RETENTION_DAYS));
+        let days = self.load_settings().map(|s| s.notes.trash_retention_days as i64).unwrap_or(RETENTION_DAYS);
+        self.purge_trash_older_than(now, days)
+    }
+
+    /// Purges entries trashed more than `days` before `now`.
+    pub fn purge_trash_older_than(&self, now: DateTime<Utc>, days: i64) -> Result<usize> {
+        let cutoff = stamp(now - Duration::days(days.max(1)));
         self.atomic(|| {
             self.list_trash()?
                 .iter()

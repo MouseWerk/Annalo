@@ -5,6 +5,7 @@ import { api, errorText, on } from "./api";
 import { cleanAiMarkdown } from "./aitext";
 import { useApp } from "../store/app";
 import type { StreamEvent, Tier } from "./types";
+import { streamingOn, warnCost, withCostLimit } from "./aicost";
 
 export interface TransformMeta {
   model: string;
@@ -36,6 +37,8 @@ export function useAiTransform() {
     const un = on<{ request_id: string; event: StreamEvent }>("ai://stream", ({ request_id, event }) => {
       if (request_id !== requestId.current || event.type !== "delta") return;
       raw.current += event.text;
+      // Settings → KI „Antworten live anzeigen“ off: only the finished answer is shown.
+      if (!streamingOn()) return;
       if (!frame)
         frame = requestAnimationFrame(() => {
           frame = 0;
@@ -58,7 +61,8 @@ export function useAiTransform() {
     raw.current = "";
     setState({ ...IDLE, busy: true });
     try {
-      const out = await api.transform({ requestId: rid, instruction, text, pageId });
+      const out = await withCostLimit((overrideLimit) => api.transform({ requestId: rid, instruction, text, pageId, overrideLimit }));
+      warnCost(out.cost_warning);
       if (requestId.current !== rid) return;
       const c = out.completion;
       useApp.getState().set({ meter: out.meter });

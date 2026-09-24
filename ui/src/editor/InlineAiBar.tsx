@@ -9,7 +9,8 @@ import { Decoration, DecorationSet } from "@tiptap/pm/view";
 import { ArrowUp, CornerDownLeft, RotateCcw, Replace, Sparkles, Square, X } from "lucide-react";
 import { Button, IconButton } from "../components/ui";
 import { renderMarkdown } from "../lib/markdown";
-import { AI_PRESETS, transformInstruction } from "../lib/aitext";
+import { inlinePresets, transformInstruction } from "../lib/aitext";
+import { useApp } from "../store/app";
 import { useAiTransform } from "../lib/useAiTransform";
 import { usd } from "../lib/format";
 import { insertMarkdownBelow, rangeMarkdown, replaceWithMarkdown, type AiRange } from "./ai-insert";
@@ -102,6 +103,7 @@ export function InlineAiBar({
     return () => document.removeEventListener("mousedown", onDown, true);
   });
 
+  const presets = inlinePresets(useApp((st) => st.settings?.settings.ai?.inline_presets));
   const done = !ai.busy && !!ai.text && !ai.error;
   const run = async (instruction: string) => {
     setLast(instruction);
@@ -109,7 +111,7 @@ export function InlineAiBar({
     ai.run(instruction, source.current, pageId);
   };
   const submit = (presetOrText: string) => {
-    const instruction = transformInstruction(presetOrText);
+    const instruction = transformInstruction(presetOrText, presets);
     if (instruction && !ai.busy) run(instruction);
   };
   const submitInput = () => {
@@ -171,7 +173,7 @@ export function InlineAiBar({
       </div>
       {!ai.busy && !ai.text && !ai.error && (
         <div className="ai-bar-presets" role="group" aria-label="KI-Aktionen">
-          {AI_PRESETS.map((p) => (
+          {presets.map((p) => (
             <button key={p.id} type="button" className="ai-chip" onClick={() => submit(p.id)}>
               {p.label}
             </button>

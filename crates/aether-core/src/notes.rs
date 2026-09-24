@@ -477,6 +477,8 @@ impl Database {
         {
             return Ok(p);
         }
+        let settings = self.load_settings().unwrap_or_default();
+        let folder = Some(settings.notes.daily_folder.trim()).filter(|f| !f.is_empty()).unwrap_or(JOURNAL_TITLE);
         let journal = match self
             .conn()
             .query_row(
@@ -484,28 +486,33 @@ impl Database {
                     "SELECT {} FROM pages WHERE parent_id IS NULL AND title = ?1 AND deleted_at IS NULL",
                     crate::db::PAGE_COLS
                 ),
-                [JOURNAL_TITLE],
+                [folder],
                 crate::db::map_page,
             )
             .optional()?
         {
             Some(j) => j,
-            None => self.create_page(None, JOURNAL_TITLE, Some("calendar-days"))?,
+            None => self.create_page(None, folder, Some("calendar-days"))?,
         };
-        let page = self.create_page(Some(journal.id), &key, Some("calendar"))?;
+        // The title follows Settings → Notizen; `daily_date` always keeps the ISO date.
+        let mut title = settings.notes.daily_title.title(date);
+        if self.page_by_title(&title)?.is_some() {
+            title = key.clone();
+        }
+        let page = self.create_page(Some(journal.id), &title, Some("calendar"))?;
         // Newest day first under the Journal.
         self.move_page(page.id, Some(journal.id), 0)?;
         self.conn().execute("UPDATE pages SET daily_date = ?2 WHERE id = ?1", params![page.id, key])?;
         // The UI shows the weekday and date under the title, so the body starts with the sections.
         // A trashed, deleted or moved template falls back to the built-in sections.
-        let template = match self.load_settings()?.daily_template {
+        let template = match settings.daily_template {
             Some(id) if id != page.id && self.is_template(id)? => Some(id),
             _ => None,
         };
         let content = match template {
             Some(id) => {
                 let time = chrono::Local::now().time();
-                self.render_template(id, &crate::templates::TemplateVars { date, time, title: key.clone() })?
+                self.render_template(id, &crate::templates::TemplateVars { date, time, title: title.clone() })?
             }
             None => "## Fokus\n\n- [ ] \n\n## Notizen\n\n".to_owned(),
         };
@@ -624,6 +631,40 @@ mod tests {
         assert_eq!(db.daily_note(d).unwrap().id, p.id);
         assert!(db.page_doc(p.id).unwrap().content.starts_with("## Fokus"));
         assert_eq!(db.page(p.parent_id.unwrap()).unwrap().title, JOURNAL_TITLE);
+    }
+
+    #[test]
+    fn daily_note_title_format_folder_and_retention_settings() {
+        use chrono::{TimeZone, Utc};
+        let db = Database::open_in_memory().unwrap();
+        let mut s = db.load_settings().unwrap();
+        s.notes.daily_title = crate::prefs::DailyTitle::Long;
+        s.notes.daily_folder = "Tagebuch".into();
+        s.notes.trash_retention_days = 7;
+        s.notes.version_interval_minutes = 5;
+        s.notes.max_versions = 5;
+        db.save_settings(&s).unwrap();
+        let d = NaiveDate::from_ymd_opt(2026, 9, 23).unwrap();
+        let p = db.daily_note(d).unwrap();
+        assert_eq!(p.title, "Mittwoch, 23.09.2026");
+        assert_eq!(p.daily_date.as_deref(), Some("2026-09-23"));
+        assert_eq!(db.page(p.parent_id.unwrap()).unwrap().title, "Tagebuch");
+        assert_eq!(db.daily_note(d).unwrap().id, p.id, "found by date, not title");
+
+        // Trash: 7 days instead of 30.
+        let t0 = Utc.with_ymd_and_hms(2026, 9, 1, 8, 0, 0).unwrap();
+        let old = db.create_page(None, "Alt", None).unwrap();
+        db.trash_page_at(old.id, t0).unwrap();
+        assert_eq!(db.purge_expired_trash(t0 + chrono::Duration::days(6)).unwrap(), 0);
+        assert_eq!(db.purge_expired_trash(t0 + chrono::Duration::days(8)).unwrap(), 1);
+
+        // Versions: a snapshot after 5 minutes, at most 5 kept.
+        let v = db.create_page(None, "Versioniert", None).unwrap();
+        for i in 0..8 {
+            db.save_page_content(v.id, &format!("Stand {i}")).unwrap();
+            db.snapshot_page_at(v.id, t0 + chrono::Duration::minutes(i * 6)).unwrap();
+        }
+        assert_eq!(db.list_versions(v.id).unwrap().len(), 5);
     }
 
     #[test]

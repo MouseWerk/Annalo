@@ -58,6 +58,49 @@ Settings → **KI & LiteLLM**:
 
 Changes apply immediately, with no restart. `config/litellm.config.example.yaml` shows a matching proxy configuration.
 
+## Netzwerk & Proxy
+
+Settings → **Netzwerk** applies to every outgoing connection: the LiteLLM server, the assistant's HTTP tool, the Git
+sync and the updater (each can be excluded under „Anwenden auf“).
+
+- **Proxy-Modus**: *Kein Proxy*, *System* (Windows: the WinINet settings of the current user, including the exception
+  list and `<local>`; elsewhere `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY`), *Manuell* (HTTP, HTTPS and SOCKS
+  proxy as `host:port` or URL) or *PAC*
+- **Ohne Proxy erreichen**: `host` (and its subdomains), `*.domain` / `.domain` (subdomains only), IPs, CIDR ranges
+  (`10.0.0.0/8`), `<local>` (names without a dot) and `*`
+- **Anmeldung**: user name in the settings, password in the Windows Credential Manager / macOS Keychain (Basic auth)
+- **Zusätzliches Stammzertifikat**: a PEM (also bundles) or DER file of a company root CA, e.g. for TLS-inspecting
+  proxies; the page shows the number of certificates, the first subject and its expiry. „Ungültige Zertifikate
+  akzeptieren“ exists for troubleshooting only and shows a warning while it is on
+- **Verbindung testen** requests `<LiteLLM>/v1/models` with the entered (also unsaved) values and shows whether the
+  request went direct or through which proxy, and how long it took
+
+PAC files are JavaScript. The core does not embed a JS engine: the UI evaluates `FindProxyForURL` in a sandboxed frame
+(own `aether-pac:` scheme, opaque origin, no access to the app) for the LiteLLM host, GitHub (updates) and the Git
+remote when the settings are saved or tested and at every start, and stores the answers. Limitations: no DNS
+(`isInNet` only matches IP addresses, `dnsResolve` only returns IP literals, `myIpAddress()` is `127.0.0.1`), and
+other hosts (the assistant's HTTP tool) use the answer for the LiteLLM host. Git receives the proxy through
+`http_proxy`/`https_proxy`/`no_proxy` and the CA through `http.sslCAInfo` (extra CA plus the system bundle); Git for
+Windows verifies with the Windows certificate store (schannel), so install the root CA there.
+
+## Anpassen
+
+Settings are grouped (Allgemein, Arbeiten, KI, System) and searchable. Besides the connections they cover:
+
+| Section | What |
+|---|---|
+| Darstellung | light/dark, accent color (presets or any hex; lightness is adjusted for WCAG contrast in both modes), UI/editor/code fonts, scale 90–125 %, density, line width, reduced motion, Mica (Windows 11) |
+| Sprache & Format | German or English for settings, ribbon, sidebar, tabs, status bar and commands (longer help texts, dialogs and AI prompts stay German), date format |
+| Start | open the last tabs, the start page or today's note; remember window size and position; start minimized |
+| Tastatur | rebind every in-app shortcut, with conflict detection (commands, editor keys, global shortcuts); Ctrl+Alt is rejected (AltGr) |
+| Editor | spell check language, autosave delay, typographic quotes („…“ ‚…‘ –), closing brackets, Tab width and line numbers in code blocks, link hover preview, scroll outline, icon and location of new pages |
+| Notizen | daily note title (`2026-09-24`, `24.09.2026`, `Donnerstag, 24.09.2026`) and folder, trash retention, version interval and count |
+| Zeiterfassung | week start, rounding (1/5/6/10/15 min, up or nearest) and minimum for bookings and timer stops, hours as `1,50` or `1:30`, default Leistungsart per Netzplan, CATS separator and column order, export file name |
+| KI | temperature, answer length, streaming, citations, allowed tools (system tools off by default), monthly cost limit (warning at 80 %, blocked at 100 % unless sent anyway), inline AI actions, meeting summary template |
+| Datenschutz | private tags, whether the assistant sees the open page, local model only |
+| Benachrichtigungen | each reminder and notice on/off, quiet hours for desktop notifications |
+| Verwaltung | export all settings to JSON (never tokens or passwords), import with a preview of the changes, reset one section or everything |
+
 ## Building
 
 Prerequisites: Rust (stable, MSVC on Windows), Node 22, and on Windows the WebView2 runtime (preinstalled on Windows 11).
@@ -180,7 +223,7 @@ and a fake LiteLLM server for the assistant tests. It also saves screenshots of 
 
 ## Keyboard
 
-On macOS use ⌘ where the table says Ctrl (the app shows ⌘⇧⌥⌃ glyphs there); Ctrl Tab stays Ctrl Tab.
+All in-app shortcuts can be changed under Settings → Tastatur (the defaults are listed here). On macOS use ⌘ where the table says Ctrl (the app shows ⌘⇧⌥⌃ glyphs there); Ctrl Tab stays Ctrl Tab.
 
 | Keys | Action |
 |---|---|

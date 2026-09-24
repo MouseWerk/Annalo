@@ -3,6 +3,7 @@
 import { create } from "zustand";
 import { api, errorText } from "../lib/api";
 import type { BudgetStatus, PageDoc, PageNode, SessionMeter, SettingsView, TimerStatus } from "../lib/types";
+import { applyPrefs } from "../lib/prefs";
 
 export type TabKind = "home" | "page" | "timesheet" | "projects" | "settings" | "tag" | "trash" | "tasks";
 /** A place a tab can show. */
@@ -423,6 +424,8 @@ export const useApp = create<State>((set, get) => ({
   dismissToast: (id) => set({ toasts: get().toasts.filter((t) => t.id !== id) }),
   error: (title, e) => get().toast({ tone: "danger", title, detail: errorText(e) }),
   alerts: (alerts) => {
+    // Settings → Benachrichtigungen.
+    if (get().settings?.settings.notifications?.budget === false) return;
     for (const a of alerts) {
       const pct = Math.round(a.consumed * 100);
       const title =
@@ -435,6 +438,11 @@ export const useApp = create<State>((set, get) => ({
     }
   },
 }));
+
+// Appearance, language, formats and shortcuts follow the settings (before components re-render).
+useApp.subscribe((st, prev) => {
+  if (st.settings && st.settings !== prev.settings) applyPrefs(st.settings.settings);
+});
 
 export const activeTab = () => {
   const s = useApp.getState();

@@ -14,7 +14,8 @@ import { SettingsView } from "../views/SettingsView";
 import { TagView } from "../views/TagView";
 import { TrashView } from "../views/TrashView";
 import { TasksView } from "../views/TasksView";
-import { keys } from "../lib/shortcut";
+import { useT } from "../lib/i18n";
+import { withHint } from "../lib/keymap";
 
 const MIN_PANE = 280;
 
@@ -106,6 +107,7 @@ function TabContent({ tab, active }: { tab: Tab; active: boolean }) {
 }
 
 function TabLabel({ tab }: { tab: Tab }) {
+  useT();
   const pages = useApp((s) => s.pages);
   return <>{tabTitle(tab, pages)}</>;
 }
@@ -113,6 +115,7 @@ function TabLabel({ tab }: { tab: Tab }) {
 const TAB_MIME = "application/x-aether-tab";
 
 function PaneTabs({ pane, last }: { pane: Pane; last: boolean }) {
+  const tr = useT();
   const pages = useApp((s) => s.pages);
   const panelOpen = useApp((s) => s.panelOpen);
   const paneCount = useApp((s) => s.panes.length);
@@ -137,10 +140,10 @@ function PaneTabs({ pane, last }: { pane: Pane; last: boolean }) {
   };
 
   const tabMenu = (t: Tab): MenuEntry[] => [
-    { label: "Rechts daneben öffnen", icon: Columns2, disabled: paneCount >= 3 && last, onSelect: () => s().splitTab(t.id) },
+    { label: tr("tabs.openRight"), icon: Columns2, disabled: paneCount >= 3 && last, onSelect: () => s().splitTab(t.id) },
     "separator",
-    { label: "Schließen", icon: X, onSelect: () => s().closeTab(t.id) },
-    { label: "Andere Tabs schließen", onSelect: () => s().closeOthers(t.id), disabled: pane.tabs.length < 2 },
+    { label: tr("tabs.close"), icon: X, onSelect: () => s().closeTab(t.id) },
+    { label: tr("tabs.closeOthers"), onSelect: () => s().closeOthers(t.id), disabled: pane.tabs.length < 2 },
   ];
 
   return (
@@ -199,7 +202,7 @@ function PaneTabs({ pane, last }: { pane: Pane; last: boolean }) {
               <button
                 type="button"
                 className="tab-close"
-                aria-label="Tab schließen"
+                aria-label={tr("tabs.closeTab")}
                 onMouseDown={(e) => e.stopPropagation()}
                 onClick={() => s().closeTab(t.id)}
               >
@@ -208,13 +211,13 @@ function PaneTabs({ pane, last }: { pane: Pane; last: boolean }) {
             </div>
           );
         })}
-        <IconButton icon={Plus} label={`Neuer Tab (${keys("Mod T")})`} size={26} iconSize={15} onClick={() => s().openTab({ kind: "home" }, { newTab: true })} />
+        <IconButton icon={Plus} label={withHint(tr("tabs.newTab"), "new_tab")} size={26} iconSize={15} onClick={() => s().openTab({ kind: "home" }, { newTab: true })} />
       </div>
       <span className="tabbar-drag" data-tauri-drag-region />
       {pane.tabs.length > 0 && (
         <IconButton
           icon={Columns2}
-          label="Rechts teilen"
+          label={tr("tabs.split")}
           size={26}
           iconSize={15}
           disabled={paneCount >= 3 && last}
@@ -224,7 +227,7 @@ function PaneTabs({ pane, last }: { pane: Pane; last: boolean }) {
       {last && (
         <IconButton
           icon={PanelRight}
-          label={`Seitenpanel (${keys("Mod Shift \\")})`}
+          label={withHint(tr("tabs.panel"), "toggle_panel")}
           active={panelOpen}
           size={26}
           iconSize={15}

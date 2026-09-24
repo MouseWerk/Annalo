@@ -1,6 +1,6 @@
 // Week helpers for the timesheet: gaps against the daily target and a CATS-ready grid.
 
-import { addDays, isoDay } from "./format";
+import { addDays, isoDay, isoWeekday } from "./format";
 import type { TimeEntryRow } from "./types";
 
 export interface DayGap {
@@ -19,7 +19,7 @@ export function weekGaps(rows: TimeEntryRow[], week: Date, now: Date, targetHour
     const key = isoDay(day);
     // Today only counts once the working day is over.
     if (key > today || (key === today && now.getHours() < 18)) continue;
-    if (!workdays.includes(i + 1)) continue;
+    if (!workdays.includes(isoWeekday(day))) continue;
     const booked = rows
       .filter((r) => r.status_flag !== "running" && isoDay(new Date(r.start_time)) === key)
       .reduce((a, r) => a + (r.duration_minutes ?? 0), 0);

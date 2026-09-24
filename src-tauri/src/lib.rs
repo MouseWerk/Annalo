@@ -4,6 +4,8 @@
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod appmenu;
 mod desktop;
+mod network;
+mod prefs;
 mod secrets;
 mod updates;
 
@@ -27,9 +29,10 @@ use aether_core::backup::{self, BackupInfo};
 use aether_core::calendar::{self, DayOverview};
 use aether_core::db::EntryFilter;
 use aether_core::export::{self, ExportFormat, ExportOptions, ExportResult};
-use aether_core::gitsync::{self, Git, GitSyncStatus, SyncMode, SyncOutcome, SyncRequest};
+use aether_core::gitsync::{self, GitSyncStatus, SyncMode, SyncOutcome, SyncRequest};
 use aether_core::mirror::{self, MirrorReport};
 use aether_core::model::*;
+use aether_core::network::Purpose;
 use aether_core::netzplan::{self, Schedule};
 use aether_core::notes::PageDoc;
 use aether_core::pagework::{self, PageWork};
@@ -55,18 +58,40 @@ type Result<T> = std::result::Result<T, Error>;
 
 // -------------------------------------------------------------------- state
 
-/// AI configuration derived from the settings; rebuilt when they change.
+/// AI configuration derived from the settings; rebuilt when they change (also the network
+/// settings: proxy, extra CA and timeouts apply to both HTTP clients).
 struct AiRuntime {
     settings: Settings,
     client: Arc<LiteLlmClient>,
     router: Arc<ModelRouter>,
+    /// Client of the assistant's `http_request` tool.
+    tools_http: tools::HttpClient,
 }
 
 impl AiRuntime {
-    fn new(settings: Settings, api_key: Option<String>) -> Self {
-        let client = LiteLlmClient::new(settings.litellm_base_url.clone(), api_key);
-        AiRuntime { client: Arc::new(client), router: Arc::new(ModelRouter::new(settings.router.clone())), settings }
+    fn new(settings: Settings, api_key: Option<String>, proxy_password: Option<String>) -> Self {
+        let http = |purpose| {
+            aether_core::network::http_client(&settings.network, proxy_password.as_deref(), purpose).unwrap_or_else(
+                |e| {
+                    eprintln!("network settings not applied: {e}");
+                    tools::HttpClient::new()
+                },
+            )
+        };
+        let client = LiteLlmClient::with_http(settings.litellm_base_url.clone(), api_key, http(Purpose::Ai));
+        AiRuntime {
+            client: Arc::new(client),
+            router: Arc::new(ModelRouter::new(settings.router.clone())),
+            tools_http: http(Purpose::Tools),
+            settings,
+        }
     }
+}
+
+/// Rebuilds the AI runtime (clients, router) from `settings` and the stored secrets.
+pub(crate) fn rebuild_ai(state: &AppState, settings: Settings) {
+    let rt = AiRuntime::new(settings, state.secrets.get(), state.proxy_secret.get());
+    *state.ai.write().unwrap_or_else(|e| e.into_inner()) = rt;
 }
 
 pub struct AppState {
@@ -75,6 +100,8 @@ pub struct AppState {
     secrets: SecretStore,
     /// Access token of the Git sync.
     git_secret: SecretStore,
+    /// Password of the proxy (Settings → Netzwerk).
+    proxy_secret: SecretStore,
     /// One Git sync at a time (scheduler, backup and „Jetzt synchronisieren“).
     git_lock: Mutex<()>,
     data_dir: PathBuf,
@@ -606,13 +633,17 @@ fn timer_start(
     leistungsart: Option<String>,
     description: String,
 ) -> Result<TimeEntry> {
-    let e = state.db().start_timer(
-        netzplan_id,
-        vorgang_nr.as_deref(),
-        leistungsart.as_deref(),
-        &description,
-        Utc::now(),
-    )?;
+    let db = state.db();
+    // Without a Leistungsart the Netzplan's default applies (Settings → Zeiterfassung).
+    let leistungsart = match leistungsart.filter(|l| !l.is_empty()) {
+        Some(l) => Some(l),
+        None => {
+            let nr = db.netzplan_by_id(netzplan_id)?.netzplan_nr;
+            state.settings().time.default_la_for(&nr).map(str::to_owned)
+        }
+    };
+    let e = db.start_timer(netzplan_id, vorgang_nr.as_deref(), leistungsart.as_deref(), &description, Utc::now())?;
+    drop(db);
     lock(&state.idle).reset();
     let _ = app.emit("data://entries", ());
     desktop::refresh_tray(&app);
@@ -680,14 +711,19 @@ fn time_entry_create(
     if !(1..=24 * 60).contains(&duration_minutes) {
         return Err(Error::State("Dauer muss zwischen 1 Minute und 24 Stunden liegen".into()));
     }
-    let t = state.settings().thresholds;
+    let settings = state.settings();
+    let t = settings.thresholds;
     let db = state.db();
+    let leistungsart = match leistungsart.filter(|v| !v.is_empty()) {
+        Some(l) => Some(l),
+        None => settings.time.default_la_for(&db.netzplan_by_id(netzplan_id)?.netzplan_nr).map(str::to_owned),
+    };
     let entry = db.insert_time_entry(&NewTimeEntry {
         netzplan_id,
         vorgang_nr: vorgang_nr.filter(|v| !v.is_empty()),
-        leistungsart: leistungsart.filter(|v| !v.is_empty()),
+        leistungsart,
         start_time,
-        duration_minutes,
+        duration_minutes: settings.time.rounding.apply(duration_minutes),
         description,
         source: EntrySource::Manual,
         page_id: None,
@@ -763,6 +799,8 @@ fn export_entries(
         pernr: settings.pernr.clone(),
         jira_issue_map: settings.jira_issue_map.clone(),
         utc_offset_minutes: None,
+        cats_delimiter: settings.time.cats_delimiter,
+        cats_columns: settings.time.cats_columns,
     };
     let res = export::export(&rows, format, &options)?;
     if let Some(p) = path {
@@ -845,7 +883,7 @@ fn run_git_sync(app: &AppHandle, mirror_fresh: bool) -> Result<SyncOutcome> {
         } else {
             None
         };
-        let git = Git::new(token.clone(), &settings.git_sync.remote_url);
+        let git = network::git(&state, token.clone(), &settings.git_sync.remote_url);
         gitsync::sync(
             &git,
             &SyncRequest {
@@ -951,7 +989,7 @@ async fn git_sync_test(app: AppHandle, url: Option<String>, token: Option<String
             return Ok(GitTest { ok: false, latency_ms: 0, branches: vec![], error: Some("Keine Remote-URL".into()) });
         }
         let token = token.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty()).or_else(|| state.git_secret.get());
-        let git = Git::new(token.clone(), &url);
+        let git = network::git(&state, token.clone(), &url);
         let start = Instant::now();
         let res = git.version().and_then(|_| git.ls_remote(&url));
         let latency_ms = start.elapsed().as_millis() as u64;
@@ -980,7 +1018,7 @@ async fn git_restore_import(app: AppHandle, url: String) -> Result<ImportReport>
         gitsync::check_url(&url)?;
         let configured = url == gs.remote_url.trim();
         let token = if configured { state.git_secret.get() } else { None };
-        let git = Git::new(token.clone(), &url);
+        let git = network::git(&state, token.clone(), &url);
         git.version()?;
         let now = Local::now();
         let tmp = std::env::temp_dir().join(format!(
@@ -1161,6 +1199,10 @@ fn settings_save(app: AppHandle, state: State<AppState>, settings: Settings) -> 
     settings.backup_dir = settings.backup_dir.map(|d| d.trim().to_owned()).filter(|d| !d.is_empty());
     settings.markdown_mirror_dir = settings.markdown_mirror_dir.map(|d| d.trim().to_owned()).filter(|d| !d.is_empty());
     settings.git_sync = gitsync::normalize(&settings.git_sync)?;
+    settings.network = settings.network.normalized()?;
+    settings.normalize();
+    // A missing or unreadable CA file is reported now, not on the next request.
+    aether_core::network::Prepared::new(&settings.network, state.proxy_secret.get().as_deref(), Purpose::Ai)?;
     settings.reminder_time = settings.reminder_time.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty());
     if let Some(t) = &settings.reminder_time {
         let time = aether_core::desktop::parse_hhmm(t)
@@ -1199,7 +1241,9 @@ fn settings_save(app: AppHandle, state: State<AppState>, settings: Settings) -> 
         return Err(e);
     }
     lock(&state.idle).set_threshold(Duration::from_secs(settings.idle_threshold_minutes * 60));
-    *state.ai.write().unwrap_or_else(|e| e.into_inner()) = AiRuntime::new(settings, state.secrets.get());
+    rebuild_ai(&state, settings);
+    // Other windows (and a settings page opened elsewhere) take over the change.
+    let _ = app.emit("settings://changed", ());
     Ok(settings_get(state))
 }
 
@@ -1217,8 +1261,7 @@ fn dashboard_save(state: State<AppState>, dashboard: Dashboard) -> Result<Settin
 #[tauri::command]
 fn api_key_set(state: State<AppState>, key: Option<String>) -> Result<SettingsView> {
     state.secrets.set(key.as_deref().map(str::trim)).map_err(Error::State)?;
-    let settings = state.settings();
-    *state.ai.write().unwrap_or_else(|e| e.into_inner()) = AiRuntime::new(settings, state.secrets.get());
+    rebuild_ai(&state, state.settings());
     Ok(settings_get(state))
 }
 
@@ -1237,9 +1280,11 @@ async fn ai_test_connection(
     base_url: Option<String>,
     api_key: Option<String>,
 ) -> Result<ConnectionTest> {
-    let url = base_url.unwrap_or_else(|| state.settings().litellm_base_url);
+    let settings = state.settings();
+    let url = base_url.unwrap_or_else(|| settings.litellm_base_url.clone());
     let key = api_key.filter(|k| !k.is_empty()).or_else(|| state.secrets.get());
-    let client = LiteLlmClient::new(url.trim().trim_end_matches('/').to_owned(), key);
+    let http = aether_core::network::http_client(&settings.network, state.proxy_secret.get().as_deref(), Purpose::Ai)?;
+    let client = LiteLlmClient::with_http(url.trim().trim_end_matches('/').to_owned(), key, http);
     let start = Instant::now();
     let res = client.models().await;
     let latency_ms = start.elapsed().as_millis() as u64;
@@ -1282,6 +1327,18 @@ struct ChatOutcome {
     route: RouteDecision,
     context: Vec<ContextChunk>,
     meter: SessionMeter,
+    /// Share of the monthly cost limit used, once it is at least 80 %.
+    cost_warning: Option<f64>,
+}
+
+/// The cost warning after a request (at least 80 % of the monthly limit).
+fn cost_warning(state: &AppState) -> Option<f64> {
+    match prefs::cost_status_of(state).ok()?.level {
+        aether_core::prefs::CostLevel::Warning { fraction } | aether_core::prefs::CostLevel::Blocked { fraction } => {
+            Some(fraction)
+        }
+        aether_core::prefs::CostLevel::Ok => None,
+    }
 }
 
 fn route_for(
@@ -1292,7 +1349,12 @@ fn route_for(
     tier: Option<Tier>,
 ) -> RouteDecision {
     let settings = state.settings();
-    let force = tier.or((!settings.auto_route).then_some(Tier::Standard));
+    // Settings → Datenschutz: everything stays on the local model.
+    let force = if settings.privacy.local_only {
+        Some(Tier::Local)
+    } else {
+        tier.or((!settings.auto_route).then_some(Tier::Standard))
+    };
     state.router().route(&RouteInput { prompt, context, uses_tools, force })
 }
 
@@ -1314,6 +1376,7 @@ fn ai_meter(state: State<AppState>) -> SessionMeter {
 /// Runs one chat turn with retrieval and streams deltas as `ai://stream` events.
 /// Tool calls in the result are executed by the UI via the `ai_*_tool` commands.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn ai_chat(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -1322,7 +1385,9 @@ async fn ai_chat(
     use_tools: bool,
     tier: Option<Tier>,
     page_id: Option<i64>,
+    override_limit: Option<bool>,
 ) -> Result<ChatOutcome> {
+    prefs::check_cost_limit(&state, override_limit.unwrap_or(false))?;
     let prompt = messages
         .iter()
         .rev()
@@ -1340,7 +1405,8 @@ async fn ai_chat(
     let (context, active, source_tags) = {
         let db = state.db();
         let context = rag::retrieve(&db, &prompt, query_embedding.as_deref(), 6)?;
-        let active = match page_id {
+        // Settings → Datenschutz: the open page is only sent when allowed.
+        let active = match page_id.filter(|_| settings.privacy.read_open_page) {
             Some(id) => db.page_doc(id).ok().map(|d| (d.page.title, d.content)),
             None => None,
         };
@@ -1369,19 +1435,19 @@ async fn ai_chat(
         full.push(ChatMessage::system(format!("Aktuell geöffnete Seite „{title}“:\n\n{text}")));
     }
     if !context.is_empty() {
-        full.push(ChatMessage::system(rag::format_context(&context)));
+        full.push(ChatMessage::system(rag::format_context_with(&context, settings.ai.citations)));
     }
     full.extend(messages);
     let req = ChatRequest {
         model: route.model.clone(),
         messages: full,
-        tools: if use_tools { tools::definitions() } else { vec![] },
-        temperature: Some(0.3),
-        max_tokens: None,
+        tools: if use_tools { tools::definitions_allowed(&settings.ai.allowed_tools) } else { vec![] },
+        temperature: Some(settings.ai.temperature),
+        max_tokens: settings.ai.max_tokens,
     };
 
     let (completion, meter) = stream_completion(&app, &state, &client, &request_id, &req).await?;
-    Ok(ChatOutcome { completion, route, context, meter })
+    Ok(ChatOutcome { completion, route, context, meter, cost_warning: cost_warning(&state) })
 }
 
 /// Streams `req` as `ai://stream` events for `request_id` (cancellable through `ai_cancel`)
@@ -1417,6 +1483,7 @@ async fn stream_completion(
 /// result like `ai_chat`, without retrieval or tools. The page's content and tags count for the
 /// privacy markers, so a `#privat` page stays on the local model.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn ai_transform(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -1425,10 +1492,12 @@ async fn ai_transform(
     text: String,
     page_id: Option<i64>,
     tier: Option<Tier>,
+    override_limit: Option<bool>,
 ) -> Result<ChatOutcome> {
     if instruction.trim().is_empty() {
         return Err(Error::State("Keine Anweisung".into()));
     }
+    prefs::check_cost_limit(&state, override_limit.unwrap_or(false))?;
     let client = state.client();
     let page = match page_id {
         Some(id) => {
@@ -1449,11 +1518,11 @@ async fn ai_transform(
         messages: transform::messages(&instruction, &text, page.as_ref().map(|d| d.page.title.as_str()), &today),
         tools: vec![],
         temperature: Some(0.2),
-        max_tokens: None,
+        max_tokens: state.settings().ai.max_tokens,
     };
     let (mut completion, meter) = stream_completion(&app, &state, &client, &request_id, &req).await?;
     completion.content = transform::clean_output(&completion.content);
-    Ok(ChatOutcome { completion, route, context: vec![], meter })
+    Ok(ChatOutcome { completion, route, context: vec![], meter, cost_warning: cost_warning(&state) })
 }
 
 /// Smart `/zeit`: a line with a duration but no reference, typed on a page without a linked
@@ -1486,6 +1555,7 @@ async fn zeit_suggest_ai(
     if state.secrets.get().is_none() {
         return Err(Error::State("Keine KI verbunden (LiteLLM-Token fehlt)".into()));
     }
+    prefs::check_cost_limit(&state, false)?;
     let messages = zeitguess::messages(&line, &candidates, &las, page.as_ref().map(|d| d.page.title.as_str()));
     let mut context = vec![line.clone()];
     if let Some(doc) = &page {
@@ -1523,7 +1593,8 @@ enum ToolPlan {
 
 /// Classifies a tool call so the UI knows whether to ask the user first.
 #[tauri::command]
-fn ai_plan_tool(name: String, arguments: String) -> Result<ToolPlan> {
+fn ai_plan_tool(state: State<AppState>, name: String, arguments: String) -> Result<ToolPlan> {
+    tools::check_allowed(&name, &state.settings().ai.allowed_tools)?;
     Ok(match tools::classify(&name) {
         Risk::Workspace => ToolPlan::Workspace,
         Risk::RequiresApproval => {
@@ -1535,6 +1606,7 @@ fn ai_plan_tool(name: String, arguments: String) -> Result<ToolPlan> {
 
 #[tauri::command]
 fn ai_run_workspace_tool(app: AppHandle, state: State<AppState>, name: String, arguments: String) -> Result<String> {
+    tools::check_allowed(&name, &state.settings().ai.allowed_tools)?;
     let args: serde_json::Value = serde_json::from_str(&arguments)?;
     let arg = |k: &str| args[k].as_str().unwrap_or_default().to_owned();
     let t = state.settings().thresholds;
@@ -1578,8 +1650,16 @@ fn ai_run_workspace_tool(app: AppHandle, state: State<AppState>, name: String, a
 /// Executes a system tool. The UI calls this only after the user approved
 /// the exact summary returned by `ai_plan_tool`.
 #[tauri::command]
-async fn ai_run_system_tool(call: SystemCall) -> Result<String> {
-    tools::execute_system_tool(&call, &tools::HttpClient::new()).await
+async fn ai_run_system_tool(state: State<'_, AppState>, call: SystemCall) -> Result<String> {
+    let name = match &call {
+        SystemCall::RunPowershell { .. } => "run_powershell",
+        SystemCall::Git { .. } => "git",
+        SystemCall::HttpRequest { .. } => "http_request",
+    };
+    let settings = state.settings();
+    tools::check_allowed(name, &settings.ai.allowed_tools)?;
+    let http = state.ai.read().unwrap_or_else(|e| e.into_inner()).tools_http.clone();
+    tools::execute_system_tool(&call, &http, settings.network.timeout()).await
 }
 
 /// Embeds note chunks that have no embedding yet. Returns the number indexed.
@@ -1695,37 +1775,68 @@ fn supports_mica() -> bool {
     false
 }
 
-fn create_main_window(app: &tauri::App, visible: bool) -> tauri::Result<()> {
+fn create_main_window(
+    app: &tauri::App,
+    visible: bool,
+    geometry: Option<prefs::WindowState>,
+    mica_on: bool,
+) -> tauri::Result<tauri::WebviewWindow> {
+    // Transparent whenever Mica is possible, so switching it on later needs no restart.
     let mica = supports_mica();
-    let builder = tauri::WebviewWindowBuilder::new(app, desktop::MAIN, tauri::WebviewUrl::default())
+    let mut builder = tauri::WebviewWindowBuilder::new(app, desktop::MAIN, tauri::WebviewUrl::default())
         .visible(visible)
         .title("AETHER OS")
-        .inner_size(1480.0, 920.0)
         .min_inner_size(900.0, 560.0)
-        .center()
         // The native file-drop handler swallows HTML5 drag & drop on Windows (image drop, tabs, sidebar).
         .disable_drag_drop_handler();
+    builder = match geometry {
+        Some(g) => {
+            builder.inner_size(g.width as f64, g.height as f64).position(g.x as f64, g.y as f64).maximized(g.maximized)
+        }
+        None => builder.inner_size(1480.0, 920.0).center(),
+    };
     #[cfg(windows)]
     let builder = if mica {
-        builder.transparent(true).effects(tauri::utils::config::WindowEffectsConfig {
-            effects: vec![tauri::window::Effect::Mica],
-            ..Default::default()
-        })
+        let b = builder.transparent(true);
+        if mica_on {
+            b.effects(tauri::utils::config::WindowEffectsConfig {
+                effects: vec![tauri::window::Effect::Mica],
+                ..Default::default()
+            })
+        } else {
+            b
+        }
     } else {
         builder
     };
-    let _ = mica;
+    let _ = (mica, mica_on);
     // macOS: the tab bar sits in the title bar; the UI leaves room for the traffic lights (`os-macos`).
     #[cfg(target_os = "macos")]
     let builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay).hidden_title(true);
-    builder.build()?;
-    Ok(())
+    let window = builder.build()?;
+    // A saved position on a monitor that is gone: center instead.
+    if geometry.is_some()
+        && let (Ok(pos), Ok(monitors)) = (window.outer_position(), window.available_monitors())
+    {
+        let visible = monitors.iter().any(|m| {
+            let (p, s) = (m.position(), m.size());
+            pos.x + 40 >= p.x
+                && pos.y + 10 >= p.y
+                && pos.x < p.x + s.width as i32 - 40
+                && pos.y < p.y + s.height as i32 - 40
+        });
+        if !monitors.is_empty() && !visible {
+            let _ = window.center();
+        }
+    }
+    Ok(window)
 }
 
-/// Whether the window has a Mica backdrop (the UI then lets it show through).
+/// Whether the window has a Mica backdrop (the UI then lets it show through). Off when
+/// switched off under Settings → Darstellung.
 #[tauri::command]
-fn window_backdrop() -> bool {
-    supports_mica()
+fn window_backdrop(state: State<AppState>) -> bool {
+    supports_mica() && state.settings().appearance.mica
 }
 
 /// Switches the Mica variant to match the app theme (Windows 11 only).
@@ -1735,9 +1846,10 @@ fn window_set_theme(app: AppHandle, dark: bool) {
     if supports_mica()
         && let Some(w) = app.get_webview_window("main")
     {
+        let on = app.state::<AppState>().settings().appearance.mica;
         let effect = if dark { tauri::window::Effect::MicaDark } else { tauri::window::Effect::MicaLight };
-        let _ =
-            w.set_effects(tauri::utils::config::WindowEffectsConfig { effects: vec![effect], ..Default::default() });
+        let effects = if on { vec![effect] } else { vec![] };
+        let _ = w.set_effects(tauri::utils::config::WindowEffectsConfig { effects, ..Default::default() });
     }
     let _ = (app, dark);
 }
@@ -1933,6 +2045,7 @@ pub fn run() {
                 .build(),
         )
         .register_uri_scheme_protocol("aether-asset", |ctx, request| serve_attachment(ctx.app_handle(), &request))
+        .register_uri_scheme_protocol("aether-pac", |_ctx, _request| network::pac_sandbox())
         .on_window_event(desktop::on_window_event)
         .setup(move |app| {
             // AETHER_DATA_DIR lets tests run against a throw-away workspace; otherwise
@@ -1970,14 +2083,19 @@ pub fn run() {
                 settings.search_shortcut.clone(),
             ];
             let secrets = SecretStore::new(&dir);
+            let proxy_secret = SecretStore::proxy(&dir);
             let idle_threshold = Duration::from_secs(settings.idle_threshold_minutes * 60);
-            let ai = AiRuntime::new(settings, secrets.get());
+            let start = settings.start.clone();
+            let mica_on = settings.appearance.mica;
+            let geometry = prefs::saved_window(app.handle(), &settings);
+            let ai = AiRuntime::new(settings, secrets.get(), proxy_secret.get());
 
             app.manage(AppState {
                 db: Mutex::new(db),
                 ai: RwLock::new(ai),
                 secrets,
                 git_secret: SecretStore::git(&dir),
+                proxy_secret,
                 git_lock: Mutex::new(()),
                 data_dir: dir,
                 data_dir_notice: startup.notice,
@@ -1996,8 +2114,13 @@ pub fn run() {
                 eprintln!("tray icon not available: {e}");
             }
             let tray = app.state::<desktop::Desktop>().has_tray();
-            let minimized = tray && std::env::args().any(|a| a == desktop::MINIMIZED_ARG);
-            create_main_window(app, !minimized)?;
+            // Autostart, or Settings → Start „Minimiert starten“: hidden in the tray, or minimized without one.
+            let wants_minimized = start.minimized || std::env::args().any(|a| a == desktop::MINIMIZED_ARG);
+            let minimized = tray && wants_minimized;
+            let window = create_main_window(app, !minimized, geometry, mica_on)?;
+            if wants_minimized && !tray {
+                let _ = window.minimize();
+            }
 
             // Another instance may already own the shortcut; Ctrl+K still works in-app.
             // Registered one by one: one taken shortcut must not block the others.
@@ -2097,6 +2220,16 @@ pub fn run() {
             ai_run_workspace_tool,
             ai_run_system_tool,
             ai_index_pending,
+            network::network_status,
+            network::network_test,
+            network::network_fetch_pac,
+            network::network_ca_info,
+            network::proxy_password_set,
+            prefs::settings_export,
+            prefs::settings_file_read,
+            prefs::settings_defaults,
+            prefs::window_state_save,
+            prefs::ai_cost_status,
             app_info,
             data_dir_status,
             data_dir_inspect,

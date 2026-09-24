@@ -270,6 +270,22 @@ pub const CITATION_RULES: &str = "Belege jede Aussage, die auf einer dieser Quel
 /// page title and heading path, followed by the citation rules. The numbers are the 1-based
 /// positions in `chunks`, so the UI maps `[n]` to `chunks[n - 1]`.
 pub fn format_context(chunks: &[ContextChunk]) -> String {
+    format_context_with(chunks, true)
+}
+
+/// [`format_context`]; without `citations` the model is not asked to cite with `[n]`.
+pub fn format_context_with(chunks: &[ContextChunk], citations: bool) -> String {
+    if !citations {
+        let mut s = String::from("Relevanter Kontext aus dem lokalen Workspace:\n");
+        for c in chunks {
+            let label = match (&c.title, &c.heading) {
+                (Some(t), Some(h)) => format!("Seite: {t} › {h}"),
+                _ => c.source.clone(),
+            };
+            s.push_str(&format!("\n({label})\n{}\n", c.text.trim()));
+        }
+        return s;
+    }
     let mut s = String::from("Relevanter Kontext aus dem lokalen Workspace (nummerierte Quellen):\n");
     for (i, c) in chunks.iter().enumerate() {
         let label = match (&c.title, &c.heading) {

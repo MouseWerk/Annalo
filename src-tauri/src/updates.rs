@@ -11,7 +11,7 @@ use aether_core::Error;
 use aether_core::update as core;
 use serde::Serialize;
 use tauri::plugin::TauriPlugin;
-use tauri::{AppHandle, Emitter, Runtime, State};
+use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
 use crate::{Result, lock};
@@ -96,8 +96,20 @@ pub async fn update_check(app: AppHandle, updates: State<'_, Updates>) -> Result
     }
     // Windows: the installer ends this process; the workspace is closed cleanly first.
     let handle = app.clone();
+    // Proxy and extra CA (Settings → Netzwerk) for the check and the download.
+    let network = {
+        let state = app.state::<crate::AppState>();
+        let settings = state.settings();
+        let password = state.proxy_secret.get();
+        aether_core::network::Prepared::new(
+            &settings.network,
+            password.as_deref(),
+            aether_core::network::Purpose::Updates,
+        )?
+    };
     let updater = app
         .updater_builder()
+        .configure_client(move |b| network.apply(b))
         .on_before_exit(move || crate::prepare_exit(&handle))
         .build()
         .map_err(|e| failed("Update-Prüfung nicht möglich", e))?;

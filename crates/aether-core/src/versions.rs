@@ -59,8 +59,16 @@ impl Database {
         row.map(|(t, c)| Ok((parse_ts(&t)?, c))).transpose().map_err(Error::Db)
     }
 
+    /// (snapshot interval in minutes, versions kept per page) from Settings → Notizen.
+    fn version_policy(&self) -> (i64, usize) {
+        self.load_settings()
+            .map(|s| (s.notes.version_interval_minutes as i64, s.notes.max_versions as usize))
+            .unwrap_or((SNAPSHOT_INTERVAL_MINUTES, MAX_VERSIONS_PER_PAGE))
+    }
+
     /// Stores `content` as a snapshot of the page unless it is empty or equals the newest
-    /// snapshot; keeps at most [`MAX_VERSIONS_PER_PAGE`]. Returns the new version's id.
+    /// snapshot; keeps at most the configured number (default [`MAX_VERSIONS_PER_PAGE`]).
+    /// Returns the new version's id.
     pub(crate) fn store_version(&self, page_id: i64, content: &str, now: DateTime<Utc>) -> Result<Option<i64>> {
         if content.trim().is_empty() {
             return Ok(None);
@@ -77,7 +85,7 @@ impl Database {
         conn.execute(
             "DELETE FROM page_versions WHERE page_id = ?1 AND id NOT IN
                (SELECT id FROM page_versions WHERE page_id = ?1 ORDER BY created_at DESC, id DESC LIMIT ?2)",
-            params![page_id, MAX_VERSIONS_PER_PAGE as i64],
+            params![page_id, self.version_policy().1 as i64],
         )?;
         Ok(Some(id))
     }
@@ -89,7 +97,7 @@ impl Database {
             return Ok(());
         }
         let due = match self.latest_version(page_id)? {
-            Some((at, _)) => now - at >= Duration::minutes(SNAPSHOT_INTERVAL_MINUTES),
+            Some((at, _)) => now - at >= Duration::minutes(self.version_policy().0),
             None => true,
         };
         if due {
@@ -168,7 +176,7 @@ impl Database {
                      SELECT id, ROW_NUMBER() OVER (PARTITION BY page_id ORDER BY created_at DESC, id DESC) AS rn
                      FROM page_versions)
                    WHERE rn > ?1)",
-                [MAX_VERSIONS_PER_PAGE as i64],
+                [self.version_policy().1 as i64],
             )?;
             Ok(n)
         })

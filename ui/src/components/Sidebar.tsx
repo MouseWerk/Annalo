@@ -8,19 +8,23 @@ import { api } from "../lib/api";
 import { useApp } from "../store/app";
 import { PageIcon } from "./icons";
 import { Button, IconButton, useMenu } from "./ui";
-import { clock, h2 } from "../lib/format";
+import { clock, fmtMinutes } from "../lib/format";
 import { createSubpage, deletePage } from "../views/PageView";
 import { COLLAPSED_EVENT, readCollapsed, writeCollapsed } from "../lib/collapsed";
 import type { PageNode, SearchHit } from "../lib/types";
+import { t as tStatic, useT } from "../lib/i18n";
+import { withHint } from "../lib/keymap";
 import { keys } from "../lib/shortcut";
 
 type SideTab = "files" | "search" | "bookmarks" | "tags";
 
-const JOURNAL_TITLE = "Journal";
+/** Title of the daily notes' folder (Settings → Notizen). */
+const journalTitle = () => useApp.getState().settings?.settings.notes?.daily_folder || "Journal";
 /** Id of the Journal folder that was already collapsed once by default. */
 const JOURNAL_SEEN_KEY = "aether.journal-collapsed";
 
 export function Sidebar() {
+  const t = useT();
   const tree = useApp((s) => s.tree);
   const onboarding = useApp((s) => s.onboarding);
   const pages = useApp((s) => s.pages);
@@ -48,7 +52,7 @@ export function Sidebar() {
   // The Journal grows by a page a day: it starts collapsed (once per Journal folder).
   const activePageId = active?.kind === "page" ? active.pageId : undefined;
   useEffect(() => {
-    const journal = tree.find((n) => n.parent_id == null && n.title === JOURNAL_TITLE && n.children.length > 0);
+    const journal = tree.find((n) => n.parent_id == null && n.title === journalTitle() && n.children.length > 0);
     if (!journal) return;
     let seen: string | null = null;
     try {
@@ -63,16 +67,16 @@ export function Sidebar() {
   }, [tree]);
 
   const tabs: { id: SideTab; label: string; icon: typeof Search }[] = [
-    { id: "files", label: "Dateien", icon: FolderTree },
-    { id: "search", label: `Suche (${keys("Mod Shift F")})`, icon: Search },
-    { id: "bookmarks", label: "Lesezeichen", icon: Star },
-    { id: "tags", label: "Tags", icon: Hash },
+    { id: "files", label: t("sidebar.files"), icon: FolderTree },
+    { id: "search", label: withHint(t("sidebar.search"), "search"), icon: Search },
+    { id: "bookmarks", label: t("sidebar.bookmarks"), icon: Star },
+    { id: "tags", label: t("sidebar.tags"), icon: Hash },
   ];
   const withChildren = useMemo(() => [...pages.values()].filter((p) => p.children.length).map((p) => p.id), [pages]);
   const allCollapsed = withChildren.length > 0 && withChildren.every((id) => collapsed.has(id));
 
   return (
-    <aside className="sidebar" aria-label="Seitenleiste">
+    <aside className="sidebar" aria-label={t("sidebar.label")}>
       <div className="side-tabs" role="tablist">
         {tabs.map((t) => (
           <IconButton key={t.id} icon={t.icon} label={t.label} active={tab === t.id} size={30} iconSize={16} onClick={() => setTab(t.id)} role="tab" aria-selected={tab === t.id} />
@@ -82,11 +86,11 @@ export function Sidebar() {
       {tab === "files" && (
         <>
           <div className="side-toolbar">
-            <span className="side-title">Dateien</span>
-            <IconButton icon={FilePlus2} label="Neue Seite" size={26} iconSize={15} onClick={() => createSubpage(null)} />
+            <span className="side-title">{t("sidebar.files")}</span>
+            <IconButton icon={FilePlus2} label={t("sidebar.newPage")} size={26} iconSize={15} onClick={() => createSubpage(null)} />
             <IconButton
               icon={allCollapsed ? ChevronsUpDown : ChevronsDownUp}
-              label={allCollapsed ? "Alle aufklappen" : "Alle einklappen"}
+              label={allCollapsed ? t("sidebar.expandAll") : t("sidebar.collapseAll")}
               size={26}
               iconSize={15}
               onClick={() => saveCollapsed(allCollapsed ? new Set() : new Set(withChildren))}
@@ -96,9 +100,9 @@ export function Sidebar() {
             {tree.length === 0 ? (
               // During onboarding the welcome choice explains the empty workspace.
               !onboarding && <div className="side-empty">
-                Noch keine Seiten.
+                {t("sidebar.noPages")}
                 <Button size="sm" icon={FilePlus2} onClick={() => createSubpage(null)}>
-                  Neue Seite
+                  {t("sidebar.newPage")}
                 </Button>
               </div>
             ) : (
@@ -118,6 +122,7 @@ export function Sidebar() {
 }
 
 function SidebarFooter() {
+  const t = useT();
   const s = useApp.getState;
   const pages = useApp((st) => st.pages);
   const [trashed, setTrashed] = useState(0);
@@ -127,14 +132,14 @@ function SidebarFooter() {
   }, [pages]);
   return (
     <div className="sidebar-foot">
-      <button type="button" className="side-foot-btn" onClick={() => s().openTab({ kind: "timesheet" })} title="Zeiterfassung öffnen">
+      <button type="button" className="side-foot-btn" onClick={() => s().openTab({ kind: "timesheet" })} title={t("sidebar.openTimesheet")}>
         <Timer size={14} strokeWidth={1.75} />
-        <span>Heute</span>
+        <span>{t("sidebar.today")}</span>
         <TodayHours />
       </button>
       <IconButton
         icon={Trash2}
-        label={trashed ? `Papierkorb (${trashed})` : "Papierkorb"}
+        label={trashed ? `${t("sidebar.trash")} (${trashed})` : t("sidebar.trash")}
         tooltipSide="top"
         size={24}
         iconSize={14}
@@ -147,6 +152,7 @@ function SidebarFooter() {
 // ------------------------------------------------------------- search pane
 
 function SearchPane() {
+  const tr = useT();
   const [q, setQ] = useState(() => sessionStorage.getItem("aether.sidesearch") ?? "");
   const [hits, setHits] = useState<SearchHit[] | null>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -183,8 +189,8 @@ function SearchPane() {
           ref={input}
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Suchen…"
-          aria-label="Volltextsuche"
+          placeholder={tr("sidebar.searchPlaceholder")}
+          aria-label={tr("sidebar.fulltext")}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
               const first = [...byPage.keys()][0];
@@ -193,13 +199,13 @@ function SearchPane() {
             if (e.key === "Escape") setQ("");
           }}
         />
-        {q && <IconButton icon={X} label="Leeren" size={22} iconSize={13} onClick={() => setQ("")} />}
+        {q && <IconButton icon={X} label={tr("common.clear")} size={22} iconSize={13} onClick={() => setQ("")} />}
       </div>
       <div className="sidebar-scroll">
         {hits && (
           <div className="side-result-count">
-            {byPage.size} {byPage.size === 1 ? "Seite" : "Seiten"}
-            {entries.length > 0 && `, ${entries.length} Zeiteinträge`}
+            {byPage.size} {byPage.size === 1 ? tr("sidebar.page") : tr("sidebar.pages")}
+            {entries.length > 0 && `, ${entries.length} ${tr("sidebar.timeEntries")}`}
           </div>
         )}
         {[...byPage.entries()].map(([id, p]) => (
@@ -221,8 +227,8 @@ function SearchPane() {
             <span className="side-result-snippet" dangerouslySetInnerHTML={{ __html: markHits(h.snippet) }} />
           </button>
         ))}
-        {hits && hits.length === 0 && <div className="side-empty">Keine Treffer für „{q}“</div>}
-        {!hits && <div className="side-empty faint">Durchsucht Titel, Notizen und Zeiteinträge. Umlaute und Groß-/Kleinschreibung egal.</div>}
+        {hits && hits.length === 0 && <div className="side-empty">{tr("sidebar.noHits", { q })}</div>}
+        {!hits && <div className="side-empty faint">{tr("sidebar.searchHint")}</div>}
       </div>
     </div>
   );
@@ -232,16 +238,17 @@ const escHtml = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").re
 const markHits = (sn: string) => escHtml(sn).replace(/\u0002([^\u0003]*)\u0003/g, "<mark>$1</mark>");
 
 function Bookmarks({ activePageId }: { activePageId?: number }) {
+  const t = useT();
   const pages = useApp((s) => s.pages);
   const favorites = [...pages.values()].filter((p) => p.favorite).sort((a, b) => a.title.localeCompare(b.title, "de"));
   const s = useApp.getState;
   return (
     <div className="side-pane">
       <div className="side-toolbar">
-        <span className="side-title">Lesezeichen</span>
+        <span className="side-title">{t("sidebar.bookmarks")}</span>
       </div>
       <div className="sidebar-scroll">
-        {favorites.length === 0 && <div className="side-empty faint">Markiere Seiten mit dem Stern, um sie hier zu sammeln.</div>}
+        {favorites.length === 0 && <div className="side-empty faint">{t("sidebar.bookmarksEmpty")}</div>}
         {favorites.map((p) => (
           <button key={p.id} type="button" className={`tree-row ${activePageId === p.id ? "active" : ""}`} onClick={(e) => s().openPage(p.id, { newTab: e.ctrlKey || e.metaKey, split: e.altKey })}>
             <span className="tree-twisty leaf" />
@@ -255,6 +262,7 @@ function Bookmarks({ activePageId }: { activePageId?: number }) {
 }
 
 function TagsPane({ activeTag }: { activeTag?: string }) {
+  const t = useT();
   const pages = useApp((s) => s.pages);
   const [tags, setTags] = useState<[string, number][]>([]);
   useEffect(() => {
@@ -264,10 +272,10 @@ function TagsPane({ activeTag }: { activeTag?: string }) {
   return (
     <div className="side-pane">
       <div className="side-toolbar">
-        <span className="side-title">Tags</span>
+        <span className="side-title">{t("sidebar.tags")}</span>
       </div>
       <div className="sidebar-scroll">
-        {tags.length === 0 && <div className="side-empty faint">Schreibe #tag in eine Notiz, um sie zu verschlagworten.</div>}
+        {tags.length === 0 && <div className="side-empty faint">{t("sidebar.tagsEmpty")}</div>}
         {tags.map(([tag, n]) => (
           <button key={tag} type="button" className={`tree-row ${activeTag === tag ? "active" : ""}`} onClick={() => s().openTab({ kind: "tag", tag })}>
             <span className="tree-twisty leaf" />
@@ -289,7 +297,7 @@ function TodayHours() {
     start.setHours(0, 0, 0, 0);
     api.entries(start.toISOString()).then((rows) => setMin(rows.reduce((a, r) => a + (r.duration_minutes ?? 0), 0))).catch(() => {});
   }, [version]);
-  return min > 0 ? <span className="nav-badge num">{h2(min / 60)} h</span> : null;
+  return min > 0 ? <span className="nav-badge num">{fmtMinutes(min)} h</span> : null;
 }
 
 // --------------------------------------------------------------- page tree
@@ -555,7 +563,7 @@ const TreeRow = memo(function TreeRow({
       <span className="tree-row-actions">
         <IconButton
           icon={Plus}
-          label="Unterseite"
+          label={tStatic("sidebar.subpage")}
           size={20}
           iconSize={13}
           tooltipSide="right"
@@ -583,6 +591,7 @@ export function useTimerSeconds() {
 }
 
 function TimerDock() {
+  const t = useT();
   const timer = useApp((s) => s.timer);
   const seconds = useTimerSeconds();
   if (!timer) return null;
@@ -594,7 +603,7 @@ function TimerDock() {
         <span className="timer-dock-time num">{clock(seconds)}</span>
         <span className="timer-dock-label">{e.description || `${e.vorgang_nr ?? "Timer"}`}</span>
       </button>
-      <IconButton icon={Square} label="Timer stoppen" size={26} iconSize={13} onClick={() => stopTimer()} />
+      <IconButton icon={Square} label={t("status.stopTimer")} size={26} iconSize={13} onClick={() => stopTimer()} />
     </div>
   );
 }
@@ -617,7 +626,7 @@ export async function stopTimer() {
     }
     const out = await api.timerStop(subtract);
     if (out.discarded) s.toast({ tone: "info", title: "Nicht gebucht", detail: "Der Timer lief weniger als eine Minute." });
-    else s.toast({ tone: "success", title: `${h2((out.entry.duration_minutes ?? 0) / 60)} h gebucht`, detail: out.entry.description || undefined });
+    else s.toast({ tone: "success", title: `${fmtMinutes(out.entry.duration_minutes)} h gebucht`, detail: out.entry.description || undefined });
     s.alerts(out.alerts);
     s.bumpEntries();
   } catch (e) {

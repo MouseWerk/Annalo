@@ -123,6 +123,50 @@ Migration v2 converts the old block model: blocks are concatenated into
   with quit/close), the download reports `update://progress`, and `prepare_exit` closes the workspace and
   releases the single-instance lock right before the NSIS installer takes over and relaunches the app.
 
+## Network (`network.rs` in core and shell)
+
+- One decision per URL: `ProxyPlan` (modes none/system/manual/PAC) with a `NoProxy` matcher (host and subdomains,
+  `*.domain`/`.domain`, globs such as `10.*`, IPs, CIDR, `<local>`, `*`). System mode reads the WinINet values of
+  `HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings` on Windows (`parse_wininet` is a pure function
+  of the registry strings) and the proxy environment variables elsewhere.
+- `Prepared` resolves the settings once (CA file read and parsed, plan built) and applies them to any
+  `reqwest::ClientBuilder`: connect timeout, `tls_certs_merge` (platform verifier plus the extra roots),
+  `danger_accept_invalid_certs` when switched on, and a `Proxy::custom` that asks the plan (credentials in the proxy URL
+  → Basic auth). The LiteLLM client and the HTTP tool client live in `AiRuntime` and are rebuilt with it on every
+  settings save, API-key or proxy-password change; the updater gets it through `configure_client` for check and
+  download; the connection test builds one from unsaved settings and reports the proxy the plan chose.
+- Git: `git_network` turns the plan for the remote URL into `http_proxy`/`https_proxy`/`no_proxy` (or removes the proxy
+  variables and sets `NO_PROXY=*` for a direct remote), `http.sslCAInfo` (a bundle of the extra CA and the system CAs,
+  not on Windows where Git uses schannel) and `http.sslVerify=false` when invalid certificates are accepted, all via
+  `GIT_CONFIG_*`; the proxy password is redacted from git's output.
+- PAC: the UI evaluates the script (`ui/src/lib/pac.ts`, standard helpers without DNS) in an iframe served by the
+  `aether-pac:` scheme with `sandbox="allow-scripts"` and its own CSP that allows `eval`; the app's CSP stays without
+  `unsafe-eval`. Answers are stored per host in `network.pac_results` (`*` = LiteLLM host, used for other hosts) on
+  save, test and start.
+- The proxy password lives in the credential store (account `proxy-password`), never in the settings or exports.
+
+## Preferences (`prefs.rs` in core, `ui/src/lib/{prefs,i18n,keymap,color}.ts`)
+
+- Every preference struct is `#[serde(default)]`, choices are lenient enums (unknown values load as the default), and
+  `Settings::normalize` clamps ranges on save/import. `parse_settings` migrates `open_daily_on_start` to
+  `start.open = daily` for settings written before the start preferences.
+- Core behavior: rounding/minimum and the default Leistungsart per Netzplan apply in `log_slash_command_in`, manual
+  entries and `stop_timer`; the daily note title format and folder in `daily_note` (lookup stays by `daily_date`); trash
+  retention in `purge_expired_trash`; snapshot interval and max versions in `versions.rs`; CATS separator and column
+  presets in `export.rs`; the allowed tools filter the tool definitions and are enforced again before a tool runs; the
+  monthly cost limit sums `ai_usage` since the first of the month (warning ≥ 80 %, refusal ≥ 100 % unless
+  `override_limit`); quiet hours and the reminder toggles gate the desktop notifications.
+- UI: `applyPrefs` runs on every settings change (store subscription) and sets `data-*` attributes (density, line
+  width, fonts, reduced motion) used by `styles/prefs.css`, the accent tokens (`color.ts` derives
+  `--accent`/`--accent-strong`/`--accent-soft`/`--accent-text` per mode with WCAG contrast ≥ 4.5 for text and white on
+  buttons, ≥ 3 for UI accents), the webview zoom, the language (`i18n.ts`, typed German/English dictionary) and the
+  keymap (`keymap.ts`: commands, defaults, recording from key events with AltGr protection, conflicts with other
+  commands, editor keys and global shortcuts). The App's keydown handler looks commands up in the keymap.
+- Settings export writes `{format: "aether-os-settings", version, settings}`; the import is validated against the
+  current settings in the UI (`settingsio.ts`: same keys and types, unknown or mistyped fields skipped with a warning),
+  previewed as a diff and saved through `settings_save`. `settings://changed` is emitted on every save so the UI
+  follows changes made elsewhere.
+
 ## Notes model
 
 - The editor (TipTap/ProseMirror) loads and saves Markdown via `@tiptap/markdown`. Custom nodes serialize to portable syntax:
@@ -132,7 +176,7 @@ Migration v2 converts the old block model: blocks are concatenated into
   stays a raw YAML row and is written back verbatim. Its edits go through the editor's save path (one writer per page).
 - A `vorgang:` / `netzplan:` property links a page to the WBS (`pagework.rs`): the work card shows budget, ETC and recent
   bookings, and `/zeit` lines without a reference on that page book on it.
-- Autosave runs 450 ms after the last change and on window blur. Renames rewrite `[[links]]` in every referencing page.
+- Autosave runs 450 ms (Settings → Editor, 250–3000 ms) after the last change and on window blur. Renames rewrite `[[links]]` in every referencing page.
 - Images live as files in `<data_dir>/attachments/`, named by the first 16 hex digits of their SHA-256 (same image, same file),
   and are embedded Obsidian-style as `![[name.png|300]]`. The shell serves them through the `aether-asset:` URI scheme, which
   only answers plain file names inside that folder (no separators, `..` or hidden files; canonical path checked). Regular

@@ -41,7 +41,7 @@ function SummaryDialog({ page, reference, getEditor, flush, onClose }: Props) {
     const md = editor && !editor.isDestroyed ? toMarkdown(editor) : (await api.page(page.id)).content;
     setBody(md);
     if (!md.trim()) return;
-    ai.run(meetingSummaryInstruction(), md, page.id);
+    ai.run(meetingSummaryInstruction(useApp.getState().settings?.settings.ai?.meeting_template), md, page.id);
   };
 
   useEffect(() => {

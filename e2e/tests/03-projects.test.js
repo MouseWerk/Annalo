@@ -81,7 +81,7 @@ test("timer can be started from a Vorgang row", async () => {
 
 test("sample data can be removed from settings", async () => {
   await app.keys(["Control", ","]);
-  await app.click(".settings-nav-item:nth-child(4)");
+  await app.click(".settings-nav-item[data-section=\"notes\"]");
   const rows = await app.$$(".set-row");
   for (const r of rows)
     if (/Beispieldaten entfernen/.test(await app.textOf(r))) {

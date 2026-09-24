@@ -102,10 +102,15 @@ pub struct LiteLlmClient {
 impl LiteLlmClient {
     /// `base_url` is the proxy root, e.g. `http://localhost:4000`.
     pub fn new(base_url: impl Into<String>, api_key: Option<String>) -> Self {
+        Self::with_http(base_url, api_key, reqwest::Client::new())
+    }
+
+    /// With a configured HTTP client (proxy, extra CA, timeouts: [`crate::network::http_client`]).
+    pub fn with_http(base_url: impl Into<String>, api_key: Option<String>, http: reqwest::Client) -> Self {
         LiteLlmClient {
             base_url: base_url.into().trim_end_matches('/').to_owned(),
             api_key,
-            http: reqwest::Client::new(),
+            http,
             prices: PriceTable::default(),
         }
     }

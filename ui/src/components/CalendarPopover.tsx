@@ -6,12 +6,11 @@ import { createPortal } from "react-dom";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { api } from "../lib/api";
 import { useApp } from "../store/app";
-import { addDays, dateLong, isoDay } from "../lib/format";
+import { addDays, dateLong, isoDay, weekdayLabels } from "../lib/format";
 import { addMonths, dayTone, hoursLabel, monthGrid, weekNumber } from "../lib/calendar";
 import type { DayOverview } from "../lib/types";
 import { Button, IconButton } from "./ui";
 
-const WEEKDAYS = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
 
 /** Opens the calendar next to `el` (or centered without an element), showing `date` (default today). */
 export function openCalendar(el?: Element | null, date?: string, side: "below" | "right" = "below") {
@@ -152,7 +151,7 @@ function Calendar({ x, y, date }: { x?: number; y?: number; date?: string }) {
           <span className="cal-kw" role="columnheader">
             KW
           </span>
-          {WEEKDAYS.map((w) => (
+          {weekdayLabels().map((w) => (
             <span key={w} className="cal-wd" role="columnheader">
               {w}
             </span>
@@ -161,7 +160,7 @@ function Calendar({ x, y, date }: { x?: number; y?: number; date?: string }) {
         {grid.map((week) => (
           <div key={isoDay(week[0])} className="cal-row" role="row">
             <span className="cal-kw" role="rowheader">
-              {weekNumber(week[0])}
+              {weekNumber(week.find((d) => d.getDay() === 1) ?? week[0])}
             </span>
             {week.map((d) => {
               const iso = isoDay(d);
