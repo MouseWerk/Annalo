@@ -15,7 +15,8 @@ assistant that runs against **your own LiteLLM server**.
 - Tasks across all notes (Ctrl Shift A): `- [ ] Angebot senden 📅 2026-09-30 !!` (also `due:2026-09-30`; `!!` = hoch, `!` = mittel), grouped into Überfällig / Heute / Diese Woche / Später / Ohne Datum, filterable by status and tag, checked off right in the list
 - Images: paste or drop screenshots into a note; they are stored under `attachments/` and embedded as `![[name.png]]`
 - Templates: pages under „Vorlagen“ with `{{datum}}`, `{{date}}`, `{{zeit}}`, `{{titel}}`, `{{wochentag}}`, `{{kw}}`; `/Vorlage einfügen` or „Neue Seite aus Vorlage…“ in the palette
-- Slash menu (`/`), formatting toolbar on selection, find in page (Ctrl F)
+- Slash menu (`/`), formatting toolbar on selection, a table toolbar (rows, columns, header) while the cursor is in a table, find in page (Ctrl F)
+- Version history: „Versionen…“ in the page menu lists earlier states (kept 30 days) with a diff against now, and restores them
 - Tabs, favorites, a drag-and-drop page tree, a command palette (Ctrl K) and a quick switcher (Ctrl O)
 - Import an Obsidian vault (folders, frontmatter, links, tags and images kept), export everything back to Markdown files
 
@@ -63,7 +64,8 @@ cargo tauri dev      # run with hot reload
 cargo tauri build    # NSIS + MSI installers in target/release/bundle
 ```
 
-Data lives in `%APPDATA%\os.aether.workspace\` (`workspace.db`). The first start seeds a small demo workspace.
+Data lives in `%APPDATA%\os.aether.workspace\` (`workspace.db`); Settings → AETHER OS → „Speicherort ändern…“ moves it
+(avoid OneDrive/Dropbox and network folders for the database; backups there are fine). The first start seeds a small demo workspace.
 The database is backed up daily into `backups` there (or a folder chosen under Settings → Sicherung), and deleted
 pages stay in the trash for 30 days.
 
@@ -92,7 +94,7 @@ and a fake LiteLLM server for the assistant tests. It also saves screenshots of 
 
 | Keys | Action |
 |---|---|
-| Ctrl K / Alt Space (global) | Command palette, search, `/zeit …`, `? question` |
+| Ctrl K / Alt Space (global, configurable) | Command palette, search, `/zeit …`, `? question` |
 | Ctrl Shift Space (global) | Quick capture |
 | Ctrl O | Quick switcher |
 | Ctrl N | New page |

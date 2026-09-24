@@ -15,6 +15,7 @@ import { isoDay } from "../lib/format";
 import { popupRenderer, type PopupItem } from "./suggestion-popup";
 import { PageIcon } from "../components/icons";
 import { zeitToken } from "./zeit-suggest";
+import { TABLE_ACTIONS } from "./table-actions";
 
 // ------------------------------------------------------------- wiki links
 
@@ -182,6 +183,18 @@ function slashItems(o: SlashOptions): SlashItem[] {
   ];
 }
 
+/** Row/column commands, offered while the cursor is in a table. */
+function tableSlashItems(): SlashItem[] {
+  return TABLE_ACTIONS.map((a) => ({
+    id: `table-${a.id}`,
+    title: a.title,
+    icon: ic(a.icon),
+    section: "Tabelle",
+    keywords: a.keywords,
+    run: (e: Editor, r: Range) => a.run(e.chain().focus().deleteRange(r)).run(),
+  }));
+}
+
 /** Lower-case, umlaut-tolerant form for matching ("Überschrift" ~ "ueberschrift" ~ "uberschrift"). */
 export function fold(s: string) {
   const lower = s.toLowerCase();
@@ -219,9 +232,10 @@ export const SlashCommand = Extension.create<SlashOptions>({
           const before = $from.parent.textBetween(0, $from.parentOffset, undefined, "￼");
           return before === "" || /\s$/.test(before);
         },
-        items: ({ query }) => {
+        items: ({ query, editor }) => {
           const q = query.toLowerCase().trim();
-          return slashItems(opts).filter((i) => !q || fuzzyIncludes(`${i.title} ${i.keywords}`, q) || i.id.startsWith(q));
+          const all = editor.isActive("table") ? [...tableSlashItems(), ...slashItems(opts)] : slashItems(opts);
+          return all.filter((i) => !q || fuzzyIncludes(`${i.title} ${i.keywords}`, q) || i.id.startsWith(q));
         },
         command: ({ editor, range, props }) => props.run(editor, range),
         render: popupRenderer<SlashItem>("Kein Befehl gefunden"),

@@ -1,7 +1,7 @@
 // A note: title, icon, properties, editor and backlinks.
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, Columns2, Printer, CornerDownRight, FileText, Hash, Link2, MoreHorizontal, PencilLine, SmilePlus, Star, Trash2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Columns2, History, Printer, CornerDownRight, FileText, Hash, Link2, MoreHorizontal, PencilLine, SmilePlus, Star, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import { useApp, type Tab } from "../store/app";
 import { ViewHeader } from "../components/ViewHeader";
@@ -14,6 +14,7 @@ import { linkContext } from "../components/linkContext";
 import type { PageDoc } from "../lib/types";
 import { restorePage } from "./TrashView";
 import { PropertyEditor, WorkCard, pageReference } from "./PageProperties";
+import { VersionsDialog } from "./VersionsDialog";
 
 export function PageView({ pageId, tab, active }: { pageId: number; tab: Tab; active: boolean }) {
   const [doc, setDoc] = useState<PageDoc | null>(null);
@@ -159,6 +160,7 @@ function PageHeader({
 }) {
   const [title, setTitle] = useState(doc.title);
   const [iconOpen, setIconOpen] = useState(false);
+  const [versionsOpen, setVersionsOpen] = useState(false);
   const [menu, openMenu] = useMenu();
   const s = useApp.getState;
   useEffect(() => setTitle(doc.title), [doc.title]);
@@ -240,6 +242,7 @@ function PageHeader({
             { label: "Rechts daneben öffnen", icon: Columns2, onSelect: () => s().splitTab(tab.id) },
             { label: "Link kopieren", icon: Link2, onSelect: () => navigator.clipboard.writeText(`[[${doc.title}]]`) },
             { label: "Drucken / als PDF", icon: Printer, onSelect: () => printActivePane() },
+            { label: "Versionen…", icon: History, onSelect: () => setVersionsOpen(true) },
             { label: "Unterseite anlegen", icon: CornerDownRight, onSelect: () => createSubpage(doc.id) },
             "separator",
             { label: "Seite löschen", icon: Trash2, danger: true, onSelect: () => deletePage(doc) },
@@ -314,6 +317,7 @@ function PageHeader({
               </div>
             )}
             {menu}
+            <VersionsDialog page={doc} open={versionsOpen} onClose={() => setVersionsOpen(false)} />
           </header>
           {children}
         </div>

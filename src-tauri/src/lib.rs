@@ -32,12 +32,13 @@ use aether_core::templates::TemplateVars;
 use aether_core::tracking::{self, BudgetStatus, LogOutcome};
 use aether_core::trash::TrashEntry;
 use aether_core::vault::{self, ImportReport};
-use aether_core::{Database, Error, demo};
+use aether_core::versions::VersionInfo;
+use aether_core::{Database, Error, datadir, demo};
 use base64::Engine;
 use chrono::{DateTime, Local, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
-use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+use tauri_plugin_global_shortcut::ShortcutState;
 
 use secrets::SecretStore;
 
@@ -119,6 +120,31 @@ fn page_save(state: State<AppState>, id: i64, content: String) -> Result<PageDoc
     let db = state.db();
     db.save_page_content(id, &content)?;
     db.page_doc(id)
+}
+
+// ---------------------------------------------------------------- versions
+
+#[tauri::command]
+fn page_versions(state: State<AppState>, page_id: i64) -> Result<Vec<VersionInfo>> {
+    state.db().list_versions(page_id)
+}
+
+#[tauri::command]
+fn page_version_content(state: State<AppState>, version_id: i64) -> Result<String> {
+    state.db().version_content(version_id)
+}
+
+/// Snapshots the page now („Jetzt Version sichern“); `None` when nothing changed.
+#[tauri::command]
+fn page_snapshot(state: State<AppState>, page_id: i64) -> Result<Option<i64>> {
+    state.db().snapshot_page(page_id)
+}
+
+#[tauri::command]
+fn page_version_restore(state: State<AppState>, page_id: i64, version_id: i64) -> Result<PageDoc> {
+    let db = state.db();
+    db.restore_version(page_id, version_id)?;
+    db.page_doc(page_id)
 }
 
 #[tauri::command]
@@ -833,8 +859,22 @@ fn settings_save(app: AppHandle, state: State<AppState>, settings: Settings) -> 
     if !settings.capture_shortcut.is_empty() {
         desktop::parse_shortcut(&settings.capture_shortcut).map_err(Error::State)?;
     }
+    settings.palette_shortcut = settings.palette_shortcut.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty());
+    if let Some(p) = &settings.palette_shortcut {
+        let sc = desktop::parse_shortcut(p).map_err(Error::State)?;
+        if !settings.capture_shortcut.is_empty() && desktop::parse_shortcut(&settings.capture_shortcut).ok() == Some(sc)
+        {
+            return Err(Error::State("Palette und Schnellerfassung brauchen verschiedene Tastenkürzel".into()));
+        }
+    }
+    let old_palette = state.settings().palette_shortcut;
     let old_shortcut = state.settings().capture_shortcut;
     state.db().save_settings(&settings)?;
+    if settings.palette_shortcut != old_palette
+        && let Err(e) = desktop::set_palette_shortcut(&app, settings.palette_shortcut.as_deref().unwrap_or(""))
+    {
+        eprintln!("palette shortcut not available: {e}");
+    }
     if settings.capture_shortcut != old_shortcut
         && let Err(e) = desktop::set_capture_shortcut(&app, &settings.capture_shortcut)
     {
@@ -1280,6 +1320,52 @@ fn app_info(state: State<AppState>) -> AppInfo {
     }
 }
 
+// --------------------------------------------------------------- data folder
+
+#[derive(Serialize)]
+struct DataDirStatus {
+    data_dir: String,
+    /// The folder is a network share or inside OneDrive/Dropbox.
+    synced: bool,
+}
+
+#[tauri::command]
+fn data_dir_status(state: State<AppState>) -> DataDirStatus {
+    let dir = state.data_dir.display().to_string();
+    DataDirStatus { synced: datadir::is_synced_or_network(&dir), data_dir: dir }
+}
+
+/// Copies the workspace to `path` and points `location.json` there. The new folder is used
+/// after a restart (`app_restart`); the old folder is left as it is.
+#[tauri::command]
+fn data_dir_set(app: AppHandle, state: State<AppState>, path: String) -> Result<DataDirStatus> {
+    if std::env::var_os("AETHER_DATA_DIR").is_some() {
+        return Err(Error::State("Der Speicherort ist über AETHER_DATA_DIR festgelegt".into()));
+    }
+    let to = PathBuf::from(path.trim());
+    if !to.is_absolute() {
+        return Err(Error::State("Bitte einen vollständigen Ordnerpfad wählen".into()));
+    }
+    let config = app.path().app_config_dir().map_err(|e| Error::State(e.to_string()))?;
+    {
+        // Held while copying: no write can slip in between checkpoint and copy.
+        let db = state.db();
+        datadir::copy_workspace(&db, &state.data_dir, &to)?;
+    }
+    let secrets = state.data_dir.join("secrets.json");
+    if secrets.is_file() {
+        std::fs::copy(&secrets, to.join("secrets.json"))?;
+    }
+    datadir::write_location(&config, &to)?;
+    let dir = to.display().to_string();
+    Ok(DataDirStatus { synced: datadir::is_synced_or_network(&dir), data_dir: dir })
+}
+
+#[tauri::command]
+fn app_restart(app: AppHandle) {
+    app.restart();
+}
+
 // ------------------------------------------------------------------ startup
 
 #[derive(Deserialize, Default)]
@@ -1289,7 +1375,6 @@ struct StartupOptions {
 }
 
 pub fn run() {
-    let palette = Shortcut::new(Some(Modifiers::ALT), Code::Space);
     let mut builder = tauri::Builder::default();
     // Two processes on one SQLite workspace would overwrite each other's edits: a second
     // launch only brings the running window to the front. Test runs (AETHER_DATA_DIR)
@@ -1310,7 +1395,7 @@ pub fn run() {
                     }
                     if desktop::is_capture_shortcut(app, shortcut) {
                         desktop::open_capture(app);
-                    } else if shortcut == &palette {
+                    } else if desktop::is_palette_shortcut(app, shortcut) {
                         if let Some(w) = app.get_webview_window("main") {
                             let _ = w.unminimize();
                             let _ = w.show();
@@ -1324,23 +1409,29 @@ pub fn run() {
         .register_uri_scheme_protocol("aether-asset", |ctx, request| serve_attachment(ctx.app_handle(), &request))
         .on_window_event(desktop::on_window_event)
         .setup(move |app| {
-            // AETHER_DATA_DIR lets tests run against a throw-away workspace.
-            let dir = match std::env::var_os("AETHER_DATA_DIR") {
-                Some(d) => PathBuf::from(d),
-                None => app.path().app_data_dir()?,
-            };
+            // AETHER_DATA_DIR lets tests run against a throw-away workspace; otherwise
+            // `location.json` in the config folder may point to a chosen data folder.
+            let dir = datadir::resolve(
+                std::env::var_os("AETHER_DATA_DIR").map(PathBuf::from),
+                app.path().app_config_dir().ok().as_deref(),
+                app.path().app_data_dir()?,
+            );
             std::fs::create_dir_all(&dir)?;
             let opts: StartupOptions =
                 std::env::var("AETHER_STARTUP").ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
-            let db = Database::open(dir.join("workspace.db"))?;
+            let db = Database::open(dir.join(datadir::DB_FILE))?;
             if opts.demo.unwrap_or(false) {
                 demo::seed(&db, Utc::now())?;
             }
             if let Err(e) = db.purge_expired_trash(Utc::now()) {
                 eprintln!("trash cleanup failed: {e}");
             }
+            if let Err(e) = db.prune_versions(Utc::now()) {
+                eprintln!("version cleanup failed: {e}");
+            }
             let settings = db.load_settings()?;
             let capture_shortcut = settings.capture_shortcut.clone();
+            let palette_shortcut = settings.palette_shortcut.clone().unwrap_or_default();
             let secrets = SecretStore::new(&dir);
             let idle_threshold = Duration::from_secs(settings.idle_threshold_minutes * 60);
             let ai = AiRuntime::new(settings, secrets.get());
@@ -1368,8 +1459,8 @@ pub fn run() {
             create_main_window(app, !minimized)?;
 
             // Another instance may already own the shortcut; Ctrl+K still works in-app.
-            if let Err(e) = app.global_shortcut().register(palette) {
-                eprintln!("Alt+Space not available: {e}");
+            if let Err(e) = desktop::set_palette_shortcut(app.handle(), &palette_shortcut) {
+                eprintln!("palette shortcut not available: {e}");
             }
             if let Err(e) = desktop::set_capture_shortcut(app.handle(), &capture_shortcut) {
                 eprintln!("capture shortcut not available: {e}");
@@ -1382,6 +1473,10 @@ pub fn run() {
             workspace_tree,
             page_get,
             page_save,
+            page_versions,
+            page_version_content,
+            page_snapshot,
+            page_version_restore,
             page_create,
             page_rename,
             page_delete,
@@ -1450,6 +1545,9 @@ pub fn run() {
             ai_run_system_tool,
             ai_index_pending,
             app_info,
+            data_dir_status,
+            data_dir_set,
+            app_restart,
             demo_remove,
             onboarding_needed,
             onboarding_finish,

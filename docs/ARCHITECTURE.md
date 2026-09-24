@@ -33,6 +33,7 @@ events and OS integration. The UI never talks to the network or the filesystem d
 | `page_links`, `page_tags` | Outgoing `[[links]]` (lower-cased targets, so links to not-yet-existing pages resolve later) and `#tags`, for backlinks and the tag view |
 | `tasks` | Task items (`- [ ] …` outside code blocks) per page: ordinal, line, text, done, due date (`📅 YYYY-MM-DD` / `due:YYYY-MM-DD`), priority (`!!` hoch, `!` mittel), tags. Rebuilt with links and tags on every save; checking a task off rewrites exactly that checkbox and saves the page |
 | `pages_fts` | FTS5 over page titles (title hits rank first in search) |
+| `page_versions` | Earlier contents of a page (v6): `page_id` (cascade on purge), `content`, `created_at` |
 | `settings` | Application settings as JSON. The LiteLLM API key is **not** stored here; the shell keeps it in the Windows Credential Manager |
 | `notes_blocks_fts`, `time_entries_fts` | FTS5 external-content indexes (unicode61, diacritics removed), kept in sync by triggers |
 | `ai_usage` | Per-request tokens, cost, TTFT and tokens/s |
@@ -52,6 +53,17 @@ Migration v2 converts the old block model: blocks are concatenated into
 - **Backups** (`backup.rs`): `VACUUM INTO` writes a consistent snapshot `aether-YYYYMMDD-HHMMSS.db`;
   older files beyond `backup_keep` (default 14) are deleted. The shell backs up on start when the newest
   backup is older than 24 h and re-checks hourly, into `backup_dir` or `<data dir>/backups`.
+- **Versions** (`versions.rs`): a save stores the page's previous content as a snapshot when the newest
+  snapshot is at least 10 minutes old (one per editing session, not per autosave). Restoring a version and
+  rename link rewrites in other pages always snapshot first; „Jetzt Version sichern“ (`page_snapshot`)
+  stores the current state. At most 50 per page; older than 30 days are pruned on start. A restore saves
+  through `save_page_content`, so search, links, tags and tasks follow. The dialog shows a line diff (LCS).
+- **Data folder** (`datadir.rs`): `AETHER_DATA_DIR` wins, then `<app config dir>/location.json`
+  (`{"data_dir": "…"}`), then the app data folder. „Speicherort ändern…“ checkpoints the WAL
+  (`wal_checkpoint(TRUNCATE)`) while holding the database lock, copies `workspace.db` (+ `-wal`/`-shm`),
+  `attachments/` and `backups/` (never over an existing workspace), writes `location.json` and restarts.
+  A data folder on a UNC path or inside OneDrive/Dropbox gets a persistent warning at start
+  (`data_dir_status`, queried by the UI once it is ready, so the warning cannot be missed).
 - **Single instance**: a second launch only focuses the running window (tauri-plugin-single-instance),
   so two processes never write one workspace. Test runs with `AETHER_DATA_DIR` skip the check.
 - **Close to tray / quit**: with `close_to_tray` the UI flushes its editors and calls `window_hide`;
@@ -64,7 +76,8 @@ Migration v2 converts the old block model: blocks are concatenated into
   activity sampler refreshes the tooltip and checks reminders every 30 s.
 - Quick capture: a second, undecorated always-on-top window (label `capture`, `index.html#capture`)
   created on first use by the global shortcut (`capture_shortcut`, default Ctrl+Shift+Space – Ctrl+Alt
-  is AltGr on German keyboards). `capture_submit` books `/zeit` lines and appends the rest to today's
+  is AltGr on German keyboards). The palette's global shortcut is `palette_shortcut` (default Alt+Space,
+  empty = off); both are re-registered when the settings are saved. `capture_submit` books `/zeit` lines and appends the rest to today's
   daily note (`desktop::capture`, all or nothing).
 - Reminders: `end_of_day_reminder` and `late_timer_reminder` are pure functions of time, settings,
   booked minutes and the last notified day (kept in `settings` meta rows). Desktop notifications cannot
@@ -86,6 +99,15 @@ Migration v2 converts the old block model: blocks are concatenated into
   `![alt](https://…)` images load directly (CSP `img-src https:`). Vault import copies images by name; export writes the embedded ones to `attachments/`.
 - Templates are the pages below the top-level page „Vorlagen“ (`templates.rs`); placeholders are filled by `apply_template`.
   The daily note uses `settings.daily_template` when set.
+
+## Large workspaces
+
+- `page_tree` groups the rows by parent in one `HashMap` pass and moves them into their nodes: O(n)
+  instead of a filter per parent (O(n²) with a clone per node). A core test builds 5,000 pages in well
+  under 200 ms in a debug build.
+- The sidebar renders the visible rows flat (`aria-level`), each a memoized component; switching tabs
+  re-renders only the old and the new active row. Folders of an imported vault and the „Journal“ start
+  collapsed (`aether.collapsed` in localStorage).
 
 ## Key algorithms
 

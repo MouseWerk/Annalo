@@ -7,6 +7,7 @@
 //! * [`notes`] – Markdown documents, backlinks, tags, daily notes
 //! * [`pagework`] – pages linked to a Vorgang (`vorgang:` property): budget and bookings
 //! * [`trash`] – page trash (restore, purge, 30-day expiry)
+//! * [`versions`] – page version history (snapshots, restore)
 //! * [`backup`] – database snapshots (`VACUUM INTO`) with rotation
 //! * [`vault`] – Obsidian vault import / Markdown export
 //! * [`attachments`] – pasted and imported images
@@ -19,6 +20,7 @@
 //! * [`netzplan`] – critical path method (CPM) over Vorgänge
 //! * [`export`] – SAP PS (CATS), Jira worklog, CSV and JSON exports
 //! * [`desktop`] – quick capture into the daily note, end-of-day reminders
+//! * [`datadir`] – data folder location (`location.json`), synced-folder check
 //! * [`activity`] – idle detection and active window probing (Win32 on Windows)
 //! * [`ai`] – LiteLLM client, model router, token/cost metrics, local RAG
 
@@ -26,6 +28,7 @@ pub mod activity;
 pub mod ai;
 pub mod attachments;
 pub mod backup;
+pub mod datadir;
 pub mod db;
 pub mod demo;
 pub mod desktop;
@@ -43,6 +46,7 @@ pub mod templates;
 pub mod tracking;
 pub mod trash;
 pub mod vault;
+pub mod versions;
 pub mod zeit;
 
 pub use db::Database;

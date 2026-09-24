@@ -14,6 +14,7 @@ import { buildExtensions, toMarkdown } from "./schema";
 import { zeitLaItems, zeitRefItems } from "./zeit-source";
 import { IconButton } from "../components/ui";
 import { findKey } from "./find";
+import { TableToolbar } from "./TableToolbar";
 import { ChevronDown, ChevronUp, Search, X } from "lucide-react";
 import type { PageDoc } from "../lib/types";
 
@@ -427,6 +428,7 @@ export function NoteEditor({
           )}
         </BubbleMenu>
       )}
+      {editor && <TableToolbar editor={editor} hidden={find !== null} />}
       <EditorContent editor={editor} />
     </div>
   );

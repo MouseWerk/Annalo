@@ -3,6 +3,7 @@
 //! One file per workspace, WAL mode, foreign keys on. Schema changes are
 //! numbered migrations tracked through `PRAGMA user_version`.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -17,6 +18,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/0003_trash.sql"),
     include_str!("../migrations/0004_tasks.sql"),
     include_str!("../migrations/0005_entry_page.sql"),
+    include_str!("../migrations/0006_page_versions.sql"),
 ];
 
 /// A migration with this marker adds a derived page index; every page is re-indexed after it ran.
@@ -704,16 +706,32 @@ impl Database {
         Ok(rows)
     }
 
-    /// The whole page hierarchy, for the sidebar.
+    /// The whole page hierarchy, for the sidebar. Linear in the number of pages: the rows are
+    /// grouped by parent once, then moved (not cloned) into their nodes.
     pub fn page_tree(&self) -> Result<Vec<PageNode>> {
-        fn build(parent: Option<i64>, pages: &[Page]) -> Vec<PageNode> {
+        let pages = self.list_pages()?;
+        let ids: std::collections::HashSet<i64> = pages.iter().map(|p| p.id).collect();
+        // Siblings keep the query order (position, id). A parent outside the list cannot occur
+        // for live pages (trashing takes the subtree along); such rows are left out, as before.
+        let mut children: HashMap<Option<i64>, Vec<Page>> = HashMap::new();
+        for p in pages {
+            let parent = p.parent_id.filter(|id| ids.contains(id));
+            if p.parent_id.is_some() && parent.is_none() {
+                continue;
+            }
+            children.entry(parent).or_default().push(p);
+        }
+        fn build(parent: Option<i64>, children: &mut HashMap<Option<i64>, Vec<Page>>) -> Vec<PageNode> {
+            let Some(pages) = children.remove(&parent) else { return vec![] };
             pages
-                .iter()
-                .filter(|p| p.parent_id == parent)
-                .map(|p| PageNode { page: p.clone(), children: build(Some(p.id), pages) })
+                .into_iter()
+                .map(|p| {
+                    let kids = build(Some(p.id), children);
+                    PageNode { page: p, children: kids }
+                })
                 .collect()
         }
-        Ok(build(None, &self.list_pages()?))
+        Ok(build(None, &mut children))
     }
 
     // --------------------------------------------------------------- ai usage
@@ -884,5 +902,36 @@ mod tests {
         let tree = db.page_tree().unwrap();
         assert_eq!(tree.len(), 1);
         assert_eq!(tree[0].children[0].children[0].page.title, "2026-09-23");
+    }
+
+    #[test]
+    fn page_tree_is_linear_for_large_workspaces() {
+        let db = Database::open_in_memory().unwrap();
+        // 50 folders with 99 pages each (5,000 pages), inserted directly to keep setup fast.
+        db.atomic(|| {
+            for f in 0..50i64 {
+                db.conn.execute(
+                    "INSERT INTO pages (title, position) VALUES (?1, ?2)",
+                    params![format!("Ordner {f}"), f],
+                )?;
+                let parent = db.conn.last_insert_rowid();
+                for i in 0..99i64 {
+                    db.conn.execute(
+                        "INSERT INTO pages (parent_id, title, position) VALUES (?1, ?2, ?3)",
+                        params![parent, format!("Seite {f}-{i}"), i],
+                    )?;
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
+        let t = std::time::Instant::now();
+        let tree = db.page_tree().unwrap();
+        let took = t.elapsed();
+        assert_eq!(tree.len(), 50);
+        assert_eq!(tree.iter().map(|n| n.children.len()).sum::<usize>(), 4950);
+        assert_eq!(tree[3].children[7].page.title, "Seite 3-7", "siblings keep their order");
+        // The old filter-per-parent build took seconds here in debug builds.
+        assert!(took < std::time::Duration::from_millis(200), "page_tree took {took:?}");
     }
 }

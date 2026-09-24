@@ -57,6 +57,11 @@ export function App() {
       }
       document.body.classList.add("ready");
     })().catch((e) => s.error("Start fehlgeschlagen", e));
+    // SQLite in a sync client's or a network folder can be corrupted: warn until dismissed.
+    api
+      .dataDirStatus()
+      .then((d) => d.synced && s.toast({ tone: "warning", persistent: true, title: "Datenbank im synchronisierten Ordner", detail: `Die Datenbank liegt in einem synchronisierten/Netzwerkordner – das kann sie beschädigen. Sicherungen dorthin sind unbedenklich. (${d.data_dir})` }))
+      .catch(() => {});
 
     const media = window.matchMedia("(prefers-color-scheme: dark)");
     const onMedia = () => applyTheme(useApp.getState().settings?.settings.theme ?? "system");

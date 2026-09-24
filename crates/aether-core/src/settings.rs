@@ -52,6 +52,8 @@ pub struct Settings {
     pub reminder_time: Option<String>,
     /// Global shortcut for the quick-capture window, e.g. `Ctrl+Shift+Space`.
     pub capture_shortcut: String,
+    /// Global shortcut that brings up the command palette, e.g. `Alt+Space`; `None` or `""` = off.
+    pub palette_shortcut: Option<String>,
 }
 
 impl Default for Settings {
@@ -76,12 +78,16 @@ impl Default for Settings {
             close_to_tray: cfg!(windows),
             reminder_time: Some("17:30".into()),
             capture_shortcut: DEFAULT_CAPTURE_SHORTCUT.into(),
+            palette_shortcut: Some(DEFAULT_PALETTE_SHORTCUT.into()),
         }
     }
 }
 
 /// Ctrl+Alt+… is AltGr on German keyboards, so the default avoids it.
 pub const DEFAULT_CAPTURE_SHORTCUT: &str = "Ctrl+Shift+Space";
+
+/// Default global shortcut of the command palette.
+pub const DEFAULT_PALETTE_SHORTCUT: &str = "Alt+Space";
 
 const KEY: &str = "app";
 
@@ -144,8 +150,11 @@ mod tests {
         assert_eq!((loaded.backup_dir, loaded.backup_keep), (None, 14));
         assert_eq!(loaded.reminder_time.as_deref(), Some("17:30"));
         assert_eq!(loaded.capture_shortcut, DEFAULT_CAPTURE_SHORTCUT);
+        assert_eq!(loaded.palette_shortcut.as_deref(), Some(DEFAULT_PALETTE_SHORTCUT));
         // An explicit null switches the reminder off.
         db.conn().execute("UPDATE settings SET value = '{\"reminder_time\":null}'", []).unwrap();
         assert_eq!(db.load_settings().unwrap().reminder_time, None);
+        db.conn().execute("UPDATE settings SET value = '{\"palette_shortcut\":null}'", []).unwrap();
+        assert_eq!(db.load_settings().unwrap().palette_shortcut, None);
     }
 }

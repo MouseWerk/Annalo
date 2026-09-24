@@ -1,0 +1,173 @@
+// „Versionen…“: earlier states of a page, preview, line diff and restore.
+
+import { useEffect, useMemo, useState } from "react";
+import { History, RotateCcw, Save } from "lucide-react";
+import { api } from "../lib/api";
+import { useApp } from "../store/app";
+import { Button, Dialog, Segmented, Spinner } from "../components/ui";
+import { flushAllEditors, reloadEditors } from "../editor/NoteEditor";
+import { dateLong, fileSize, relative, time } from "../lib/format";
+import { lineDiff } from "../lib/linediff";
+import type { VersionInfo } from "../lib/types";
+
+export function VersionsDialog({ page, open, onClose }: { page: { id: number; title: string }; open: boolean; onClose: () => void }) {
+  const [versions, setVersions] = useState<VersionInfo[] | null>(null);
+  const [selected, setSelected] = useState<number | null>(null);
+  const [content, setContent] = useState<Record<number, string>>({});
+  const [current, setCurrent] = useState<string | null>(null);
+  const [mode, setMode] = useState<"text" | "diff">("text");
+  const [busy, setBusy] = useState(false);
+  const s = useApp.getState;
+
+  const load = async (select?: number) => {
+    // Pending edits first, so „aktuell“ and a new snapshot match what the editor shows.
+    await flushAllEditors().catch(() => {});
+    const [list, doc] = await Promise.all([api.versions(page.id), api.page(page.id)]);
+    setVersions(list);
+    setCurrent(doc.content);
+    setSelected(select ?? list[0]?.id ?? null);
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    setVersions(null);
+    setContent({});
+    load().catch((e) => s().error("Versionen konnten nicht geladen werden", e));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, page.id]);
+
+  useEffect(() => {
+    if (selected == null || content[selected] != null) return;
+    api
+      .versionContent(selected)
+      .then((c) => setContent((m) => ({ ...m, [selected]: c })))
+      .catch((e) => s().error("Version konnte nicht geladen werden", e));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected]);
+
+  const text = selected != null ? content[selected] : undefined;
+  const diff = useMemo(() => (mode === "diff" && text != null && current != null ? lineDiff(current, text) : null), [mode, text, current]);
+  const changes = diff?.filter((l) => l.kind !== "same").length ?? 0;
+
+  const snapshot = async () => {
+    setBusy(true);
+    try {
+      await flushAllEditors();
+      const id = await api.snapshotPage(page.id);
+      if (id == null) s().toast({ tone: "info", title: "Keine Änderung", detail: "Die neueste Version entspricht schon dem aktuellen Stand." });
+      else s().toast({ tone: "success", title: "Version gesichert" });
+      await load(id ?? undefined);
+    } catch (e) {
+      s().error("Version konnte nicht gesichert werden", e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const restore = async () => {
+    const v = versions?.find((x) => x.id === selected);
+    if (!v) return;
+    const ok = await s().confirm({
+      title: "Version wiederherstellen?",
+      message: `„${page.title}“ bekommt den Stand vom ${dateLong(v.created_at)}, ${time(v.created_at)}. Der jetzige Inhalt bleibt als Version erhalten.`,
+      confirmLabel: "Wiederherstellen",
+    });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      await flushAllEditors();
+      await api.restoreVersion(page.id, v.id);
+      reloadEditors([page.id]);
+      s().toast({ tone: "success", title: "Version wiederhergestellt" });
+      onClose();
+    } catch (e) {
+      s().error("Wiederherstellen fehlgeschlagen", e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      title="Versionen"
+      description={`Frühere Stände von „${page.title}“. Beim Bearbeiten wird höchstens alle 10 Minuten eine Version gesichert; sie bleiben 30 Tage.`}
+      width={860}
+      footer={
+        <>
+          <Button icon={Save} onClick={snapshot} loading={busy} className="versions-snapshot">
+            Jetzt Version sichern
+          </Button>
+          <span className="spacer" style={{ flex: 1 }} />
+          <Button onClick={onClose}>Schließen</Button>
+          <Button variant="primary" icon={RotateCcw} onClick={restore} disabled={busy || selected == null || text == null}>
+            Wiederherstellen
+          </Button>
+        </>
+      }
+    >
+      {versions == null ? (
+        <div className="center-fill">
+          <Spinner />
+        </div>
+      ) : versions.length === 0 ? (
+        <div className="versions-empty faint">
+          <History size={18} /> Noch keine Versionen. Sie entstehen beim Bearbeiten oder mit „Jetzt Version sichern“.
+        </div>
+      ) : (
+        <div className="versions">
+          <div className="versions-list" role="listbox" aria-label="Versionen">
+            {versions.map((v) => (
+              <button
+                key={v.id}
+                type="button"
+                role="option"
+                aria-selected={selected === v.id}
+                className={`versions-item ${selected === v.id ? "on" : ""}`}
+                title={`${dateLong(v.created_at)}, ${time(v.created_at)}`}
+                onClick={() => setSelected(v.id)}
+              >
+                <span className="versions-when">{relative(v.created_at)}</span>
+                <span className="versions-meta faint">
+                  {time(v.created_at)} · {fileSize(v.size)}
+                </span>
+              </button>
+            ))}
+          </div>
+          <div className="versions-preview">
+            <Segmented
+              value={mode}
+              onChange={setMode}
+              options={[
+                { value: "text", label: "Inhalt" },
+                { value: "diff", label: "Unterschiede zu jetzt" },
+              ]}
+            />
+            {text == null ? (
+              <div className="center-fill">
+                <Spinner />
+              </div>
+            ) : mode === "text" ? (
+              <pre className="versions-pre">{text}</pre>
+            ) : (
+              <>
+                <div className="versions-legend faint">
+                  {changes === 0 ? "Keine Unterschiede zum aktuellen Stand." : <><span className="diff-del">− nur jetzt</span> <span className="diff-add">+ nur in dieser Version</span></>}
+                </div>
+                <pre className="versions-pre versions-diff">
+                  {diff?.map((l, i) => (
+                    <div key={i} className={`diff-${l.kind}`}>
+                      {l.kind === "add" ? "+ " : l.kind === "del" ? "− " : "  "}
+                      {l.text || " "}
+                    </div>
+                  ))}
+                </pre>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </Dialog>
+  );
+}

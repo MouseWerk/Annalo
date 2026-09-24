@@ -35,6 +35,7 @@ struct TrayHandles {
 pub struct Desktop {
     tray: Mutex<Option<TrayHandles>>,
     capture_shortcut: Mutex<Option<Shortcut>>,
+    palette_shortcut: Mutex<Option<Shortcut>>,
     /// A reminder was shown while the app was in the background: the next time the
     /// main window gets focus it opens the timesheet.
     pending_timesheet: AtomicBool,
@@ -250,10 +251,18 @@ pub fn capture_submit(app: AppHandle, state: State<AppState>, text: String) -> R
 
 /// Registers the quick-capture shortcut (`""` = none), replacing the previous one.
 pub fn set_capture_shortcut(app: &AppHandle, spec: &str) -> std::result::Result<(), String> {
+    set_shortcut(app, &desktop(app).capture_shortcut, spec)
+}
+
+/// Registers the command-palette shortcut (`""` = none), replacing the previous one.
+pub fn set_palette_shortcut(app: &AppHandle, spec: &str) -> std::result::Result<(), String> {
+    set_shortcut(app, &desktop(app).palette_shortcut, spec)
+}
+
+fn set_shortcut(app: &AppHandle, slot: &Mutex<Option<Shortcut>>, spec: &str) -> std::result::Result<(), String> {
     let gs = app.global_shortcut();
-    let d = desktop(app);
     // The lock is not held while (un)registering: the shortcut handler reads it.
-    let old = lock(&d.capture_shortcut).take();
+    let old = lock(slot).take();
     if let Some(old) = old {
         let _ = gs.unregister(old);
     }
@@ -262,7 +271,7 @@ pub fn set_capture_shortcut(app: &AppHandle, spec: &str) -> std::result::Result<
     }
     let sc = parse_shortcut(spec)?;
     gs.register(sc).map_err(|e| e.to_string())?;
-    *lock(&d.capture_shortcut) = Some(sc);
+    *lock(slot) = Some(sc);
     Ok(())
 }
 
@@ -273,6 +282,11 @@ pub fn parse_shortcut(spec: &str) -> std::result::Result<Shortcut, String> {
 /// Whether `shortcut` is the registered quick-capture shortcut.
 pub fn is_capture_shortcut(app: &AppHandle, shortcut: &Shortcut) -> bool {
     app.try_state::<Desktop>().is_some_and(|d| lock(&d.capture_shortcut).as_ref() == Some(shortcut))
+}
+
+/// Whether `shortcut` is the registered command-palette shortcut.
+pub fn is_palette_shortcut(app: &AppHandle, shortcut: &Shortcut) -> bool {
+    app.try_state::<Desktop>().is_some_and(|d| lock(&d.palette_shortcut).as_ref() == Some(shortcut))
 }
 
 // ---------------------------------------------------------------- reminders
