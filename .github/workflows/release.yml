@@ -16,7 +16,8 @@ name: Release
 
 # Alternatively „Run workflow“ (Actions → Release) with a version: the workflow creates the
 # annotated tag v<version> on the selected branch itself, with docs/releases/v<version>.md as
-# its message, and builds that.
+# its message, and builds that. If the tag exists already, it is built again (to re-run a
+# failed release with a fixed workflow).
 
 on:
   push:
@@ -58,8 +59,10 @@ jobs:
           fi
           TAG="v$VERSION"
           if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
-            echo "::error::Tag $TAG exists already"
-            exit 1
+            # Re-run of a release: build the existing tag (the workflow itself comes from the branch).
+            echo "::notice::Tag $TAG exists, building it again."
+            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           NOTES="docs/releases/$TAG.md"
           [ -f "$NOTES" ] || { echo "AETHER OS $VERSION" > /tmp/notes.md; NOTES=/tmp/notes.md; }
@@ -116,8 +119,9 @@ jobs:
             echo "::error::Tag $TAG is not vMAJOR.MINOR.PATCH"
             exit 1
           fi
+          export VERSION
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          SIGN=0
+          export SIGN=0
           if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] && [ "${{ matrix.updater }}" = "true" ]; then SIGN=1; fi
           echo "SIGN=$SIGN" >> "$GITHUB_ENV"
           if [ "$SIGN" = "1" ]; then
