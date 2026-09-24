@@ -190,3 +190,7 @@ Migration v2 converts the old block model: blocks are concatenated into
   daily notes, `/zeit`, timer, timesheet, export, projects, settings (LiteLLM URL, token, models), the assistant
   (streaming, tool calls, approvals, cancel), embeddings, vault import/export, and screenshots in both themes.
 - The Windows build (WebView2, Credential Manager, Win32 idle probe) is built in CI on `windows-latest`.
+- The macOS build (WKWebView, Keychain, CoreGraphics idle probe, menu bar, title bar overlay, Dock reopen) is
+  linted and bundled in CI on `macos-14` (Apple Silicon); release builds add the Intel app by cross-compiling.
+  macOS-only code paths (`cfg(target_os = "macos")`) are compiled only there. The menu bar (`appmenu.rs`) is
+  compiled on every platform and installed only on macOS.

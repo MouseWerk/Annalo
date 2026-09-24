@@ -1,12 +1,18 @@
 name: Release
 
-# Pushing a tag `v1.2.3` builds the Windows installer (per-user NSIS, no admin rights) and the
-# Linux packages (.deb, .AppImage) and publishes them as a GitHub release.
+# Pushing a tag `v1.2.3` builds the Windows installer (per-user NSIS, no admin rights), the
+# Linux packages (.deb, .AppImage) and the macOS disk images (Apple Silicon and Intel) and
+# publishes them as a GitHub release.
 #
 # Automatic updates: the public key is committed (src-tauri/updater.pub). With the repository
 # secrets TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD (README →
-# „Automatische Updates einrichten“) the Windows build is signed, the updater is switched on and
-# `latest.json` is published. Without them the release is built unsigned and the updater stays off.
+# „Automatische Updates einrichten“) the Windows and macOS builds are signed, the updater is
+# switched on and `latest.json` is published. Without them the release is built unsigned and the
+# updater stays off.
+#
+# macOS: ad-hoc signed by default (not notarized). With the secrets APPLE_CERTIFICATE,
+# APPLE_CERTIFICATE_PASSWORD and APPLE_SIGNING_IDENTITY the app is signed with the Developer ID;
+# with APPLE_ID, APPLE_PASSWORD and APPLE_TEAM_ID it is notarized as well (README → „macOS“).
 
 on:
   push:
@@ -29,9 +35,24 @@ jobs:
           - name: Windows
             os: windows-latest
             bundles: nsis
+            updater: true
           - name: Linux
             os: ubuntu-22.04
             bundles: deb,appimage
+            updater: false
+          - name: macOS (Apple Silicon)
+            os: macos-14
+            bundles: app,dmg
+            target: aarch64-apple-darwin
+            arch: aarch64
+            updater: true
+          # Cross-compiled on the Apple Silicon runner (GitHub is retiring the Intel runners).
+          - name: macOS (Intel)
+            os: macos-14
+            bundles: app,dmg
+            target: x86_64-apple-darwin
+            arch: x64
+            updater: true
     env:
       TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -49,7 +70,7 @@ jobs:
           fi
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           SIGN=0
-          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] && [ "${{ matrix.name }}" = "Windows" ]; then SIGN=1; fi
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] && [ "${{ matrix.updater }}" = "true" ]; then SIGN=1; fi
           echo "SIGN=$SIGN" >> "$GITHUB_ENV"
           if [ "$SIGN" = "1" ]; then
             # Compiled into the app (option_env!): switches the updater on in this build.
@@ -77,7 +98,11 @@ jobs:
           fi
 
       - uses: dtolnay/rust-toolchain@1.94.1
+        with:
+          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -94,14 +119,49 @@ jobs:
       - name: Build
         shell: bash
         working-directory: src-tauri
-        run: cargo tauri build --bundles ${{ matrix.bundles }}
+        env:
+          MAC_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          MAC_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          MAC_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          MAC_ID: ${{ secrets.APPLE_ID }}
+          MAC_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          MAC_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          ARGS=(--bundles "${{ matrix.bundles }}")
+          if [ -n "${{ matrix.target }}" ]; then ARGS+=(--target "${{ matrix.target }}"); fi
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            # Tauri reads the APPLE_* variables. They are only set when the secrets exist: an
+            # empty APPLE_CERTIFICATE would fail the build. Without them: ad-hoc signature ("-").
+            if [ -n "$MAC_CERTIFICATE" ] && [ -n "$MAC_SIGNING_IDENTITY" ]; then
+              export APPLE_CERTIFICATE="$MAC_CERTIFICATE" APPLE_CERTIFICATE_PASSWORD="$MAC_CERTIFICATE_PASSWORD"
+              export APPLE_SIGNING_IDENTITY="$MAC_SIGNING_IDENTITY"
+              echo "::notice::Signing with the Developer ID certificate."
+              if [ -n "$MAC_ID" ] && [ -n "$MAC_PASSWORD" ] && [ -n "$MAC_TEAM_ID" ]; then
+                export APPLE_ID="$MAC_ID" APPLE_PASSWORD="$MAC_PASSWORD" APPLE_TEAM_ID="$MAC_TEAM_ID"
+                echo "::notice::Notarizing with Apple."
+              fi
+            else
+              echo "::notice::Ad-hoc signature (no Developer ID secrets): not notarized."
+            fi
+          fi
+          cargo tauri build "${ARGS[@]}"
 
       - name: Collect files
         shell: bash
         run: |
           mkdir -p dist
           B=target/release/bundle
-          if [ "${{ runner.os }}" = "Windows" ]; then
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            B="target/${{ matrix.target }}/release/bundle"
+            ARCH="${{ matrix.arch }}"
+            cp "$B"/dmg/*.dmg "dist/AETHER-OS_${VERSION}_${ARCH}.dmg"
+            # Updater archive of the .app: only in signed builds (createUpdaterArtifacts).
+            TGZ="$(ls "$B"/macos/*.app.tar.gz 2>/dev/null | head -1)"
+            if [ -n "$TGZ" ] && [ -f "$TGZ.sig" ]; then
+              cp "$TGZ" "dist/AETHER-OS_${VERSION}_${ARCH}.app.tar.gz"
+              cp "$TGZ.sig" "dist/AETHER-OS_${VERSION}_${ARCH}.app.tar.gz.sig"
+            fi
+          elif [ "${{ runner.os }}" = "Windows" ]; then
             cp "$B"/nsis/*.exe dist/AETHER-OS_${VERSION}_x64-setup.exe
             if [ -f "$(ls "$B"/nsis/*.exe.sig 2>/dev/null | head -1)" ]; then
               cp "$B"/nsis/*.exe.sig dist/AETHER-OS_${VERSION}_x64-setup.exe.sig
@@ -139,21 +199,26 @@ jobs:
             NOTES="AETHER OS $VERSION"
           fi
           printf '%s\n' "$NOTES" > notes.md
-          SIG="dist/AETHER-OS_${VERSION}_x64-setup.exe.sig"
-          if [ -f "$SIG" ]; then
-            URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/AETHER-OS_${VERSION}_x64-setup.exe"
-            node -e '
-              const fs = require("fs");
-              const [sig, url, version] = process.argv.slice(1);
-              const feed = {
-                version,
-                notes: fs.readFileSync("notes.md", "utf8"),
-                pub_date: new Date().toISOString(),
-                platforms: { "windows-x86_64": { signature: fs.readFileSync(sig, "utf8").trim(), url } },
-              };
+          # Update feed: every platform whose update file was signed.
+          BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}" node -e '
+            const fs = require("fs");
+            const version = process.argv[1];
+            const files = {
+              "windows-x86_64": `AETHER-OS_${version}_x64-setup.exe`,
+              "darwin-aarch64": `AETHER-OS_${version}_aarch64.app.tar.gz`,
+              "darwin-x86_64": `AETHER-OS_${version}_x64.app.tar.gz`,
+            };
+            const platforms = {};
+            for (const [platform, file] of Object.entries(files)) {
+              const sig = `dist/${file}.sig`;
+              if (fs.existsSync(sig)) platforms[platform] = { signature: fs.readFileSync(sig, "utf8").trim(), url: `${process.env.BASE}/${file}` };
+            }
+            if (Object.keys(platforms).length) {
+              const feed = { version, notes: fs.readFileSync("notes.md", "utf8"), pub_date: new Date().toISOString(), platforms };
               fs.writeFileSync("dist/latest.json", JSON.stringify(feed, null, 2));
-            ' "$SIG" "$URL" "$VERSION"
-          fi
+              console.log("latest.json:", Object.keys(platforms).join(", "));
+            }
+          ' "$VERSION"
           ls -la dist
 
       - uses: softprops/action-gh-release@v2
