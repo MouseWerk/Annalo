@@ -1,6 +1,7 @@
 // Settings: LiteLLM server + token, models and routing; time tracking;
 // notes (vault import/export); backups; appearance; about.
 
+import { AetherLogo } from "../components/Logo";
 import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, DatabaseBackup, Monitor, Eye, EyeOff, FolderInput, FolderOpen, FolderOutput, KeyRound, Loader2, Palette, Plus, RefreshCw, Server, Sparkles, Timer, Trash2, NotebookPen, Info, XCircle } from "lucide-react";
 import { api } from "../lib/api";
@@ -872,9 +873,14 @@ function AboutSection() {
   ];
   return (
     <>
-      <header className="settings-head">
-        <h1>AETHER OS</h1>
-        <p>Version {view.version}</p>
+      <header className="settings-head about-head">
+        <span className="about-mark">
+          <AetherLogo size={34} />
+        </span>
+        <div>
+          <h1>AETHER OS</h1>
+          <p>Version {view.version}</p>
+        </div>
       </header>
       <Group title="Daten">
         <Row label="Datenordner" description="Datenbank, Einstellungen und Schlüsselablage (unter Linux).">

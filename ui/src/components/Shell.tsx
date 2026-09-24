@@ -12,6 +12,7 @@ import { clock, h1, relative, usd } from "../lib/format";
 import { useTimerSeconds, stopTimer } from "./Sidebar";
 import { createSubpage } from "../views/PageView";
 import { Onboarding } from "./Onboarding";
+import { AetherLogo } from "./Logo";
 import type { Page } from "../lib/types";
 
 export function tabTitle(t: Tab, pages: Map<number, { title: string }>) {
@@ -145,6 +146,7 @@ function StartPage() {
   return (
     <div className="home">
       <div className="home-inner">
+        <AetherLogo size={34} className="home-logo" />
         <h1>{greeting}</h1>
         <p className="muted">
           {new Date().toLocaleDateString("de-DE", { weekday: "long", day: "numeric", month: "long" })}

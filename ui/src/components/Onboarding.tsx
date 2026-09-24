@@ -1,7 +1,8 @@
 // First start: choose between sample data, an empty workspace and an Obsidian import.
 
 import { useEffect, useRef, useState } from "react";
-import { FilePlus2, FolderInput, LayoutDashboard, Server, Sparkles } from "lucide-react";
+import { FilePlus2, FolderInput, LayoutDashboard, Server } from "lucide-react";
+import { AetherLogo } from "./Logo";
 import { api } from "../lib/api";
 import { importVault } from "../lib/actions";
 import { useApp } from "../store/app";
@@ -70,7 +71,7 @@ export function Onboarding() {
     <div className="home">
       <div className="home-inner onboarding">
         <div className="onb-mark" aria-hidden>
-          <Sparkles size={22} strokeWidth={1.75} />
+          <AetherLogo size={34} />
         </div>
         <h1>Willkommen bei AETHER OS</h1>
         <p className="muted">Notizen, Projekte und Zeiterfassung an einem Ort. Wie möchtest du beginnen?</p>
