@@ -46,5 +46,16 @@
         "displayLanguageSelector": false
       }
     }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "",
+      "endpoints": [
+        "https://github.com/mauricekleindienst/aetheros/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

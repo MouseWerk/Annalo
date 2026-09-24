@@ -88,6 +88,19 @@ Migration v2 converts the old block model: blocks are concatenated into
   booked minutes and the last notified day (kept in `settings` meta rows). Desktop notifications cannot
   report clicks, so after an end-of-day reminder the next focus of the main window opens the timesheet.
 
+## Auto-update (`updates.rs` in the shell, `update.rs` in core)
+
+- `tauri-plugin-updater` is registered only when the build compiled in `AETHER_UPDATER_PUBKEY`
+  (`option_env!`; `build.rs` re-runs when it changes). Without it `update_status` reports `enabled: false`,
+  `update_check`/`update_install` refuse, and nothing contacts the network (dev, CI and e2e builds).
+- Endpoint and Windows `installMode: passive` live in `plugins.updater` of `tauri.conf.json`. The release
+  workflow (`.github/workflows/release.yml`, on `v*` tags) sets the version from the tag, turns on
+  `createUpdaterArtifacts` and publishes the signed installers with `latest.json` via `tauri-action`.
+- The UI (`components/Updates.tsx`) checks 20 s after start and every 6 h when `auto_update_check` is on, and
+  on „Jetzt nach Updates suchen“. Installing always needs a click: editors are flushed (`lib/exit.ts`, shared
+  with quit/close), the download reports `update://progress`, and `prepare_exit` closes the workspace and
+  releases the single-instance lock right before the NSIS installer takes over and relaunches the app.
+
 ## Notes model
 
 - The editor (TipTap/ProseMirror) loads and saves Markdown via `@tiptap/markdown`. Custom nodes serialize to portable syntax:

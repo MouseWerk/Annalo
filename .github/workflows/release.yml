@@ -1,0 +1,159 @@
+name: Release
+
+# Pushing a tag `v1.2.3` builds the Windows installer (per-user NSIS, no admin rights) and the
+# Linux packages (.deb, .AppImage) and publishes them as a GitHub release.
+#
+# Automatic updates: with the repository secrets TAURI_SIGNING_PRIVATE_KEY,
+# TAURI_SIGNING_PRIVATE_KEY_PASSWORD and AETHER_UPDATER_PUBKEY (README → „Automatische Updates
+# einrichten“) the Windows build is signed, the updater is switched on and `latest.json` is
+# published. Without them the release is built unsigned and the updater stays off.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            bundles: nsis
+          - name: Linux
+            os: ubuntu-22.04
+            bundles: deb,appimage
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      AETHER_UPDATER_PUBKEY: ${{ secrets.AETHER_UPDATER_PUBKEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The tag is the version (tauri.conf.json is what the updater compares).
+      - name: Version from tag
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME is not vMAJOR.MINOR.PATCH"
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          SIGN=0
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] && [ -n "$AETHER_UPDATER_PUBKEY" ] && [ "${{ matrix.name }}" = "Windows" ]; then SIGN=1; fi
+          echo "SIGN=$SIGN" >> "$GITHUB_ENV"
+          node -e '
+            const fs = require("fs");
+            const p = "src-tauri/tauri.conf.json";
+            const c = JSON.parse(fs.readFileSync(p, "utf8"));
+            c.version = process.env.VERSION;
+            if (process.env.SIGN === "1") {
+              c.bundle.createUpdaterArtifacts = true;
+              c.plugins.updater.pubkey = process.env.AETHER_UPDATER_PUBKEY.trim();
+            }
+            fs.writeFileSync(p, JSON.stringify(c, null, 2));
+            const t = "Cargo.toml";
+            fs.writeFileSync(t, fs.readFileSync(t, "utf8").replace(/^version = "[^"]*"/m, `version = "${process.env.VERSION}"`));
+          '
+          if [ "$SIGN" = "0" ]; then
+            # Unsigned build: the updater must stay off (it is only enabled with a public key).
+            echo "AETHER_UPDATER_PUBKEY=" >> "$GITHUB_ENV"
+            echo "TAURI_SIGNING_PRIVATE_KEY=" >> "$GITHUB_ENV"
+            echo "::notice::Building without updater signing (secrets not set)."
+          fi
+
+      - uses: dtolnay/rust-toolchain@1.94.1
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: System packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev patchelf
+
+      - run: npm ci --prefix ui
+      - run: cargo install tauri-cli --version "^2" --locked
+
+      - name: Build
+        shell: bash
+        working-directory: src-tauri
+        run: cargo tauri build --bundles ${{ matrix.bundles }}
+
+      - name: Collect files
+        shell: bash
+        run: |
+          mkdir -p dist
+          B=target/release/bundle
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "$B"/nsis/*.exe dist/AETHER-OS_${VERSION}_x64-setup.exe
+            if [ -f "$(ls "$B"/nsis/*.exe.sig 2>/dev/null | head -1)" ]; then
+              cp "$B"/nsis/*.exe.sig dist/AETHER-OS_${VERSION}_x64-setup.exe.sig
+            fi
+          else
+            cp "$B"/deb/*.deb dist/AETHER-OS_${VERSION}_amd64.deb
+            cp "$B"/appimage/*.AppImage dist/AETHER-OS_${VERSION}_amd64.AppImage
+          fi
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.name }}
+          path: dist/*
+
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Release notes and update feed
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          NOTES="$(git for-each-ref "refs/tags/$GITHUB_REF_NAME" --format='%(contents)' | sed '/-----BEGIN PGP SIGNATURE-----/,$d')"
+          if [ "$(git cat-file -t "$GITHUB_REF_NAME")" != "tag" ] || [ -z "$(echo "$NOTES" | tr -d '[:space:]')" ]; then
+            NOTES="AETHER OS $VERSION"
+          fi
+          printf '%s\n' "$NOTES" > notes.md
+          SIG="dist/AETHER-OS_${VERSION}_x64-setup.exe.sig"
+          if [ -f "$SIG" ]; then
+            URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/AETHER-OS_${VERSION}_x64-setup.exe"
+            node -e '
+              const fs = require("fs");
+              const [sig, url, version] = process.argv.slice(1);
+              const feed = {
+                version,
+                notes: fs.readFileSync("notes.md", "utf8"),
+                pub_date: new Date().toISOString(),
+                platforms: { "windows-x86_64": { signature: fs.readFileSync(sig, "utf8").trim(), url } },
+              };
+              fs.writeFileSync("dist/latest.json", JSON.stringify(feed, null, 2));
+            ' "$SIG" "$URL" "$VERSION"
+          fi
+          ls -la dist
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: AETHER OS ${{ github.ref_name }}
+          body_path: notes.md
+          files: dist/*

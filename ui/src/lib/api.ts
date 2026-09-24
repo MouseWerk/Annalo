@@ -108,6 +108,11 @@ export const api = {
   setDataDir: (path: string, useExisting = false) => call<T.DataDirStatus>("data_dir_set", { path, useExisting }),
   cancelDataDirMove: () => call<T.DataDirStatus>("data_dir_cancel"),
   restart: () => call<void>("app_restart"),
+  updateStatus: () => call<T.UpdateStatus>("update_status"),
+  /** Asks the release feed; null when this is the newest version. Never installs. */
+  updateCheck: () => call<T.UpdateInfo | null>("update_check"),
+  /** Downloads and installs the found update, then restarts (`update://progress` events). */
+  updateInstall: () => call<void>("update_install"),
 
   // desktop
   desktopInfo: () => call<T.DesktopInfo>("desktop_info"),

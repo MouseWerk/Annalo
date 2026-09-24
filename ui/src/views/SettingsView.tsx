@@ -11,6 +11,8 @@ import { flushAllEditors } from "../editor/NoteEditor";
 import { fileSize, relative } from "../lib/format";
 import { Badge, Button, Field, IconButton, Input, Segmented, Select, Switch, TextArea } from "../components/ui";
 import { recordShortcut } from "../lib/shortcut";
+import { NOT_CONFIGURED } from "../lib/updates";
+import { checkForUpdates, installUpdate, loadUpdateStatus, useUpdates } from "../components/Updates";
 import type { BackupInfo, MirrorStatus, ConnectionTest, DataDirStatus, DesktopInfo, Page, Settings } from "../lib/types";
 
 type Section = "ai" | "time" | "notes" | "backup" | "desktop" | "appearance" | "about";
@@ -94,7 +96,16 @@ export function SettingsView() {
               }}
             />
           )}
-          {section === "about" && <AboutSection />}
+          {section === "about" && (
+            <AboutSection
+              draft={draft}
+              update={(p) => {
+                const next = { ...draft, ...p };
+                setDraft(next);
+                save(next);
+              }}
+            />
+          )}
         </div>
         {dirty && (
           <div className="savebar" role="region" aria-label="Ungespeicherte Änderungen">
@@ -913,8 +924,54 @@ async function moveDataDir(onChanged: () => void) {
   }
 }
 
-function AboutSection() {
+function UpdatesGroup({ draft, update }: { draft: Settings; update: (p: Partial<Settings>) => void }) {
+  const { status, available, phase, checkedAt } = useUpdates();
+  useEffect(() => void loadUpdateStatus(), []);
+  if (!status) return null;
+  const busy = phase === "downloading" || phase === "installing";
+  let state: React.ReactNode;
+  if (!status.enabled) state = NOT_CONFIGURED + ".";
+  else if (available) state = `Version ${available.version} ist verfügbar.`;
+  else if (phase === "checking") state = "Suche nach Updates …";
+  else if (checkedAt) state = `AETHER OS ist aktuell (geprüft ${relative(checkedAt.toISOString())}).`;
+  else state = "Noch nicht geprüft.";
+  return (
+    <Group title="Updates" description="Neue Versionen kommen als signierte Installer von GitHub. Installiert wird nur nach deinem Klick; offene Notizen werden vorher gespeichert.">
+      <Row label="Status" description={<span className="update-state">{state}</span>}>
+        <div className="unit-input">
+          {available && status.enabled && (
+            <>
+              <Button variant="ghost" onClick={() => useUpdates.setState({ notesOpen: true })}>
+                Was ist neu?
+              </Button>
+              <Button variant="primary" icon={RefreshCw} loading={busy} onClick={() => void installUpdate()}>
+                Installieren und neu starten
+              </Button>
+            </>
+          )}
+          <Button
+            icon={RefreshCw}
+            disabled={!status.enabled || busy}
+            loading={phase === "checking"}
+            title={status.enabled ? undefined : NOT_CONFIGURED}
+            onClick={() => void checkForUpdates(true)}
+          >
+            Jetzt nach Updates suchen
+          </Button>
+        </div>
+      </Row>
+      {status.enabled && (
+        <Row label="Automatisch nach Updates suchen" description="Beim Start und alle 6 Stunden. Du wirst gefragt, bevor etwas installiert wird.">
+          <Switch label="Automatisch nach Updates suchen" checked={draft.auto_update_check} onChange={(v) => update({ auto_update_check: v })} />
+        </Row>
+      )}
+    </Group>
+  );
+}
+
+function AboutSection({ draft, update }: { draft: Settings; update: (p: Partial<Settings>) => void }) {
   const view = useApp((s) => s.settings)!;
+  const version = useUpdates((s) => s.status?.current_version) ?? view.version;
   const [status, setStatus] = useState<DataDirStatus | null>(null);
   const loadStatus = () => void api.dataDirStatus().then(setStatus, () => setStatus(null));
   useEffect(loadStatus, []);
@@ -943,9 +1000,10 @@ function AboutSection() {
         </span>
         <div>
           <h1>AETHER OS</h1>
-          <p>Version {view.version}</p>
+          <p>Version {version}</p>
         </div>
       </header>
+      <UpdatesGroup draft={draft} update={update} />
       <Group title="Daten">
         <Row label="Datenordner" description="Datenbank, Einstellungen und Schlüsselablage (unter Linux).">
           <span className="mono small selectable">{view.data_dir}</span>

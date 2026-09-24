@@ -6,7 +6,7 @@ members = ["crates/aether-core", "crates/aether-cli", "src-tauri"]
 default-members = ["crates/aether-core", "crates/aether-cli", "src-tauri"]
 
 [workspace.package]
-version = "1.0.0-concept"
+version = "1.0.0"
 edition = "2024"
 license = "MIT"
 

@@ -196,6 +196,8 @@ export interface Settings {
   capture_shortcut: string;
   /** Global shortcut of the command palette; null = none (the default). */
   palette_shortcut: string | null;
+  /** Look for new releases at start and every 6 h (builds with an update key only). */
+  auto_update_check: boolean;
 }
 export interface DesktopInfo {
   autostart: boolean;
@@ -376,4 +378,25 @@ export interface ActivityTick {
   window: { title: string; process: string } | null;
   timer_idle_minutes: number | null;
   is_idle: boolean;
+}
+
+/** A newer release found by the updater. */
+export interface UpdateInfo {
+  version: string;
+  /** Release notes (Markdown). */
+  notes: string | null;
+  date: string | null;
+  /** Release page with the full changelog. */
+  url: string;
+}
+export interface UpdateStatus {
+  /** The build has an update key; otherwise updates are not set up. */
+  enabled: boolean;
+  current_version: string;
+  available: UpdateInfo | null;
+}
+export interface UpdateProgress {
+  downloaded: number;
+  total: number | null;
+  percent: number | null;
 }

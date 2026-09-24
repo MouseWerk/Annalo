@@ -23,6 +23,7 @@
 //! * [`export`] – SAP PS (CATS), Jira worklog, CSV and JSON exports
 //! * [`desktop`] – quick capture into the daily note, end-of-day reminders
 //! * [`datadir`] – data folder location (`location.json`), synced-folder check
+//! * [`update`] – auto-update gating (compiled-in key), release links, download progress
 //! * [`activity`] – idle detection and active window probing (Win32 on Windows)
 //! * [`ai`] – LiteLLM client, model router, token/cost metrics, local RAG
 
@@ -49,6 +50,7 @@ pub mod tasks;
 pub mod templates;
 pub mod tracking;
 pub mod trash;
+pub mod update;
 pub mod vault;
 pub mod versions;
 pub mod zeit;
