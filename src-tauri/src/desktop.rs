@@ -238,7 +238,9 @@ struct Popup {
     label: &'static str,
     title: &'static str,
     size: (f64, f64),
-    /// Transparent background: the page draws a rounded panel.
+    /// Transparent background: the page draws a rounded panel (not on macOS, which would need
+    /// the private-API feature; there the panel fills the window).
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     transparent: bool,
 }
 
