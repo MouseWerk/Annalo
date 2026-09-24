@@ -16,25 +16,8 @@ import { flushAllEditors, reloadEditors } from "./editor/NoteEditor";
 import type { ActivityTick } from "./lib/types";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { tabTitle } from "./components/Shell";
-
-/** Stores pending edits before the app goes away; false when the user chose to stay. */
-async function flushBeforeExit(): Promise<boolean> {
-  try {
-    await Promise.race([flushAllEditors(), new Promise((_, fail) => setTimeout(() => fail(new Error("Zeitüberschreitung")), 5000))]);
-    return true;
-  } catch {
-    // Quitting from the tray: the window may be hidden, but the question needs an answer.
-    const win = getCurrentWindow();
-    await win.show().catch(() => {});
-    await win.setFocus().catch(() => {});
-    return useApp.getState().confirm({
-      title: "Nicht gespeicherte Änderungen",
-      message: "Einige Änderungen konnten nicht gespeichert werden. Trotzdem schließen? Sie gehen dann verloren.",
-      confirmLabel: "Trotzdem schließen",
-      danger: true,
-    });
-  }
-}
+import { flushBeforeExit } from "./lib/exit";
+import { startUpdateChecks } from "./components/Updates";
 
 export function App() {
   const sidebarOpen = useApp((s) => s.sidebarOpen);
@@ -71,6 +54,9 @@ export function App() {
       })
       .catch(() => {});
 
+    // Only builds with an update key look for new releases; installing always needs a click.
+    const stopUpdates = startUpdateChecks();
+
     const media = window.matchMedia("(prefers-color-scheme: dark)");
     const onMedia = () => applyTheme(useApp.getState().settings?.settings.theme ?? "system");
     media.addEventListener("change", onMedia);
@@ -98,6 +84,7 @@ export function App() {
       }),
     ];
     return () => {
+      stopUpdates();
       media.removeEventListener("change", onMedia);
       unlisten.forEach((u) => u.then((f) => f()));
     };

@@ -2,6 +2,7 @@
 
 mod desktop;
 mod secrets;
+mod updates;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -1416,16 +1417,28 @@ fn data_dir_cancel(app: AppHandle, state: State<'_, AppState>) -> Result<DataDir
 /// Restarts the app (in the foreground, even when it was autostarted minimized). The
 /// database is closed first, so a pending move at the next start copies a finished file.
 #[tauri::command]
-fn app_restart(app: AppHandle, state: State<AppState>) -> Result<()> {
-    {
+fn app_restart(app: AppHandle) -> Result<()> {
+    restart(&app)
+}
+
+/// Closes the workspace and releases the single-instance lock before this process ends
+/// and another one (a restart, or the update installer's relaunch) takes over.
+pub(crate) fn prepare_exit(app: &AppHandle) {
+    if let Some(state) = app.try_state::<AppState>() {
         let mut db = state.db();
         let _ = db.checkpoint();
         // Dropping the connection closes the workspace; late writes land in memory.
-        *db = Database::open_in_memory()?;
+        if let Ok(mem) = Database::open_in_memory() {
+            *db = mem;
+        }
     }
-    // Release the single-instance lock, or the new process would only focus this one.
-    tauri_plugin_single_instance::destroy(&app);
+    // Otherwise the new process would only focus this one.
+    tauri_plugin_single_instance::destroy(app);
+}
+
+pub(crate) fn restart(app: &AppHandle) -> Result<()> {
     let exe = tauri::process::current_binary(&app.env())?;
+    prepare_exit(app);
     let args = std::env::args_os().skip(1).filter(|a| a != desktop::MINIMIZED_ARG);
     std::process::Command::new(exe).args(args).spawn()?;
     app.exit(0);
@@ -1447,6 +1460,10 @@ pub fn run() {
     // use their own workspace each and may overlap.
     if std::env::var_os("AETHER_DATA_DIR").is_none() {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| desktop::show_main(app)));
+    }
+    // Only in release builds with an update key; others never contact the update server.
+    if let Some(updater) = updates::plugin() {
+        builder = builder.plugin(updater);
     }
     builder
         .plugin(tauri_plugin_dialog::init())
@@ -1530,6 +1547,7 @@ pub fn run() {
             });
 
             app.manage(desktop::Desktop::default());
+            app.manage(updates::Updates::default());
             // No tray (e.g. a Linux desktop without StatusNotifier): the app still works,
             // closing then minimizes instead of hiding.
             if let Err(e) = desktop::setup_tray(app.handle()) {
@@ -1643,6 +1661,9 @@ pub fn run() {
             desktop::capture_hide,
             desktop::desktop_info,
             desktop::autostart_set,
+            updates::update_status,
+            updates::update_check,
+            updates::update_install,
         ])
         .run(tauri::generate_context!())
         .expect("error while running AETHER OS");

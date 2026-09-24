@@ -1,0 +1,104 @@
+name: Release
+
+# Pushing a tag `v1.2.3` builds the signed Windows installers and publishes a GitHub release
+# with `latest.json`, the feed the app's updater reads
+# (https://github.com/mauricekleindienst/aetheros/releases/latest/download/latest.json).
+# Setup (keypair and repository secrets): README → „Automatische Updates einrichten“.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Windows release
+    runs-on: windows-latest
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      # Compiled into the app (`option_env!`): switches the updater on in this build.
+      AETHER_UPDATER_PUBKEY: ${{ secrets.AETHER_UPDATER_PUBKEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check signing secrets
+        shell: bash
+        run: |
+          missing=""
+          [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] || missing="$missing TAURI_SIGNING_PRIVATE_KEY"
+          [ -n "$AETHER_UPDATER_PUBKEY" ] || missing="$missing AETHER_UPDATER_PUBKEY"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secrets:$missing (see README, „Automatische Updates einrichten“)"
+            exit 1
+          fi
+
+      # The tag is the version: it goes into tauri.conf.json (what the updater compares) and
+      # Cargo.toml. Updater artifacts (.sig files) are only created here, where a key exists.
+      - name: Take the version from the tag
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME is not vMAJOR.MINOR.PATCH (the MSI installer needs a numeric version)"
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          node -e '
+            const fs = require("fs");
+            const p = "src-tauri/tauri.conf.json";
+            const c = JSON.parse(fs.readFileSync(p, "utf8"));
+            c.version = process.env.VERSION;
+            c.bundle.createUpdaterArtifacts = true;
+            c.plugins.updater.pubkey = process.env.AETHER_UPDATER_PUBKEY.trim();
+            fs.writeFileSync(p, JSON.stringify(c, null, 2));
+            const t = "Cargo.toml";
+            const toml = fs.readFileSync(t, "utf8");
+            const next = toml.replace(/(\[workspace\.package\][^\[]*?\nversion = )"[^"]*"/, `$1"${process.env.VERSION}"`);
+            if (next === toml && !toml.includes(`version = "${process.env.VERSION}"`)) throw new Error("workspace version not found in Cargo.toml");
+            fs.writeFileSync(t, next);
+          '
+          git diff --stat
+
+      # Release notes: the annotated tag's message (`git tag -a v1.2.3 -m "…"`), else a default.
+      # They appear in the app's „Was ist neu?“ dialog.
+      - name: Release notes
+        id: notes
+        shell: bash
+        run: |
+          NOTES="$(git for-each-ref "refs/tags/$GITHUB_REF_NAME" --format='%(contents)' | sed '/-----BEGIN PGP SIGNATURE-----/,$d')"
+          if [ -z "$(echo "$NOTES" | tr -d '[:space:]')" ] || [ "$(git cat-file -t "$GITHUB_REF_NAME")" != "tag" ]; then
+            NOTES="AETHER OS $VERSION"
+          fi
+          {
+            echo "body<<AETHER_NOTES_EOF"
+            echo "$NOTES"
+            echo "AETHER_NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --prefix ui
+      - run: cargo install tauri-cli --version "^2" --locked
+
+      # Builds NSIS + MSI with their .sig files, uploads them and `latest.json` (pointing to
+      # the NSIS installer) to the release for this tag.
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tauriScript: cargo tauri
+          tagName: ${{ github.ref_name }}
+          releaseName: AETHER OS ${{ env.VERSION }}
+          releaseBody: ${{ steps.notes.outputs.body }}
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true
+          updaterJsonPreferNsis: true

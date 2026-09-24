@@ -12,6 +12,7 @@ import { clock, h1, relative, usd } from "../lib/format";
 import { useTimerSeconds, stopTimer } from "./Sidebar";
 import { createSubpage } from "../views/PageView";
 import { Onboarding } from "./Onboarding";
+import { UpdateToast } from "./Updates";
 import type { Page } from "../lib/types";
 
 export function tabTitle(t: Tab, pages: Map<number, { title: string }>) {
@@ -183,6 +184,7 @@ export function Toasts() {
   const icon = { info: Info, success: CheckCircle2, warning: AlertTriangle, danger: XCircle };
   return (
     <div className="toasts" aria-live="polite">
+      <UpdateToast />
       {toasts.map((t) => {
         const Icon = icon[t.tone];
         return (

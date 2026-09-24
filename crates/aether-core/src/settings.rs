@@ -55,6 +55,9 @@ pub struct Settings {
     /// Global shortcut that brings up the command palette, e.g. `Ctrl+Shift+K`; `None` or `""` = off
     /// (the default: Ctrl+K works inside the app).
     pub palette_shortcut: Option<String>,
+    /// Look for a new release at start and every few hours (only in builds with an update
+    /// key). Updates are never installed without the user's click.
+    pub auto_update_check: bool,
 }
 
 impl Default for Settings {
@@ -80,6 +83,7 @@ impl Default for Settings {
             reminder_time: Some("17:30".into()),
             capture_shortcut: DEFAULT_CAPTURE_SHORTCUT.into(),
             palette_shortcut: None,
+            auto_update_check: true,
         }
     }
 }
@@ -172,6 +176,7 @@ mod tests {
         assert_eq!(loaded.reminder_time.as_deref(), Some("17:30"));
         assert_eq!(loaded.capture_shortcut, DEFAULT_CAPTURE_SHORTCUT);
         assert_eq!(loaded.palette_shortcut, None, "the palette shortcut is off by default");
+        assert!(loaded.auto_update_check, "update checks are on by default");
         // An explicit null switches the reminder off.
         db.conn().execute("UPDATE settings SET value = '{\"reminder_time\":null}'", []).unwrap();
         assert_eq!(db.load_settings().unwrap().reminder_time, None);
