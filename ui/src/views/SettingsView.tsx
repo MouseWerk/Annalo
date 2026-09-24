@@ -3,15 +3,16 @@
 
 import { AetherLogo } from "../components/Logo";
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, DatabaseBackup, ExternalLink, Monitor, Eye, EyeOff, FolderInput, FolderOpen, FolderOutput, KeyRound, Loader2, Palette, Plus, RefreshCw, Server, Sparkles, Timer, Trash2, NotebookPen, Info, XCircle } from "lucide-react";
-import { api } from "../lib/api";
+import { CheckCircle2, DatabaseBackup, Download, ExternalLink, Monitor, Eye, EyeOff, FolderInput, FolderOpen, FolderOutput, KeyRound, Loader2, Palette, PlugZap, Plus, RefreshCw, Server, Sparkles, Timer, Trash2, NotebookPen, Info, Upload, XCircle } from "lucide-react";
+import { api, on } from "../lib/api";
+import { collapsePages, foldersBelow } from "../lib/collapsed";
 import { useApp } from "../store/app";
 import { applyTheme, exportVault, importVault, pickFolder } from "../lib/actions";
 import { flushAllEditors } from "../editor/NoteEditor";
-import { fileSize, relative } from "../lib/format";
+import { fileSize, importSummary, relative } from "../lib/format";
 import { Badge, Button, Field, IconButton, Input, Segmented, Select, Switch, TextArea } from "../components/ui";
 import { recordShortcut } from "../lib/shortcut";
-import type { BackupInfo, MirrorStatus, ConnectionTest, DataDirStatus, DesktopInfo, Page, Settings } from "../lib/types";
+import type { BackupInfo, MirrorStatus, ConnectionTest, DataDirStatus, DesktopInfo, GitSyncMode, GitSyncSettings, GitSyncStatus, GitTest, Page, Settings } from "../lib/types";
 
 type Section = "ai" | "time" | "notes" | "backup" | "desktop" | "appearance" | "about";
 const SECTIONS: { id: Section; label: string; icon: typeof Server }[] = [
@@ -717,7 +718,220 @@ function BackupSection({ draft, update }: { draft: Settings; update: (p: Partial
           ))}
         </div>
       </Group>
+      <GitSyncGroup draft={draft} update={update} dbSize={list?.[0]?.size_bytes ?? null} onSynced={reload} />
     </>
+  );
+}
+
+/** Text input that reports its value on blur or Enter (the backup section saves on every change). */
+function CommitInput({ value, onCommit, ...rest }: { value: string; onCommit: (v: string) => void } & Omit<React.InputHTMLAttributes<HTMLInputElement>, "value" | "onChange">) {
+  const [raw, setRaw] = useState(value);
+  useEffect(() => setRaw(value), [value]);
+  const commit = () => raw.trim() !== value && onCommit(raw.trim());
+  return <Input {...rest} value={raw} onChange={(e) => setRaw(e.target.value)} onBlur={commit} onKeyDown={(e) => e.key === "Enter" && commit()} />;
+}
+
+const BIG_DB = 50 * 1024 * 1024;
+
+function GitSyncGroup({ draft, update, dbSize, onSynced }: { draft: Settings; update: (p: Partial<Settings>) => void; dbSize: number | null; onSynced: () => void }) {
+  const git = draft.git_sync;
+  const setGit = (p: Partial<GitSyncSettings>) => update({ git_sync: { ...git, ...p } });
+  const [status, setStatus] = useState<GitSyncStatus | null>(null);
+  const [token, setToken] = useState("");
+  const [showToken, setShowToken] = useState(false);
+  const [test, setTest] = useState<GitTest | null>(null);
+  const [testing, setTesting] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [restoreUrl, setRestoreUrl] = useState<string | null>(null);
+  const [restoring, setRestoring] = useState(false);
+  const s = useApp.getState;
+
+  const reload = () => api.gitSyncStatus().then(setStatus).catch(() => setStatus(null));
+  useEffect(() => {
+    reload();
+    const off = [on("gitsync://done", reload), on("gitsync://failed", reload)];
+    return () => off.forEach((p) => p.then((f) => f()));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [git.remote_url, git.branch, git.include_database, draft.markdown_mirror]);
+
+  const saveToken = async (value: string | null) => {
+    try {
+      setStatus(await api.setGitToken(value));
+      setToken("");
+      s().toast({ tone: "success", title: value ? "Git-Token gespeichert" : "Git-Token entfernt" });
+    } catch (e) {
+      s().error("Token konnte nicht gespeichert werden", e);
+    }
+  };
+  const runTest = async () => {
+    setTesting(true);
+    try {
+      setTest(await api.gitSyncTest(git.remote_url || null, token.trim() || null));
+    } catch (e) {
+      setTest({ ok: false, latency_ms: 0, branches: [], error: String(e) });
+    } finally {
+      setTesting(false);
+    }
+  };
+  const syncNow = async () => {
+    setSyncing(true);
+    try {
+      const r = await api.gitSyncNow();
+      s().toast({ tone: r.fallback ? "warning" : "success", title: r.committed ? "Synchronisiert" : "Git ist aktuell", detail: r.fallback ? r.message : `${r.message}${r.commit ? ` · ${r.commit}` : ""}` });
+      onSynced();
+    } catch {
+      // The shell emits gitsync://failed, which shows the toast; the status line shows the error.
+    } finally {
+      setSyncing(false);
+      reload();
+    }
+  };
+  const restore = async () => {
+    if (!restoreUrl?.trim()) return;
+    setRestoring(true);
+    try {
+      const r = await api.gitRestoreImport(restoreUrl.trim());
+      await s().refreshTree();
+      collapsePages(foldersBelow(useApp.getState().pages.get(r.root_page_id)));
+      s().openPage(r.root_page_id);
+      s().toast({ tone: "success", title: "Aus Git importiert", detail: importSummary(r) });
+      setRestoreUrl(null);
+    } catch (e) {
+      s().error("Wiederherstellen fehlgeschlagen", e);
+    } finally {
+      setRestoring(false);
+    }
+  };
+
+  const fallback = status?.last_branch && status.last_branch !== git.branch ? status.last_branch : null;
+  return (
+    <Group
+      title="Git-Synchronisierung"
+      description="Überträgt die Markdown-Kopie (und optional die Datenbank) als Commit in ein Git-Repository, z. B. auf GitHub, GitLab oder Azure DevOps. Benötigt ein installiertes Git (git-scm.com)."
+    >
+      <Row label="Git-Synchronisierung" description={git.remote_url ? undefined : "Zuerst die Remote-URL eintragen."}>
+        <Switch label="Git-Synchronisierung" checked={git.enabled} onChange={(v) => setGit({ enabled: v })} />
+      </Row>
+      <Row stack label="Remote-URL" description="HTTPS mit Zugangstoken, oder SSH (git@…): SSH-URLs verwenden die SSH-Schlüssel bzw. den SSH-Agent des Systems.">
+        <CommitInput value={git.remote_url} onCommit={(v) => setGit({ remote_url: v })} placeholder="https://github.com/name/notizen.git" aria-label="Remote-URL" className="grow" />
+      </Row>
+      <Row label="Branch">
+        <CommitInput value={git.branch} onCommit={(v) => setGit({ branch: v || "main" })} placeholder="main" aria-label="Branch" />
+      </Row>
+      <Row label="Autor" description="Name und E-Mail der Commits.">
+        <CommitInput value={git.author_name} onCommit={(v) => setGit({ author_name: v })} placeholder="Name" aria-label="Autor Name" />
+        <CommitInput value={git.author_email} onCommit={(v) => setGit({ author_email: v })} placeholder="E-Mail" aria-label="Autor E-Mail" />
+      </Row>
+      <Row
+        stack
+        label="Zugangstoken"
+        description={
+          <>
+            {status?.token_set ? <Badge tone="success">gespeichert</Badge> : <Badge>Nicht gesetzt</Badge>}
+            <span>Personal Access Token (nur für HTTPS). Sicher gespeichert, nie in Dateien oder im Repository.</span>
+          </>
+        }
+      >
+        <div className="key-input">
+          <KeyRound size={14} className="faint" />
+          <input
+            type={showToken ? "text" : "password"}
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            placeholder={status?.token_set ? "Neuen Token eingeben, um ihn zu ersetzen" : "ghp_… / glpat-…"}
+            aria-label="Git-Zugangstoken"
+            autoComplete="off"
+            spellCheck={false}
+            onKeyDown={(e) => e.key === "Enter" && token.trim() && saveToken(token.trim())}
+          />
+          <IconButton icon={showToken ? EyeOff : Eye} label={showToken ? "Verbergen" : "Anzeigen"} size={24} iconSize={14} onClick={() => setShowToken(!showToken)} />
+        </div>
+        <Button variant="primary" onClick={() => saveToken(token.trim())} disabled={!token.trim()}>
+          Speichern
+        </Button>
+        {status?.token_set && <IconButton icon={Trash2} label="Git-Token entfernen" onClick={() => saveToken(null)} />}
+      </Row>
+      <Row label="Zeitpunkt">
+        <Select value={git.mode} onChange={(e) => setGit({ mode: e.target.value as GitSyncMode })} aria-label="Zeitpunkt der Synchronisierung">
+          <option value="with_backup">Mit jeder Sicherung</option>
+          <option value="hourly">Stündlich</option>
+        </Select>
+      </Row>
+      <Row
+        label="Datenbank mitsichern"
+        description={
+          git.include_database ? (
+            <span className={dbSize != null && dbSize > BIG_DB ? "mirror-error" : ""}>
+              Die letzte Sicherung wird als aether-workspace.db übertragen{dbSize != null ? ` (derzeit ${fileSize(dbSize)})` : ""}. Jede Änderung speichert die ganze Datei neu – das Repository wächst schnell; GitHub lehnt Dateien über 100 MB ab.
+            </span>
+          ) : (
+            "Nur Markdown, Bilder und Zeiterfassung (empfohlen)."
+          )
+        }
+      >
+        <Switch label="Datenbank mitsichern" checked={git.include_database} onChange={(v) => setGit({ include_database: v })} />
+      </Row>
+      <Row label="Verbindung" description="Prüft URL und Zugangsdaten (git ls-remote).">
+        <div className={`conn ${test ? (test.ok ? "ok" : "fail") : ""}`}>
+          {testing ? (
+            <>
+              <Loader2 size={14} className="spin" /> Prüfe…
+            </>
+          ) : test?.ok ? (
+            <span className="git-test-ok">
+              <CheckCircle2 size={14} /> Verbunden · {test.branches.length} Branches · {test.latency_ms} ms
+            </span>
+          ) : test ? (
+            <span title={test.error ?? ""}>
+              <XCircle size={14} /> Keine Verbindung
+            </span>
+          ) : null}
+        </div>
+        <Button icon={PlugZap} onClick={runTest} disabled={testing || !git.remote_url}>
+          Verbindung testen
+        </Button>
+      </Row>
+      {test && !test.ok && test.error && <p className="error-note mono small">{test.error}</p>}
+      <Row
+        label="Letzte Synchronisierung"
+        description={
+          <span className="git-status">
+            {status?.last_error ? (
+              <span className="mirror-error">Fehlgeschlagen: {status.last_error}</span>
+            ) : status?.last_at ? (
+              <span>
+                {relative(status.last_at)}
+                {status.last_commit ? ` · Commit ${status.last_commit}` : ""}
+                {fallback ? ` · auf Branch ${fallback}` : ""}
+              </span>
+            ) : (
+              <span>Noch nie</span>
+            )}
+            {status && status.pending_changes > 0 && <span className="faint"> · {status.pending_changes} Dateien ausstehend</span>}
+          </span>
+        }
+      >
+        <Button icon={Upload} onClick={syncNow} loading={syncing} disabled={!git.remote_url}>
+          Jetzt synchronisieren
+        </Button>
+      </Row>
+      <Row label="Wiederherstellen" description="Klont das Repository und importiert es als neue Seite „Git-Import <Datum>“. Bestehende Seiten bleiben unverändert.">
+        <Button icon={Download} onClick={() => setRestoreUrl(restoreUrl == null ? git.remote_url : null)}>
+          Aus Git wiederherstellen…
+        </Button>
+      </Row>
+      {restoreUrl != null && (
+        <Row stack label="Repository-URL" description="Der gespeicherte Token wird nur an die eingestellte Remote-URL gesendet.">
+          <Input value={restoreUrl} onChange={(e) => setRestoreUrl(e.target.value)} onKeyDown={(e) => e.key === "Enter" && restore()} aria-label="Repository-URL zum Wiederherstellen" className="grow" autoFocus />
+          <Button variant="primary" onClick={restore} loading={restoring} disabled={!restoreUrl.trim()}>
+            Importieren
+          </Button>
+          <Button variant="ghost" onClick={() => setRestoreUrl(null)}>
+            Abbrechen
+          </Button>
+        </Row>
+      )}
+    </Group>
   );
 }
 

@@ -58,6 +58,17 @@ Migration v2 converts the old block model: blocks are concatenated into
   `markdown_mirror_dir` or `<backup dir>/markdown`. It is built in `.markdown.staging` and swapped in by renaming the old
   folder to `.markdown.old`; an interrupted swap is recovered on the next run. A non-empty folder without the marker is
   never replaced. Failures are recorded (`mirror.error` meta row) and shown in the settings; they do not fail the backup.
+- **Git sync** (`gitsync.rs`): the mirror is swapped atomically, so it cannot hold a repository. The sync keeps its own
+  working tree `<data dir>/git-sync`, brings it to the mirror's state like rsync (removals first, `.git`, `.gitattributes`,
+  `README.md` and `aether-workspace.db` kept), `git add -A`, commits only staged changes and pushes `HEAD:refs/heads/<branch>`.
+  A fresh working tree adopts the remote history only when its `.gitattributes` carries the sync's marker. A rejected push
+  is rebased onto the remote when the histories are related; otherwise (or on a conflict) it goes to `aether-sync-<host>`.
+  The system `git` runs without a shell (`CREATE_NO_WINDOW` on Windows), with `GIT_TERMINAL_PROMPT=0` and a 120 s
+  timeout. The HTTPS token comes from the credential store (account `git-token`) and is passed as
+  `GIT_CONFIG_KEY_n=http.extraHeader` (`Authorization: Basic base64(x-access-token:TOKEN)`), only to HTTP(S) remotes;
+  git's stderr and every recorded error are redacted. Runs after `run_backup` (mode `with_backup`) or in the scheduler
+  thread (mode `hourly`, mirror refreshed first); outcomes are kept in `gitsync.*` meta rows and emitted as
+  `gitsync://done` / `gitsync://failed`.
 - **Versions** (`versions.rs`): a save stores the page's previous content as a snapshot when the newest
   snapshot is at least 10 minutes old (one per editing session, not per autosave). Restoring a version and
   rename link rewrites in other pages always snapshot first; „Jetzt Version sichern“ (`page_snapshot`)

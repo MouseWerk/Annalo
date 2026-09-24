@@ -22,6 +22,7 @@ dependencies = [
 name = "aether-core"
 version = "1.0.0-concept"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "futures-util",
  "reqwest",

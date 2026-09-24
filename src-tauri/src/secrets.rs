@@ -1,22 +1,33 @@
-//! Storage for the LiteLLM API key.
+//! Storage for secrets: the LiteLLM API key and the Git access token.
 //!
 //! Windows: Credential Manager, macOS: Keychain. Elsewhere (Linux test
-//! builds) the key is written to `secrets.json` in the app data directory
-//! with owner-only permissions.
+//! builds) the secrets are written to `secrets.json` in the app data directory
+//! with owner-only permissions, one JSON field per secret.
 
 use std::path::{Path, PathBuf};
 
 const SERVICE: &str = "AETHER OS";
-const ACCOUNT: &str = "litellm-api-key";
 
 pub struct SecretStore {
+    /// Credential account name (Windows/macOS).
+    #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))]
+    account: &'static str,
+    /// Field in the fallback file.
+    #[cfg_attr(any(windows, target_os = "macos"), allow(dead_code))]
+    field: &'static str,
     #[cfg_attr(any(windows, target_os = "macos"), allow(dead_code))]
     file: PathBuf,
 }
 
 impl SecretStore {
+    /// The LiteLLM API key.
     pub fn new(data_dir: &Path) -> Self {
-        SecretStore { file: data_dir.join("secrets.json") }
+        SecretStore { account: "litellm-api-key", field: "litellm_api_key", file: data_dir.join("secrets.json") }
+    }
+
+    /// The access token of the Git sync.
+    pub fn git(data_dir: &Path) -> Self {
+        SecretStore { account: "git-token", field: "git_token", file: data_dir.join("secrets.json") }
     }
 
     /// Human-readable name of the backend, shown in the settings.
@@ -32,12 +43,12 @@ impl SecretStore {
 
     #[cfg(any(windows, target_os = "macos"))]
     pub fn get(&self) -> Option<String> {
-        keyring::Entry::new(SERVICE, ACCOUNT).ok()?.get_password().ok().filter(|k| !k.is_empty())
+        keyring::Entry::new(SERVICE, self.account).ok()?.get_password().ok().filter(|k| !k.is_empty())
     }
 
     #[cfg(any(windows, target_os = "macos"))]
     pub fn set(&self, key: Option<&str>) -> Result<(), String> {
-        let entry = keyring::Entry::new(SERVICE, ACCOUNT).map_err(|e| e.to_string())?;
+        let entry = keyring::Entry::new(SERVICE, self.account).map_err(|e| e.to_string())?;
         match key.filter(|k| !k.is_empty()) {
             Some(k) => entry.set_password(k).map_err(|e| e.to_string()),
             None => match entry.delete_credential() {
@@ -48,31 +59,65 @@ impl SecretStore {
     }
 
     #[cfg(not(any(windows, target_os = "macos")))]
+    fn read_file(&self) -> serde_json::Map<String, serde_json::Value> {
+        std::fs::read_to_string(&self.file)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+            .and_then(|v| v.as_object().cloned())
+            .unwrap_or_default()
+    }
+
+    #[cfg(not(any(windows, target_os = "macos")))]
     pub fn get(&self) -> Option<String> {
-        let _ = (SERVICE, ACCOUNT);
-        let raw = std::fs::read_to_string(&self.file).ok()?;
-        let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
-        v["litellm_api_key"].as_str().filter(|k| !k.is_empty()).map(str::to_owned)
+        let _ = (SERVICE, self.account);
+        self.read_file().get(self.field)?.as_str().filter(|k| !k.is_empty()).map(str::to_owned)
     }
 
     #[cfg(not(any(windows, target_os = "macos")))]
     pub fn set(&self, key: Option<&str>) -> Result<(), String> {
+        let mut map = self.read_file();
         match key.filter(|k| !k.is_empty()) {
             Some(k) => {
-                std::fs::write(&self.file, serde_json::json!({ "litellm_api_key": k }).to_string())
-                    .map_err(|e| e.to_string())?;
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let _ = std::fs::set_permissions(&self.file, std::fs::Permissions::from_mode(0o600));
-                }
-                Ok(())
+                map.insert(self.field.to_owned(), k.into());
             }
-            None => match std::fs::remove_file(&self.file) {
+            None => {
+                map.remove(self.field);
+            }
+        }
+        if map.is_empty() {
+            return match std::fs::remove_file(&self.file) {
                 Ok(()) => Ok(()),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
                 Err(e) => Err(e.to_string()),
-            },
+            };
         }
+        std::fs::write(&self.file, serde_json::Value::Object(map).to_string()).map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&self.file, std::fs::Permissions::from_mode(0o600));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(all(test, not(any(windows, target_os = "macos"))))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn two_secrets_share_the_fallback_file() {
+        let dir = std::env::temp_dir().join(format!("aether-secrets-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (ai, git) = (SecretStore::new(&dir), SecretStore::git(&dir));
+        ai.set(Some("sk-1")).unwrap();
+        git.set(Some("ghp-2")).unwrap();
+        assert_eq!((ai.get().as_deref(), git.get().as_deref()), (Some("sk-1"), Some("ghp-2")));
+        git.set(None).unwrap();
+        assert_eq!((ai.get().as_deref(), git.get()), (Some("sk-1"), None));
+        ai.set(None).unwrap();
+        assert!(!dir.join("secrets.json").exists(), "empty file removed");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

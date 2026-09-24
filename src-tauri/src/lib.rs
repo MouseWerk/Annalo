@@ -22,6 +22,7 @@ use aether_core::backup::{self, BackupInfo};
 use aether_core::calendar::{self, DayOverview};
 use aether_core::db::EntryFilter;
 use aether_core::export::{self, ExportFormat, ExportOptions, ExportResult};
+use aether_core::gitsync::{self, Git, GitSyncStatus, SyncMode, SyncOutcome, SyncRequest};
 use aether_core::mirror::{self, MirrorReport};
 use aether_core::model::*;
 use aether_core::netzplan::{self, Schedule};
@@ -67,6 +68,10 @@ pub struct AppState {
     db: Mutex<Database>,
     ai: RwLock<AiRuntime>,
     secrets: SecretStore,
+    /// Access token of the Git sync.
+    git_secret: SecretStore,
+    /// One Git sync at a time (scheduler, backup and „Jetzt synchronisieren“).
+    git_lock: Mutex<()>,
     data_dir: PathBuf,
     /// What happened to the data folder at startup (pending move, fallback).
     data_dir_notice: Option<datadir::Notice>,
@@ -766,7 +771,8 @@ fn export_entries(
 
 // ----------------------------------------------------------------- backups
 
-fn run_backup(state: &AppState) -> Result<BackupInfo> {
+fn run_backup(app: &AppHandle) -> Result<BackupInfo> {
+    let state = app.state::<AppState>();
     let dir = state.backup_dir();
     let keep = state.settings().backup_keep;
     let info = backup::backup_to(&state.db(), &dir, keep)?;
@@ -775,13 +781,220 @@ fn run_backup(state: &AppState) -> Result<BackupInfo> {
     if src.is_dir() {
         copy_new_attachments(&src, &dir.join("attachments"))?;
     }
+    let mut mirror_fresh = false;
     if state.settings().markdown_mirror {
         // The backup itself succeeded; a failed mirror is reported in the settings, not as a failed backup.
-        if let Err(e) = run_mirror(state) {
-            eprintln!("markdown mirror failed: {e}");
+        match run_mirror(&state) {
+            Ok(_) => mirror_fresh = true,
+            Err(e) => eprintln!("markdown mirror failed: {e}"),
+        }
+    }
+    let gs = state.settings().git_sync;
+    if gs.enabled && gs.mode == SyncMode::WithBackup && !gs.remote_url.is_empty() {
+        // Like the mirror, a failed sync does not fail the backup (reported via event and status).
+        if let Err(e) = run_git_sync(app, mirror_fresh) {
+            eprintln!("git sync failed: {e}");
         }
     }
     Ok(info)
+}
+
+// ----------------------------------------------------------------- git sync
+
+const GIT_LAST: &str = "gitsync.last";
+const GIT_COMMIT: &str = "gitsync.commit";
+const GIT_BRANCH: &str = "gitsync.branch";
+const GIT_ERROR: &str = "gitsync.error";
+
+impl AppState {
+    /// Working tree of the Git sync.
+    fn git_repo_dir(&self) -> PathBuf {
+        self.data_dir.join(gitsync::REPO_DIR)
+    }
+
+    /// What the sync commits: the Markdown mirror, or (mirror switched off) an export of its own.
+    fn git_source_dir(&self) -> PathBuf {
+        if self.settings().markdown_mirror { self.mirror_dir() } else { self.data_dir.join("git-sync-export") }
+    }
+}
+
+/// Refreshes the source (unless the mirror was just written), syncs, records the outcome
+/// and emits `gitsync://done` or `gitsync://failed`. Never holds the database lock while git runs.
+fn run_git_sync(app: &AppHandle, mirror_fresh: bool) -> Result<SyncOutcome> {
+    let state = app.state::<AppState>();
+    let _running = lock(&state.git_lock);
+    let settings = state.settings();
+    let token = state.git_secret.get();
+    let res = (|| {
+        let source = state.git_source_dir();
+        if settings.markdown_mirror {
+            if !mirror_fresh {
+                run_mirror(&state)?;
+            }
+        } else {
+            let db = state.db();
+            mirror::write_mirror(&db, &source, &state.attachments_dir(), &Local)?;
+        }
+        let database = if settings.git_sync.include_database {
+            backup::list_backups(&state.backup_dir())?.into_iter().next().map(|b| PathBuf::from(b.path))
+        } else {
+            None
+        };
+        let git = Git::new(token.clone(), &settings.git_sync.remote_url);
+        gitsync::sync(
+            &git,
+            &SyncRequest {
+                repo: &state.git_repo_dir(),
+                source: &source,
+                database: database.as_deref(),
+                settings: &settings.git_sync,
+                host: &gitsync::hostname(),
+                now: Local::now(),
+            },
+        )
+    })();
+    let db = state.db();
+    match &res {
+        Ok(out) => {
+            db.meta_set(GIT_LAST, &Local::now().to_rfc3339())?;
+            db.meta_set(GIT_COMMIT, out.commit.as_deref().unwrap_or(""))?;
+            db.meta_set(GIT_BRANCH, &out.branch)?;
+            db.meta_set(GIT_ERROR, "")?;
+            let _ = app.emit("gitsync://done", out);
+        }
+        Err(e) => {
+            // Errors from git are redacted already; this is the last line of defence.
+            let msg = gitsync::redact(&e.to_string(), token.as_deref());
+            db.meta_set(GIT_ERROR, &msg)?;
+            let _ = app.emit("gitsync://failed", &msg);
+            return Err(Error::State(msg));
+        }
+    }
+    res
+}
+
+/// Syncs now (also when the automatic sync is off, as long as a remote is set).
+#[tauri::command]
+async fn git_sync_now(app: AppHandle) -> Result<SyncOutcome> {
+    if app.state::<AppState>().settings().git_sync.remote_url.trim().is_empty() {
+        return Err(Error::State("Bitte zuerst die Remote-URL eintragen und speichern".into()));
+    }
+    tauri::async_runtime::spawn_blocking(move || run_git_sync(&app, false))
+        .await
+        .map_err(|e| Error::State(e.to_string()))?
+}
+
+fn git_status_of(state: &AppState) -> Result<GitSyncStatus> {
+    let settings = state.settings();
+    let (last_at, last_commit, last_branch, last_error) = {
+        let db = state.db();
+        let get = |k: &str| -> Result<Option<String>> { Ok(db.meta_get(k)?.filter(|v| !v.is_empty())) };
+        (
+            get(GIT_LAST)?.and_then(|s| DateTime::parse_from_rfc3339(&s).ok()).map(|t| t.with_timezone(&Local)),
+            get(GIT_COMMIT)?,
+            get(GIT_BRANCH)?,
+            get(GIT_ERROR)?,
+        )
+    };
+    Ok(GitSyncStatus {
+        enabled: settings.git_sync.enabled,
+        repo_path: state.git_repo_dir().display().to_string(),
+        last_at,
+        last_commit,
+        last_branch,
+        last_error,
+        pending_changes: gitsync::pending_changes(&state.git_source_dir(), &state.git_repo_dir()),
+        token_set: state.git_secret.get().is_some(),
+    })
+}
+
+/// Last run, pending changes and whether a token is stored (never the token itself).
+#[tauri::command]
+async fn git_sync_status(app: AppHandle) -> Result<GitSyncStatus> {
+    tauri::async_runtime::spawn_blocking(move || git_status_of(&app.state::<AppState>()))
+        .await
+        .map_err(|e| Error::State(e.to_string()))?
+}
+
+/// Stores (or with `None`, removes) the Git access token in the OS credential store.
+#[tauri::command]
+async fn git_token_set(app: AppHandle, token: Option<String>) -> Result<GitSyncStatus> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        state.git_secret.set(token.as_deref().map(str::trim)).map_err(Error::State)?;
+        git_status_of(&state)
+    })
+    .await
+    .map_err(|e| Error::State(e.to_string()))?
+}
+
+#[derive(Serialize)]
+struct GitTest {
+    ok: bool,
+    latency_ms: u64,
+    branches: Vec<String>,
+    error: Option<String>,
+}
+
+/// Checks URL and credentials with `git ls-remote`. An unsaved URL or token can be tested.
+#[tauri::command]
+async fn git_sync_test(app: AppHandle, url: Option<String>, token: Option<String>) -> Result<GitTest> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let url = url.map(|u| u.trim().to_owned()).unwrap_or_else(|| state.settings().git_sync.remote_url);
+        if url.is_empty() {
+            return Ok(GitTest { ok: false, latency_ms: 0, branches: vec![], error: Some("Keine Remote-URL".into()) });
+        }
+        let token = token.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty()).or_else(|| state.git_secret.get());
+        let git = Git::new(token.clone(), &url);
+        let start = Instant::now();
+        let res = git.version().and_then(|_| git.ls_remote(&url));
+        let latency_ms = start.elapsed().as_millis() as u64;
+        Ok(match res {
+            Ok(branches) => GitTest { ok: true, latency_ms, branches, error: None },
+            Err(e) => GitTest {
+                ok: false,
+                latency_ms,
+                branches: vec![],
+                error: Some(gitsync::redact(&e.to_string(), token.as_deref())),
+            },
+        })
+    })
+    .await
+    .map_err(|e| Error::State(e.to_string()))?
+}
+
+/// Clones `url` (depth 1) into a temporary folder and imports it as a vault under a new
+/// top-level page „Git-Import <Datum>“. The stored token is only sent to the configured remote.
+#[tauri::command]
+async fn git_restore_import(app: AppHandle, url: String) -> Result<ImportReport> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let gs = state.settings().git_sync;
+        let url = url.trim().to_owned();
+        gitsync::check_url(&url)?;
+        let configured = url == gs.remote_url.trim();
+        let token = if configured { state.git_secret.get() } else { None };
+        let git = Git::new(token.clone(), &url);
+        git.version()?;
+        let now = Local::now();
+        let tmp = std::env::temp_dir().join(format!(
+            "aether-git-import-{}-{}",
+            std::process::id(),
+            now.format("%Y%m%d%H%M%S%f")
+        ));
+        let dir = tmp.join(format!("Git-Import {}", now.format("%d.%m.%Y")));
+        std::fs::create_dir_all(&tmp)?;
+        let res = (|| {
+            git.clone_shallow(&url, configured.then_some(gs.branch.as_str()), &dir)?;
+            gitsync::strip_sync_files(&dir)?;
+            vault::import_vault(&state.db(), &dir, &state.attachments_dir())
+        })();
+        let _ = std::fs::remove_dir_all(&tmp);
+        res.map_err(|e| Error::State(gitsync::redact(&e.to_string(), token.as_deref())))
+    })
+    .await
+    .map_err(|e| Error::State(e.to_string()))?
 }
 
 const MIRROR_LAST: &str = "mirror.last";
@@ -862,8 +1075,8 @@ fn copy_new_attachments(src: &std::path::Path, dst: &std::path::Path) -> Result<
 
 /// Async so the snapshot and the Markdown mirror do not block the main (UI) thread.
 #[tauri::command]
-async fn backup_now(state: State<'_, AppState>) -> Result<BackupInfo> {
-    run_backup(&state)
+async fn backup_now(app: AppHandle) -> Result<BackupInfo> {
+    tauri::async_runtime::spawn_blocking(move || run_backup(&app)).await.map_err(|e| Error::State(e.to_string()))?
 }
 
 #[tauri::command]
@@ -872,6 +1085,7 @@ fn backup_list(state: State<AppState>) -> Result<Vec<BackupInfo>> {
 }
 
 /// Backs up once a day: on start when the newest backup is older than 24 h, then checks hourly.
+/// The hourly Git sync (mode `hourly`) runs in the same loop.
 fn spawn_backup_scheduler(app: AppHandle) {
     const DAY: chrono::TimeDelta = chrono::TimeDelta::hours(24);
     std::thread::spawn(move || {
@@ -881,9 +1095,23 @@ fn spawn_backup_scheduler(app: AppHandle) {
                 Ok(list) => list.first().is_none_or(|b| Local::now() - b.created_at >= DAY),
                 Err(_) => true,
             };
-            if due && let Err(e) = run_backup(&state) {
-                eprintln!("backup failed: {e}");
-                let _ = app.emit("backup://failed", e.to_string());
+            let mut backed_up = false;
+            if due {
+                match run_backup(&app) {
+                    Ok(_) => backed_up = true,
+                    Err(e) => {
+                        eprintln!("backup failed: {e}");
+                        let _ = app.emit("backup://failed", e.to_string());
+                    }
+                }
+            }
+            let gs = state.settings().git_sync;
+            if gs.enabled
+                && gs.mode == SyncMode::Hourly
+                && !gs.remote_url.is_empty()
+                && let Err(e) = run_git_sync(&app, backed_up && state.settings().markdown_mirror)
+            {
+                eprintln!("git sync failed: {e}");
             }
             std::thread::sleep(Duration::from_secs(3600));
         }
@@ -927,6 +1155,7 @@ fn settings_save(app: AppHandle, state: State<AppState>, settings: Settings) -> 
     settings.backup_keep = settings.backup_keep.clamp(1, 365);
     settings.backup_dir = settings.backup_dir.map(|d| d.trim().to_owned()).filter(|d| !d.is_empty());
     settings.markdown_mirror_dir = settings.markdown_mirror_dir.map(|d| d.trim().to_owned()).filter(|d| !d.is_empty());
+    settings.git_sync = gitsync::normalize(&settings.git_sync)?;
     settings.reminder_time = settings.reminder_time.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty());
     if let Some(t) = &settings.reminder_time {
         let time = aether_core::desktop::parse_hhmm(t)
@@ -1652,6 +1881,8 @@ pub fn run() {
                 db: Mutex::new(db),
                 ai: RwLock::new(ai),
                 secrets,
+                git_secret: SecretStore::git(&dir),
+                git_lock: Mutex::new(()),
                 data_dir: dir,
                 data_dir_notice: startup.notice,
                 meter: Mutex::new(SessionMeter::default()),
@@ -1748,6 +1979,11 @@ pub fn run() {
             backup_list,
             mirror_status,
             mirror_open,
+            git_sync_now,
+            git_sync_status,
+            git_token_set,
+            git_sync_test,
+            git_restore_import,
             settings_get,
             settings_save,
             api_key_set,

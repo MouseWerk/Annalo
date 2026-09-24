@@ -79,6 +79,8 @@ export function App() {
     const unlisten = [
       on("data://entries", () => useApp.getState().bumpEntries()),
       on<string>("backup://failed", (msg) => useApp.getState().toast({ tone: "warning", title: "Automatische Sicherung fehlgeschlagen", detail: msg })),
+      // Git sync: only failures are shown (successes appear in the settings' status line).
+      on<string>("gitsync://failed", (msg) => useApp.getState().toast({ tone: "warning", title: "Git-Synchronisierung fehlgeschlagen", detail: msg })),
       // A task was toggled outside the editor: open editors of that page take over the new Markdown.
       on<number>("data://tasks", (pageId) => reloadEditors([pageId])),
       on<ActivityTick>("activity://tick", (t) => {
