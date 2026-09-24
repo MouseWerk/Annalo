@@ -8,6 +8,7 @@ import { TemplateHost } from "./components/Templates";
 import { Ribbon, openAssistant, openToday } from "./components/Ribbon";
 import { Workspace } from "./components/Workspace";
 import { Resizer, readSize } from "./components/Resizer";
+import { LinkPreview } from "./components/LinkPreview";
 import { CommandPalette } from "./components/CommandPalette";
 import { RightPanel } from "./panels/RightPanel";
 import { createSubpage } from "./views/PageView";
@@ -268,6 +269,7 @@ export function App() {
         </>
       )}
       <CommandPalette />
+      <LinkPreview />
       <Toasts />
       <ConfirmHost />
       <TemplateHost />

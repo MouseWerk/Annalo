@@ -5,6 +5,7 @@ import { ChevronLeft, ChevronRight, Columns2, History, Printer, CornerDownRight,
 import { api } from "../lib/api";
 import { useApp, type Tab } from "../store/app";
 import { ViewHeader } from "../components/ViewHeader";
+import { ScrollOutline } from "../components/ScrollOutline";
 import { NoteEditor, flushAllEditors, reloadEditors, type NoteEditorHandle } from "../editor/NoteEditor";
 import { splitFrontmatter } from "../editor/extensions";
 import { parseFrontmatter } from "../lib/frontmatter";
@@ -199,6 +200,7 @@ function PageHeader({
   };
 
   const titleInput = useRef<HTMLTextAreaElement>(null);
+  const scrollBox = useRef<HTMLDivElement>(null);
   // The title wraps like a heading instead of scrolling sideways.
   const fitTitle = () => {
     const el = titleInput.current;
@@ -274,7 +276,8 @@ function PageHeader({
         title={doc.title}
         actions={actions}
       />
-      <div className="page-scroll">
+      <div className="page-scroll-wrap">
+      <div className="page-scroll" ref={scrollBox}>
         <div className="page">
           <header className="page-header">
             <div className="page-title-row">
@@ -330,6 +333,8 @@ function PageHeader({
           </header>
           {children}
         </div>
+      </div>
+      <ScrollOutline scrollRef={scrollBox} />
       </div>
     </>
   );

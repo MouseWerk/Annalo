@@ -357,3 +357,25 @@
 
 /* Table toolbar above the table under the cursor */
 .table-toolbar .icon-btn.danger:hover { color: var(--danger); }
+
+/* ---------------------------------------------------------- link preview */
+
+.link-preview {
+  position: fixed;
+  z-index: 75;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--border-strong);
+  background: var(--bg-overlay);
+  box-shadow: var(--shadow-lg);
+  animation: pop-in var(--dur-fast) var(--ease-out);
+}
+.link-preview-title { display: flex; align-items: center; gap: 8px; flex: none; padding: 10px 14px 6px; border: 0; background: none; color: var(--text); font-weight: 600; font-size: var(--fs-md); text-align: left; }
+.link-preview-title:hover { color: var(--accent-text); }
+.link-preview-title svg { color: var(--text-3); flex: none; }
+.link-preview-body { padding: 0 14px 14px; overflow: hidden; font-size: var(--fs-sm); pointer-events: none; }
+.link-preview-body > :first-child { margin-top: 0; }
+.link-preview-fade { position: absolute; left: 0; right: 0; bottom: 0; height: 40px; background: linear-gradient(transparent, var(--bg-overlay)); pointer-events: none; }
+.link-preview-empty { padding: 14px; color: var(--text-3); font-size: var(--fs-sm); }

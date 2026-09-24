@@ -149,7 +149,7 @@ export function TasksView() {
                           {t.priority === 1 && <ChevronUp size={14} strokeWidth={2.25} className="task-prio medium" aria-label="Priorität mittel" />}
                           {taskSegments(t.text).map((seg, i) =>
                             seg.kind === "link" ? (
-                              <span key={i} className="wikilink" role="link" tabIndex={0} onClick={(e) => openLink(seg.target, e.ctrlKey || e.metaKey)} onKeyDown={(e) => e.key === "Enter" && openLink(seg.target, false)}>
+                              <span key={i} className="wikilink" data-target={seg.target} role="link" tabIndex={0} onClick={(e) => openLink(seg.target, e.ctrlKey || e.metaKey)} onKeyDown={(e) => e.key === "Enter" && openLink(seg.target, false)}>
                                 {seg.text}
                               </span>
                             ) : seg.kind === "tag" ? (

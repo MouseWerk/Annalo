@@ -839,7 +839,7 @@ button.side-section-title:hover { color: var(--text-2); }
   .ribbon, .sidebar, .panel, .resizer, .statusbar, .tabbar, .vh, .toasts, .pane:not(.active), .find-anchor, .bubble,
   .timer-card, .bulk, .row-actions, .entry .icon-btn, .view-actions, .icon-picker, .prop-add, .prop-row .icon-btn,
   .prop-picker, .prop-sugg, .prop-key-hint, .work-head .btn, .properties-head svg, .work-toggle { display: none !important; }
-  .main, .workspace, .pane, .pane-content, .page-view, .view-body, .page-scroll, .view-scroll { display: block !important; height: auto !important; overflow: visible !important; }
+  .main, .workspace, .pane, .pane-content, .page-view, .view-body, .page-scroll-wrap, .page-scroll, .view-scroll { display: block !important; height: auto !important; overflow: visible !important; }
   .page, .view { max-width: none; padding: 0 !important; margin: 0; }
   .page-title-row { margin-left: 0 !important; }
   .page-icon-btn { display: none; }
