@@ -13,6 +13,7 @@ import Link from "@tiptap/extension-link";
 import { Callouts, ImageEmbed, MarkdownImage, SlashCommand, TagHighlight, TimeEntryChip, WikiLink, WikiLinkSuggest, ZeitCommand, ZeitSuggest, type LinkSuggestItem, type ZeitResult, type ZeitSuggestItem } from "./extensions";
 import { FindInPage } from "./find";
 import { CiteFlash } from "./reveal";
+import { TYPING_DEFAULTS, TypingAids, type TypingPrefs } from "./typing";
 
 const lowlight = createLowlight(common);
 
@@ -143,6 +144,8 @@ export interface SchemaOptions {
   zeitRefs?: (query: string) => Promise<ZeitSuggestItem[]>;
   /** `/zeit` autocomplete: Leistungsarten after `#`. */
   zeitLeistungsarten?: (query: string) => Promise<ZeitSuggestItem[]>;
+  /** Typing aids (Settings → Editor), read on every keystroke. */
+  typing?: () => TypingPrefs;
 }
 
 export function buildExtensions(o: SchemaOptions = {}): Extensions {
@@ -177,6 +180,7 @@ export function buildExtensions(o: SchemaOptions = {}): Extensions {
     FindInPage,
     Callouts,
     CiteFlash,
+    TypingAids.configure({ prefs: o.typing ?? (() => TYPING_DEFAULTS) }),
   ];
 }
 

@@ -1,3 +1,19 @@
+/** Display preferences (Settings → Zeiterfassung, Sprache & Format), set by `applyPrefs`. */
+export interface FormatPrefs {
+  /** 1 = weeks start on Monday, 0 = on Sunday. */
+  weekStartsOn: 0 | 1;
+  hours: "decimal" | "clock";
+  dateFormat: "de" | "iso";
+  lang: "de" | "en";
+}
+const prefs: FormatPrefs = { weekStartsOn: 1, hours: "decimal", dateFormat: "de", lang: "de" };
+export const formatPrefs = (): Readonly<FormatPrefs> => prefs;
+export function setFormatPrefs(p: Partial<FormatPrefs>) {
+  Object.assign(prefs, p);
+}
+/** Locale for dates (numbers stay German: decimal comma). */
+const dateLocale = () => (prefs.lang === "en" ? "en-GB" : "de-DE");
+
 const nf1 = new Intl.NumberFormat("de-DE", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 const nf2 = new Intl.NumberFormat("de-DE", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const nf0 = new Intl.NumberFormat("de-DE", { maximumFractionDigits: 0 });
@@ -9,6 +25,37 @@ export const int = (x: number) => nf0.format(x);
 export const usd = (x: number) => x.toLocaleString("de-DE", { style: "currency", currency: "USD", minimumFractionDigits: x < 0.1 ? 4 : 2, maximumFractionDigits: x < 0.1 ? 4 : 2 });
 export const hoursFromMinutes = (m: number | null | undefined) => nf2.format((m ?? 0) / 60);
 
+/** Hours as set in the settings: "1,50" or "1:30". */
+export function fmtHours(hours: number, style = prefs.hours): string {
+  if (style === "clock") {
+    const total = Math.round(hours * 60);
+    const sign = total < 0 ? "−" : "";
+    const m = Math.abs(total);
+    return `${sign}${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}`;
+  }
+  return nf2.format(hours);
+}
+/** Minutes shown as hours in the configured style. */
+export const fmtMinutes = (m: number | null | undefined, style = prefs.hours) => fmtHours((m ?? 0) / 60, style);
+
+/** A day in the configured format: "24.09.2026" or "2026-09-24". */
+export function fmtDate(d: Date | string, style = prefs.dateFormat): string {
+  const x = typeof d === "string" ? new Date(d) : d;
+  if (style === "iso") return isoDay(x);
+  return `${String(x.getDate()).padStart(2, "0")}.${String(x.getMonth() + 1).padStart(2, "0")}.${x.getFullYear()}`;
+}
+
+/** ISO weekday: 1 = Monday … 7 = Sunday. */
+export const isoWeekday = (d: Date) => ((d.getDay() + 6) % 7) + 1;
+
+/** Two-letter weekday names in display order (week start from the settings). */
+export function weekdayLabels(startsOn: 0 | 1 = prefs.weekStartsOn, lang = prefs.lang): string[] {
+  const names = lang === "en" ? ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"] : ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
+  return startsOn === 1 ? names : [names[6], ...names.slice(0, 6)];
+}
+/** Short weekday name of a date. */
+export const weekdayShort = (d: Date, lang = prefs.lang) => weekdayLabels(1, lang)[isoWeekday(d) - 1];
+
 /** "1:30" style duration for timers. */
 export function clock(totalSeconds: number) {
   const s = Math.max(0, Math.floor(totalSeconds));
@@ -19,9 +66,13 @@ export function clock(totalSeconds: number) {
 }
 
 export const dateShort = (iso: string) =>
-  new Date(iso).toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit" });
+  prefs.dateFormat === "iso"
+    ? `${weekdayShort(new Date(iso))} ${isoDay(new Date(iso))}`
+    : new Date(iso).toLocaleDateString(dateLocale(), { weekday: "short", day: "2-digit", month: "2-digit" });
 export const dateLong = (iso: string) =>
-  new Date(iso).toLocaleDateString("de-DE", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  prefs.dateFormat === "iso"
+    ? `${new Date(iso).toLocaleDateString(dateLocale(), { weekday: "long" })}, ${isoDay(new Date(iso))}`
+    : new Date(iso).toLocaleDateString(dateLocale(), { weekday: "long", day: "numeric", month: "long", year: "numeric" });
 export const time = (iso: string) => new Date(iso).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
 
 /**
@@ -47,7 +98,8 @@ export function relative(iso: string) {
   if (diff < 3600) return `vor ${Math.floor(diff / 60)} Min.`;
   if (diff < 86400) return `vor ${Math.floor(diff / 3600)} Std.`;
   if (diff < 7 * 86400) return `vor ${Math.floor(diff / 86400)} Tagen`;
-  return new Date(iso).toLocaleDateString("de-DE", { day: "numeric", month: "short", year: "numeric" });
+  if (prefs.dateFormat === "iso") return isoDay(new Date(iso));
+  return new Date(iso).toLocaleDateString(dateLocale(), { day: "numeric", month: "short", year: "numeric" });
 }
 
 /** File size, e.g. "812 KB" or "3,4 MB". */
@@ -63,11 +115,11 @@ export function isoDay(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-/** Monday 00:00 local of the week containing `d`. */
-export function weekStart(d: Date) {
+/** 00:00 local of the first day (Monday, or Sunday per the settings) of the week containing `d`. */
+export function weekStart(d: Date, startsOn: 0 | 1 = prefs.weekStartsOn) {
   const x = new Date(d);
   x.setHours(0, 0, 0, 0);
-  const day = (x.getDay() + 6) % 7;
+  const day = (x.getDay() + 7 - startsOn) % 7;
   x.setDate(x.getDate() - day);
   return x;
 }

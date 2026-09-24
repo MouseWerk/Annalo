@@ -88,6 +88,20 @@ pub fn definitions() -> Vec<Value> {
     ]
 }
 
+/// The definitions of the tools in `allowed` (Settings → KI → Werkzeuge).
+pub fn definitions_allowed(allowed: &[String]) -> Vec<Value> {
+    definitions().into_iter().filter(|d| allowed.iter().any(|a| d["function"]["name"] == a.as_str())).collect()
+}
+
+/// Rejects a tool the user has not allowed (the model may name tools it was not offered).
+pub fn check_allowed(tool: &str, allowed: &[String]) -> Result<()> {
+    if allowed.iter().any(|a| a == tool) {
+        Ok(())
+    } else {
+        Err(Error::State(format!("Das Werkzeug „{tool}“ ist in den Einstellungen (KI → Werkzeuge) nicht erlaubt")))
+    }
+}
+
 pub fn classify(tool: &str) -> Risk {
     match tool {
         "log_time" | "search_workspace" | "budget_status" | "list_tasks" | "time_summary" => Risk::Workspace,
@@ -204,7 +218,7 @@ fn run(mut cmd: Command) -> Result<String> {
 
 /// Runs an approved system call. Only call this after the user confirmed
 /// exactly the call returned by [`SystemCall::describe`].
-pub async fn execute_system_tool(call: &SystemCall, http: &reqwest::Client) -> Result<String> {
+pub async fn execute_system_tool(call: &SystemCall, http: &reqwest::Client, timeout: Duration) -> Result<String> {
     call.validate()?;
     match call {
         SystemCall::RunPowershell { script, cwd } => {
@@ -227,7 +241,7 @@ pub async fn execute_system_tool(call: &SystemCall, http: &reqwest::Client) -> R
         }
         SystemCall::HttpRequest { method, url, body } => {
             let method = reqwest::Method::from_bytes(method.as_bytes()).map_err(|e| Error::Parse(e.to_string()))?;
-            let mut req = http.request(method, url).timeout(Duration::from_secs(30));
+            let mut req = http.request(method, url).timeout(timeout);
             if let Some(b) = body {
                 req = req.json(b);
             }
@@ -252,6 +266,17 @@ mod tests {
                 Risk::RequiresApproval => {}
             }
         }
+    }
+
+    #[test]
+    fn allowed_tools_filter_definitions() {
+        let allowed: Vec<String> = crate::prefs::WORKSPACE_TOOLS.iter().map(|s| (*s).to_owned()).collect();
+        let names: Vec<String> =
+            definitions_allowed(&allowed).iter().map(|d| d["function"]["name"].as_str().unwrap().to_owned()).collect();
+        assert_eq!(names.len(), allowed.len());
+        assert!(!names.contains(&"git".to_owned()));
+        assert!(check_allowed("git", &allowed).is_err());
+        assert!(check_allowed("log_time", &allowed).is_ok());
     }
 
     #[test]
@@ -288,8 +313,8 @@ mod tests {
     #[tokio::test]
     async fn executor_rejects_calls_outside_policy() {
         let push = SystemCall::Git { args: vec!["push".into(), "--force".into()], repo: ".".into() };
-        assert!(execute_system_tool(&push, &HttpClient::new()).await.is_err());
+        assert!(execute_system_tool(&push, &HttpClient::new(), Duration::from_secs(5)).await.is_err());
         let file = SystemCall::HttpRequest { method: "GET".into(), url: "file:///etc/passwd".into(), body: None };
-        assert!(execute_system_tool(&file, &HttpClient::new()).await.is_err());
+        assert!(execute_system_tool(&file, &HttpClient::new(), Duration::from_secs(5)).await.is_err());
     }
 }

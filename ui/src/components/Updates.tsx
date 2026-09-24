@@ -107,9 +107,11 @@ export function startUpdateChecks(): () => void {
 /** The persistent update toast, shown above the other toasts. */
 export function UpdateToast() {
   const { available, phase, progress, dismissed } = useUpdates();
+  // Settings → Benachrichtigungen „Neue Version verfügbar“ (the settings' Über section still shows it).
+  const notifyUpdates = useApp((st) => st.settings?.settings.notifications?.updates !== false);
   if (!available) return null;
   const busy = phase === "downloading" || phase === "installing";
-  if (!busy && dismissed === available.version) return null;
+  if (!busy && (dismissed === available.version || !notifyUpdates)) return null;
   return (
     <div className="toast toast-info update-toast" role="status">
       <Download size={16} className="toast-icon" />

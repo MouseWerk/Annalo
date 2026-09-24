@@ -10,6 +10,8 @@
 //! * [`versions`] – page version history (snapshots, restore)
 //! * [`backup`] – database snapshots (`VACUUM INTO`) with rotation
 //! * [`mirror`] – Markdown mirror of the workspace (+ time entries as CSV), refreshed with each backup
+//! * [`network`] – proxy (manual, system, PAC), extra root CA and timeouts for all connections
+//! * [`prefs`] – user preferences (appearance, editor, notes, time, AI, notifications, …)
 //! * [`gitsync`] – pushes the Markdown mirror to a Git remote (system `git`, token via environment)
 //! * [`calendar`] – month overview for the daily-note calendar (notes, booked time, due tasks)
 //! * [`vault`] – Obsidian vault import / Markdown export
@@ -42,9 +44,11 @@ pub mod export;
 pub mod gitsync;
 pub mod mirror;
 pub mod model;
+pub mod network;
 pub mod netzplan;
 pub mod notes;
 pub mod pagework;
+pub mod prefs;
 pub mod report;
 pub mod search;
 pub mod settings;

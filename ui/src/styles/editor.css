@@ -1,6 +1,6 @@
 /* ------------------------------------------------------------------- page */
 
-.page { max-width: 800px; margin: 0 auto; padding: 28px 56px 160px; }
+.page { max-width: var(--page-max, 800px); margin: 0 auto; padding: 28px 56px 160px; }
 .page-header { position: relative; }
 .crumb { display: inline-flex; align-items: center; gap: 2px; }
 .crumb button { border: 0; background: none; color: var(--text-3); padding: 2px 4px; border-radius: 4px; }

@@ -15,25 +15,26 @@ import { Onboarding } from "./Onboarding";
 import { AetherLogo } from "./Logo";
 import { UpdateToast } from "./Updates";
 import type { Page } from "../lib/types";
+import { t, useT } from "../lib/i18n";
 
-export function tabTitle(t: Tab, pages: Map<number, { title: string }>) {
-  switch (t.kind) {
+export function tabTitle(tab: Tab, pages: Map<number, { title: string }>) {
+  switch (tab.kind) {
     case "home":
-      return "Neuer Tab";
+      return t("tabs.home");
     case "page":
-      return pages.get(t.pageId!)?.title ?? "Seite";
+      return pages.get(tab.pageId!)?.title ?? t("tabs.page");
     case "timesheet":
-      return "Zeiterfassung";
+      return t("tabs.timesheet");
     case "projects":
-      return "Projekte";
+      return t("tabs.projects");
     case "settings":
-      return "Einstellungen";
+      return t("tabs.settings");
     case "tag":
-      return `#${t.tag}`;
+      return `#${tab.tag}`;
     case "trash":
-      return "Papierkorb";
+      return t("tabs.trash");
     case "tasks":
-      return "Aufgaben";
+      return t("tabs.tasks");
   }
 }
 
@@ -60,6 +61,7 @@ export function TabIcon({ t }: { t: Tab }) {
 }
 
 export function StatusBar() {
+  const t = useT();
   const timer = useApp((s) => s.timer);
   const meter = useApp((s) => s.meter);
   const settings = useApp((s) => s.settings);
@@ -73,35 +75,35 @@ export function StatusBar() {
   return (
     <footer className="statusbar">
       {timer ? (
-        <button type="button" className="sb-item sb-timer" onClick={() => stopTimer()} title="Timer stoppen">
+        <button type="button" className="sb-item sb-timer" onClick={() => stopTimer()} title={t("status.stopTimer")}>
           <span className="rec-dot" aria-hidden />
           <span className="num">{clock(seconds)}</span>
           <span className="faint">{timer.entry.vorgang_nr ? `${timer.entry.vorgang_nr}` : ""}</span>
-          {timer.idle_minutes > 0 && <span className="sb-warn">{timer.idle_minutes} Min. inaktiv</span>}
+          {timer.idle_minutes > 0 && <span className="sb-warn">{t("status.idle", { n: timer.idle_minutes })}</span>}
         </button>
       ) : (
         <button type="button" className="sb-item" onClick={() => s().openTab({ kind: "timesheet" })}>
-          <Play size={12} /> Timer starten
+          <Play size={12} /> {t("status.startTimer")}
         </button>
       )}
       <span className="sb-spacer" />
       {focusMode && (
-        <button type="button" className="sb-item" onClick={() => s().set({ focusMode: false })} title="Fokusmodus beenden">
-          Fokusmodus <kbd>Esc</kbd>
+        <button type="button" className="sb-item" onClick={() => s().set({ focusMode: false })} title={t("status.endFocus")}>
+          {t("status.focusMode")} <kbd>Esc</kbd>
         </button>
       )}
       {onPage && doc && (
-        <button type="button" className="sb-item" onClick={() => s().set({ panelOpen: true, panelTab: "links" })} title="Rückverweise anzeigen">
+        <button type="button" className="sb-item" onClick={() => s().set({ panelOpen: true, panelTab: "links" })} title={t("status.backlinks")}>
           <Link2 size={12} />
           <span className="num">{doc.backlinks.length}</span>
         </button>
       )}
       {onPage && stats && (
-        <span className="sb-item sb-static num" title={`${stats.chars.toLocaleString("de-DE")} Zeichen`}>
-          {stats.words.toLocaleString("de-DE")} {stats.words === 1 ? "Wort" : "Wörter"}
+        <span className="sb-item sb-static num" title={t("status.chars", { n: stats.chars.toLocaleString("de-DE") })}>
+          {stats.words.toLocaleString("de-DE")} {stats.words === 1 ? t("status.word") : t("status.words")}
         </span>
       )}
-      <button type="button" className="sb-item" onClick={() => s().set({ panelOpen: true, panelTab: "assistant" })} title="KI-Sitzung">
+      <button type="button" className="sb-item" onClick={() => s().set({ panelOpen: true, panelTab: "assistant" })} title={t("status.aiSession")}>
         <Cpu size={12} />
         {meter && meter.requests > 0 ? (
           <>
@@ -110,7 +112,7 @@ export function StatusBar() {
             <span className="faint num">{usd(meter.cost_usd)}</span>
           </>
         ) : (
-          <span className="faint">{configured ? settings?.settings.router.standard_model : "KI einrichten"}</span>
+          <span className="faint">{configured ? settings?.settings.router.standard_model : t("status.setupAi")}</span>
         )}
       </button>
     </footer>

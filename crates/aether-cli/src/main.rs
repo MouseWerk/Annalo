@@ -329,7 +329,7 @@ fn run(cli: Cli) -> Result<()> {
                 ..Default::default()
             };
             let rows = db.list_time_entries(&filter)?;
-            let opts = ExportOptions { pernr, jira_issue_map, utc_offset_minutes: None };
+            let opts = ExportOptions { pernr, jira_issue_map, utc_offset_minutes: None, ..Default::default() };
             let res = export::export(&rows, format, &opts)?;
             print!("{}", res.content);
             for (id, why) in &res.skipped {

@@ -2,7 +2,7 @@
 //! Secrets (the LiteLLM API key) are deliberately not part of this struct;
 //! the desktop shell keeps them in the OS credential store.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -11,6 +11,11 @@ use crate::ai::router::RouterConfig;
 use crate::db::Database;
 use crate::error::Result;
 use crate::gitsync::GitSyncSettings;
+use crate::network::NetworkSettings;
+use crate::prefs::{
+    AiPrefs, AppearancePrefs, EditorPrefs, LocalePrefs, NotesPrefs, NotificationPrefs, PrivacyPrefs, ROUNDING_STEPS,
+    StartOpen, StartPrefs, TimePrefs,
+};
 use crate::tracking::Thresholds;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -65,6 +70,19 @@ pub struct Settings {
     pub auto_update_check: bool,
     /// Push the Markdown mirror to a Git remote (the access token lives in the credential store).
     pub git_sync: GitSyncSettings,
+    /// Proxy, extra root CA and timeouts (the proxy password lives in the credential store).
+    pub network: NetworkSettings,
+    pub appearance: AppearancePrefs,
+    pub editor: EditorPrefs,
+    pub notes: NotesPrefs,
+    pub time: TimePrefs,
+    pub ai: AiPrefs,
+    pub notifications: NotificationPrefs,
+    pub privacy: PrivacyPrefs,
+    pub start: StartPrefs,
+    pub locale: LocalePrefs,
+    /// In-app shortcuts that differ from the defaults: command id → `Ctrl+Shift+D` (`""` = off).
+    pub keymap: BTreeMap<String, String>,
 }
 
 impl Default for Settings {
@@ -94,7 +112,135 @@ impl Default for Settings {
             palette_shortcut: None,
             auto_update_check: true,
             git_sync: GitSyncSettings::default(),
+            network: NetworkSettings::default(),
+            appearance: AppearancePrefs::default(),
+            editor: EditorPrefs::default(),
+            notes: NotesPrefs::default(),
+            time: TimePrefs::default(),
+            ai: AiPrefs::default(),
+            notifications: NotificationPrefs::default(),
+            privacy: PrivacyPrefs::default(),
+            start: StartPrefs::default(),
+            locale: LocalePrefs::default(),
+            keymap: BTreeMap::new(),
         }
+    }
+}
+
+impl Settings {
+    /// Clamps numbers to their ranges and replaces unusable values with defaults. Used when
+    /// saving and importing; loading keeps what is stored.
+    pub fn normalize(&mut self) {
+        let d = Settings::default();
+        let a = &mut self.appearance;
+        a.accent = crate::prefs::normalize_accent(&a.accent).unwrap_or(d.appearance.accent);
+        a.ui_scale = a.ui_scale.clamp(90, 125);
+        let e = &mut self.editor;
+        e.autosave_ms = e.autosave_ms.clamp(250, 3000);
+        e.tab_size = e.tab_size.clamp(2, 8);
+        e.hover_delay_ms = e.hover_delay_ms.clamp(0, 3000);
+        e.default_icon = e.default_icon.take().map(|i| i.trim().to_owned()).filter(|i| !i.is_empty());
+        e.inbox_title = e.inbox_title.trim().to_owned();
+        if e.inbox_title.is_empty() {
+            e.inbox_title = d.editor.inbox_title;
+        }
+        let n = &mut self.notes;
+        n.daily_folder = n.daily_folder.trim().to_owned();
+        if n.daily_folder.is_empty() {
+            n.daily_folder = d.notes.daily_folder;
+        }
+        n.trash_retention_days = n.trash_retention_days.clamp(7, 365);
+        n.version_interval_minutes = n.version_interval_minutes.clamp(5, 60);
+        n.max_versions = n.max_versions.clamp(5, 500);
+        let t = &mut self.time;
+        if !ROUNDING_STEPS.contains(&t.rounding.step_minutes) {
+            t.rounding.step_minutes = 0;
+        }
+        t.rounding.min_minutes = t.rounding.min_minutes.min(240);
+        t.default_leistungsart = std::mem::take(&mut t.default_leistungsart)
+            .into_iter()
+            .map(|(k, v)| (k.trim().to_owned(), v.trim().to_uppercase()))
+            .filter(|(k, v)| !k.is_empty() && !v.is_empty())
+            .collect();
+        t.export_file_pattern = t.export_file_pattern.trim().to_owned();
+        if t.export_file_pattern.is_empty() {
+            t.export_file_pattern = d.time.export_file_pattern;
+        }
+        let ai = &mut self.ai;
+        ai.temperature = if ai.temperature.is_finite() { ai.temperature.clamp(0.0, 2.0) } else { d.ai.temperature };
+        ai.max_tokens = ai.max_tokens.filter(|m| *m > 0).map(|m| m.clamp(16, 200_000));
+        ai.monthly_cost_limit_usd = ai.monthly_cost_limit_usd.filter(|l| l.is_finite() && *l > 0.0);
+        if let Some(p) = &mut ai.inline_presets {
+            p.retain(|x| !x.label.trim().is_empty() && !x.instruction.trim().is_empty());
+        }
+        ai.meeting_template = ai.meeting_template.take().filter(|t| !t.trim().is_empty());
+        let known = crate::ai::tools::definitions();
+        ai.allowed_tools.retain(|t| known.iter().any(|d| d["function"]["name"] == t.as_str()));
+        ai.allowed_tools.dedup();
+        let nt = &mut self.notifications;
+        for (v, def) in
+            [(&mut nt.quiet_from, &d.notifications.quiet_from), (&mut nt.quiet_to, &d.notifications.quiet_to)]
+        {
+            *v = match crate::desktop::parse_hhmm(v.trim()) {
+                Some(t) => t.format("%H:%M").to_string(),
+                None => def.clone(),
+            };
+        }
+        self.keymap = std::mem::take(&mut self.keymap)
+            .into_iter()
+            .map(|(k, v)| (k.trim().to_owned(), v.trim().to_owned()))
+            .filter(|(k, _)| !k.is_empty())
+            .collect();
+        // Kept for older versions, which read only this flag.
+        self.open_daily_on_start = self.start.open == StartOpen::Daily;
+    }
+
+    /// The settings of one section reset to their defaults (`Abschnitt zurücksetzen`).
+    /// Unknown sections are an error.
+    pub fn reset_section(&mut self, section: &str) -> Result<()> {
+        let d = Settings::default();
+        match section {
+            "network" => self.network = d.network,
+            "appearance" => {
+                self.appearance = d.appearance;
+                self.theme = d.theme;
+            }
+            "editor" => self.editor = d.editor,
+            "notes" => {
+                self.notes = d.notes;
+                self.daily_template = d.daily_template;
+            }
+            "time" => {
+                self.time = d.time;
+                self.idle_threshold_minutes = d.idle_threshold_minutes;
+                self.daily_target_hours = d.daily_target_hours;
+                self.workdays = d.workdays;
+                self.thresholds = d.thresholds;
+            }
+            "ai" => {
+                self.ai = d.ai;
+                self.auto_route = d.auto_route;
+                self.assistant_instructions = d.assistant_instructions;
+                self.router.standard_threshold = d.router.standard_threshold;
+                self.router.reasoning_threshold = d.router.reasoning_threshold;
+            }
+            "notifications" => {
+                self.notifications = d.notifications;
+                self.reminder_time = d.reminder_time;
+            }
+            "privacy" => {
+                self.privacy = d.privacy;
+                self.router.private_markers = d.router.private_markers;
+            }
+            "start" => {
+                self.start = d.start;
+                self.open_daily_on_start = d.open_daily_on_start;
+            }
+            "locale" => self.locale = d.locale,
+            "keyboard" => self.keymap = d.keymap,
+            other => return Err(crate::error::Error::State(format!("Unbekannter Abschnitt „{other}“"))),
+        }
+        Ok(())
     }
 }
 
@@ -112,9 +258,20 @@ impl Database {
         let raw: Option<String> =
             self.conn().query_row("SELECT value FROM settings WHERE key = ?1", [KEY], |r| r.get(0)).optional()?;
         Ok(match raw {
-            Some(json) => serde_json::from_str(&json)?,
+            Some(json) => Self::parse_settings(&json)?,
             None => Settings::default(),
         })
+    }
+
+    /// Parses stored settings JSON; settings from before the start preferences keep
+    /// „Tagesnotiz beim Start öffnen“ (`open_daily_on_start` → `start.open = daily`).
+    pub fn parse_settings(json: &str) -> Result<Settings> {
+        let value: serde_json::Value = serde_json::from_str(json)?;
+        let mut s: Settings = serde_json::from_value(value.clone())?;
+        if value.get("start").is_none() && s.open_daily_on_start {
+            s.start.open = StartOpen::Daily;
+        }
+        Ok(s)
     }
 
     pub fn save_settings(&self, s: &Settings) -> Result<()> {
@@ -201,6 +358,82 @@ mod tests {
         assert_eq!(db.load_settings().unwrap().reminder_time, None);
         db.conn().execute("UPDATE settings SET value = '{\"palette_shortcut\":null}'", []).unwrap();
         assert_eq!(db.load_settings().unwrap().palette_shortcut, None);
+    }
+
+    #[test]
+    fn new_preferences_default_and_migrate() {
+        let db = Database::open_in_memory().unwrap();
+        // Settings of an older version: everything new gets its default.
+        db.conn()
+            .execute("INSERT INTO settings (key, value) VALUES ('app', '{\"theme\":\"light\",\"open_daily_on_start\":true}')", [])
+            .unwrap();
+        let s = db.load_settings().unwrap();
+        assert_eq!(s.start.open, StartOpen::Daily, "the old start flag carries over");
+        assert_eq!(s.network, NetworkSettings::default());
+        assert_eq!(s.network.mode, crate::network::ProxyMode::System);
+        assert!(s.network.apply_to.ai && s.network.apply_to.git && !s.network.accept_invalid_certs);
+        assert_eq!((s.editor.autosave_ms, s.editor.smart_quotes, s.editor.tab_size), (450, false, 4));
+        assert_eq!(
+            (s.notes.trash_retention_days, s.notes.version_interval_minutes, s.notes.max_versions),
+            (30, 10, 50)
+        );
+        assert_eq!(s.notes.daily_folder, "Journal");
+        assert_eq!(s.time.rounding, crate::prefs::Rounding::default());
+        assert_eq!(s.time.rounding.apply(7), 7, "no rounding by default");
+        assert_eq!(s.ai.allowed_tools, crate::prefs::WORKSPACE_TOOLS, "system tools are off by default");
+        assert!(s.ai.citations && s.ai.streaming && s.ai.monthly_cost_limit_usd.is_none());
+        assert!(s.notifications.end_of_day && !s.notifications.quiet_hours);
+        assert!(s.privacy.read_open_page && !s.privacy.local_only);
+        assert_eq!(s.locale.language, crate::prefs::Language::De);
+        assert!(s.keymap.is_empty());
+        // Once the start preferences exist, the old flag no longer decides.
+        db.conn()
+            .execute(
+                "UPDATE settings SET value = '{\"open_daily_on_start\":true,\"start\":{\"open\":\"dashboard\"}}'",
+                [],
+            )
+            .unwrap();
+        assert_eq!(db.load_settings().unwrap().start.open, StartOpen::Dashboard);
+        // Partial nested objects fill the rest.
+        db.conn()
+            .execute(
+                "UPDATE settings SET value = '{\"time\":{\"rounding\":{\"step_minutes\":15}},\"network\":{\"mode\":\"manual\"}}'",
+                [],
+            )
+            .unwrap();
+        let s = db.load_settings().unwrap();
+        assert_eq!((s.time.rounding.step_minutes, s.time.hours_display), (15, crate::prefs::HoursDisplay::Decimal));
+        assert_eq!((s.network.mode, s.network.timeout_secs), (crate::network::ProxyMode::Manual, 30));
+    }
+
+    #[test]
+    fn normalize_clamps_and_reset_restores_sections() {
+        let mut s = Settings::default();
+        s.appearance.ui_scale = 300;
+        s.appearance.accent = "#ABC".into();
+        s.editor.autosave_ms = 10;
+        s.notes.trash_retention_days = 1;
+        s.notes.daily_folder = "  ".into();
+        s.time.rounding.step_minutes = 7;
+        s.time.default_leistungsart.insert(" NP-1 ".into(), " dev ".into());
+        s.ai.temperature = 9.0;
+        s.ai.allowed_tools = vec!["git".into(), "rm_rf".into()];
+        s.notifications.quiet_from = "25:00".into();
+        s.start.open = StartOpen::Daily;
+        s.normalize();
+        assert_eq!((s.appearance.ui_scale, s.appearance.accent.as_str()), (125, "#aabbcc"));
+        assert_eq!((s.editor.autosave_ms, s.notes.trash_retention_days), (250, 7));
+        assert_eq!(s.notes.daily_folder, "Journal");
+        assert_eq!(s.time.rounding.step_minutes, 0);
+        assert_eq!(s.time.default_leistungsart.get("NP-1").map(String::as_str), Some("DEV"));
+        assert_eq!((s.ai.temperature, s.ai.allowed_tools.clone()), (2.0, vec!["git".to_owned()]));
+        assert_eq!(s.notifications.quiet_from, "22:00");
+        assert!(s.open_daily_on_start);
+        s.reset_section("ai").unwrap();
+        assert_eq!(s.ai, AiPrefs::default());
+        s.reset_section("appearance").unwrap();
+        assert_eq!(s.appearance, AppearancePrefs::default());
+        assert!(s.reset_section("gibt-es-nicht").is_err());
     }
 
     #[test]

@@ -18,6 +18,8 @@ import { TableToolbar } from "./TableToolbar";
 import { InlineAiBar } from "./InlineAiBar";
 import { aiRange, type AiRange } from "./ai-insert";
 import { registerEditor } from "./reveal";
+import type { TypingPrefs } from "./typing";
+import { spellcheckAttrs } from "../lib/prefs";
 import { ZeitConfirm, type ZeitChoice } from "./ZeitConfirm";
 import { lacksReference, referenceOffset } from "./zeit-suggest";
 import type { ZeitGuess } from "../lib/types";
@@ -51,7 +53,13 @@ function chooseOtherRef(editor: Editor, line: string) {
 
 const NO_REF_HINT = "Schreibe die Referenz dazu, z. B. /zeit NP-8801/1020 2h Beschreibung.";
 
-const SAVE_DELAY = 450;
+/** Autosave delay after the last change (Settings → Editor, 250–3000 ms). */
+const saveDelay = () => Math.min(3000, Math.max(250, useApp.getState().settings?.settings.editor?.autosave_ms ?? 450));
+const editorPrefs = () => useApp.getState().settings?.settings.editor;
+const typingPrefs = (): TypingPrefs => {
+  const e = editorPrefs();
+  return { smartQuotes: !!e?.smart_quotes, autoPair: !!e?.auto_pair, tabSize: e?.tab_size ?? 4, lineNumbers: !!e?.code_line_numbers };
+};
 
 export interface NoteEditorHandle {
   editor: Editor | null;
@@ -303,13 +311,15 @@ export function NoteEditor({
         onPickTemplate: (editor) => insertTemplate(editor, useApp.getState().pages.get(doc.id)?.title ?? doc.title),
         onAi: (editor) => openAi(editor),
         onSummary: () => window.dispatchEvent(new CustomEvent(MEETING_SUMMARY_EVENT, { detail: { id: doc.id } })),
+        typing: typingPrefs,
         onZeitLost: (res) =>
           useApp.getState().toast({ tone: "warning", title: "Gebucht, aber Zeile nicht mehr gefunden", detail: `${res.hours} h · ${res.target} – kein Chip eingefügt` }),
       }),
       content: splitFrontmatter(doc.content).body,
       contentType: "markdown",
       editorProps: {
-        attributes: { class: "prose", spellcheck: "true", "aria-label": "Notiz" },
+        // Settings → Editor: spell check language (re-read on every update).
+        attributes: () => ({ class: "prose", ...spellcheckAttrs(editorPrefs()?.spellcheck), "aria-label": "Notiz", style: `tab-size: ${editorPrefs()?.tab_size ?? 4}` }),
         // Ctrl+J on a selection: inline AI instead of the assistant panel (App's global Ctrl+J).
         handleKeyDown: (view, event) => {
           if (!(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey || event.key.toLowerCase() !== "j") return false;
@@ -332,7 +342,7 @@ export function NoteEditor({
         dirty.current = true;
         setStatus("dirty");
         window.clearTimeout(saveTimer.current);
-        saveTimer.current = window.setTimeout(() => save(editor), SAVE_DELAY);
+        saveTimer.current = window.setTimeout(() => save(editor), saveDelay());
         if (activeRef.current) publishOutline(editor);
       },
       onCreate: ({ editor }) => activeRef.current && publishOutline(editor),
@@ -359,7 +369,7 @@ export function NoteEditor({
       dirty.current = true;
       setStatus("dirty");
       window.clearTimeout(saveTimer.current);
-      saveTimer.current = window.setTimeout(() => save(editor), SAVE_DELAY);
+      saveTimer.current = window.setTimeout(() => save(editor), saveDelay());
     };
     handleRef?.({ editor, flush: flushNow, setFrontmatter });
     flushers.add(flushNow);

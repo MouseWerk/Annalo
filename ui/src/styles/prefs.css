@@ -1,0 +1,127 @@
+/* Preferences (Settings → Darstellung, Editor) and the new settings controls. */
+
+/* ------------------------------------------------------------ density */
+:root {
+  --tree-row-h: 28px;
+  --set-row-pad: 13px;
+  --pal-item-h: 38px;
+  --entry-row-h: 38px;
+  --page-max: 800px;
+  --font-editor: inherit;
+}
+:root[data-density="compact"] {
+  --tree-row-h: 24px;
+  --set-row-pad: 9px;
+  --pal-item-h: 32px;
+  --entry-row-h: 32px;
+  --tabbar-h: 34px;
+  --statusbar-h: 24px;
+}
+:root[data-density="comfortable"] {
+  --tree-row-h: 32px;
+  --set-row-pad: 17px;
+  --pal-item-h: 44px;
+  --entry-row-h: 44px;
+  --tabbar-h: 44px;
+  --statusbar-h: 30px;
+}
+
+/* --------------------------------------------------------- line width */
+:root[data-line-width="narrow"] { --page-max: 680px; }
+:root[data-line-width="wide"] { --page-max: 1040px; }
+:root[data-line-width="full"] { --page-max: none; }
+
+/* -------------------------------------------------------------- fonts */
+:root[data-ui-font="system"] { --font-ui: system-ui, "Segoe UI Variable Text", "Segoe UI", -apple-system, "Helvetica Neue", sans-serif; }
+:root[data-code-font="system"] { --font-mono: "Cascadia Code", Consolas, "SF Mono", ui-monospace, "DejaVu Sans Mono", monospace; }
+:root[data-editor-font="serif"] { --font-editor: "Iowan Old Style", "Palatino Linotype", Georgia, "Times New Roman", serif; }
+:root[data-editor-font="mono"] { --font-editor: var(--font-mono); }
+.prose { font-family: var(--font-editor); }
+:root[data-editor-font="mono"] .prose { font-size: calc(var(--fs-lg) - 1px); }
+
+/* ------------------------------------------------------ reduced motion */
+:root[data-reduce-motion="on"] *,
+:root[data-reduce-motion="on"] *::before,
+:root[data-reduce-motion="on"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+/* ------------------------------------------------- code line numbers */
+.prose pre.with-line-numbers { position: relative; padding-left: calc(16px + 2.8em); }
+.prose pre.with-line-numbers::before {
+  content: attr(data-line-numbers);
+  position: absolute;
+  top: 14px;
+  left: 0;
+  width: 2.6em;
+  padding-right: 0.6em;
+  text-align: right;
+  white-space: pre;
+  font: 0.84em / 1.65 var(--font-mono);
+  color: var(--text-3);
+  border-right: 1px solid var(--border);
+  user-select: none;
+  pointer-events: none;
+}
+
+/* ------------------------------------------------------ settings shell */
+.settings-nav { overflow-y: auto; max-height: 100%; padding-top: 18px; }
+.settings-search { display: flex; align-items: center; gap: 6px; height: 30px; margin: 0 2px 8px; padding: 0 4px 0 9px; border-radius: var(--r-sm); border: 1px solid var(--border); background: var(--bg-input); }
+.settings-search:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.settings-search input { flex: 1; min-width: 0; border: 0; background: transparent; outline: none; color: var(--text); font-size: var(--fs-sm); user-select: text; }
+.settings-nav-group { display: grid; gap: 2px; }
+.settings-nav-group + .settings-nav-group { margin-top: 10px; }
+.settings-nav-group-label { font-size: var(--fs-xs); color: var(--text-3); padding: 4px 10px 2px; font-weight: 500; }
+.settings-hit-section { display: grid; gap: 16px; }
+.settings-hit-section[hidden] { display: none; }
+.settings-hit-title { justify-self: start; border: 0; background: none; padding: 0; color: var(--accent-text); font-size: var(--fs-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.settings-hit-title:hover { text-decoration: underline; }
+.settings-hit-body { display: grid; gap: 28px; }
+.settings-hit-body .settings-head { display: none; }
+.settings-search-empty { margin: 0; }
+.set-group[hidden] { display: none; }
+.set-row { padding: var(--set-row-pad) 0; }
+
+/* accent */
+.accent-swatches { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.accent-swatch { width: 26px; height: 26px; border-radius: 50%; border: 2px solid transparent; display: grid; place-items: center; color: #fff; box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.15); }
+.accent-swatch.on { border-color: var(--text); }
+.accent-swatch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.accent-custom { position: relative; width: 26px; height: 26px; border-radius: 50%; overflow: hidden; border: 1px dashed var(--border-strong); }
+.accent-custom input { position: absolute; inset: -6px; width: 40px; height: 40px; border: 0; padding: 0; background: none; cursor: pointer; }
+.accent-preview { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 4px; }
+.accent-chip { padding: 3px 10px; border-radius: var(--r-sm); font-weight: 500; }
+
+/* keyboard */
+.key-recorder { display: inline-flex; align-items: center; gap: 3px; min-width: 150px; height: 30px; padding: 0 8px; border-radius: var(--r-sm); border: 1px solid var(--border-strong); background: var(--bg-input); color: var(--text); font-size: var(--fs-sm); }
+.key-recorder:hover { border-color: var(--text-3); }
+.key-recorder.recording { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.key-recorder kbd { font-size: var(--fs-xs); }
+.keys-conflict { font-weight: 500; }
+
+/* network */
+.pac-results { display: grid; gap: 4px; padding: 8px 0; }
+.pac-result { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.net-ca { display: grid; gap: 2px; }
+.ca-info { color: var(--text-2); }
+.danger-note { color: var(--danger); display: inline-flex; gap: 6px; align-items: flex-start; }
+.net-danger { display: flex; gap: 10px; align-items: flex-start; margin: 4px 0 8px; padding: 10px 12px; border-radius: var(--r-md); background: var(--danger-soft); color: var(--danger); font-weight: 500; line-height: 1.5; }
+.net-danger svg { flex: none; margin-top: 2px; }
+.apply-to { display: flex; gap: 16px; flex-wrap: wrap; }
+.net-test-result { display: inline-flex; align-items: center; gap: 4px; }
+
+/* AI presets */
+.preset-list { display: grid; gap: 10px; padding: 8px 0; justify-items: start; }
+.preset-row { display: grid; grid-template-columns: 170px minmax(0, 1fr) auto; gap: 8px; align-items: start; width: 100%; }
+.preset-actions { display: flex; gap: 2px; }
+
+/* admin */
+.settings-diff { display: grid; gap: 4px; max-height: 360px; overflow: auto; font-size: var(--fs-sm); }
+.diff-row { display: grid; grid-template-columns: minmax(140px, 1.2fr) minmax(0, 1fr) auto minmax(0, 1fr); gap: 8px; align-items: baseline; padding: 3px 0; border-bottom: 1px solid var(--border); }
+.diff-path { color: var(--text-2); overflow-wrap: anywhere; }
+.diff-from { color: var(--text-3); text-decoration: line-through; overflow-wrap: anywhere; }
+.diff-to { color: var(--text); overflow-wrap: anywhere; }
+.w-200 { width: 200px; max-width: 100%; }

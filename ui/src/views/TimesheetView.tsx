@@ -8,7 +8,8 @@ import {
 import { api } from "../lib/api";
 import { useApp } from "../store/app";
 import { Badge, Button, Dialog, EmptyState, Field, IconButton, Input, Segmented, Switch, useMenu, type Tone } from "../components/ui";
-import { addDays, clock, h2, hoursFromMinutes, isoDay, isoWeek, parseDurationInput, time, weekStart } from "../lib/format";
+import { addDays, clock, fmtHours, fmtMinutes, isoDay, isoWeek, isoWeekday, parseDurationInput, time, weekStart, weekdayShort } from "../lib/format";
+import { exportFileName } from "../lib/prefs";
 import { useTimerSeconds, stopTimer } from "../components/Sidebar";
 import { LeistungsartSelect, NetzplanSelect, VorgangSelect, useWbs } from "./wbs";
 import { catsGrid, weekGaps } from "../lib/cats";
@@ -20,7 +21,6 @@ const STATUS: Record<StatusFlag, { label: string; tone: Tone }> = {
   released: { label: "Freigegeben", tone: "accent" },
   exported: { label: "Exportiert", tone: "success" },
 };
-const DAYS = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
 
 export function TimesheetView() {
   const version = useApp((s) => s.entriesVersion);
@@ -99,10 +99,10 @@ export function TimesheetView() {
         <TimerCard wbs={wbs} las={las} />
 
         <div className="stat-row">
-          <Stat label="Woche gesamt" value={`${h2(total / 60)} h`} sub={`Soll ${h2(target * workdays.length)} h`} />
-          <Stat label="Entwurf" value={`${h2(byStatus("draft") / 60)} h`} />
-          <Stat label="Freigegeben" value={`${h2(byStatus("released") / 60)} h`} tone="accent" />
-          <Stat label="Exportiert" value={`${h2(byStatus("exported") / 60)} h`} tone="success" />
+          <Stat label="Woche gesamt" value={`${fmtMinutes(total)} h`} sub={`Soll ${fmtHours(target * workdays.length)} h`} />
+          <Stat label="Entwurf" value={`${fmtMinutes(byStatus("draft"))} h`} />
+          <Stat label="Freigegeben" value={`${fmtMinutes(byStatus("released"))} h`} tone="accent" />
+          <Stat label="Exportiert" value={`${fmtMinutes(byStatus("exported"))} h`} tone="success" />
         </div>
 
         <WeekGrid rows={done} week={week} todayKey={todayKey} target={target} workdays={workdays} />
@@ -199,7 +199,7 @@ function TimerCard({ wbs, las }: { wbs: ProjectTree[]; las: [string, string][] }
     const line = /^\/(zeit|time)\b/i.test(quick.trim()) ? quick.trim() : `/zeit ${quick.trim()}`;
     try {
       const out = await api.logTime(line);
-      s().toast({ tone: "success", title: `${hoursFromMinutes(out.entry.duration_minutes)} h gebucht`, detail: out.entry.description || undefined });
+      s().toast({ tone: "success", title: `${fmtMinutes(out.entry.duration_minutes)} h gebucht`, detail: out.entry.description || undefined });
       s().alerts(out.alerts);
       setQuick("");
       s().bumpEntries();
@@ -280,6 +280,7 @@ function TimerCard({ wbs, las }: { wbs: ProjectTree[]; las: [string, string][] }
 // -------------------------------------------------------------- week grid
 
 function WeekGrid({ rows, week, todayKey, target, workdays }: { rows: TimeEntryRow[]; week: Date; todayKey: string; target: number; workdays: number[] }) {
+  const weekend = (i: number) => !workdays.includes(isoWeekday(addDays(week, i)));
   const days = Array.from({ length: 7 }, (_, i) => addDays(week, i));
   const keys = days.map(isoDay);
   const lines = useMemo(() => {
@@ -326,7 +327,7 @@ function WeekGrid({ rows, week, todayKey, target, workdays }: { rows: TimeEntryR
   };
   if (!lines.length && !gaps.length) return null;
   const dayTotals = keys.map((_, i) => lines.reduce((a, l) => a + l.perDay[i], 0));
-  const cell = (m: number) => (m ? h2(m / 60) : "");
+  const cell = (m: number) => (m ? fmtMinutes(m) : "");
   return (
     <section className="card">
       <div className="card-head">
@@ -342,8 +343,8 @@ function WeekGrid({ rows, week, todayKey, target, workdays }: { rows: TimeEntryR
           <AlertTriangle size={14} />
           <span>Unter Soll:</span>
           {gaps.map((g) => (
-            <span key={isoDay(g.day)} className="gap-chip" title={`${h2(g.bookedMinutes / 60)} von ${h2(target)} h gebucht`}>
-              {DAYS[(g.day.getDay() + 6) % 7]} {g.day.getDate()}. −{h2(g.missingMinutes / 60)} h
+            <span key={isoDay(g.day)} className="gap-chip" title={`${fmtMinutes(g.bookedMinutes)} von ${fmtHours(target)} h gebucht`}>
+              {weekdayShort(g.day)} {g.day.getDate()}. −{fmtMinutes(g.missingMinutes)} h
             </span>
           ))}
         </div>
@@ -355,8 +356,8 @@ function WeekGrid({ rows, week, todayKey, target, workdays }: { rows: TimeEntryR
               <th>Netzplan / Vorgang</th>
               <th>LA</th>
               {days.map((d, i) => (
-                <th key={i} className={`num ${keys[i] === todayKey ? "today" : ""} ${i >= 5 ? "weekend" : ""}`}>
-                  {DAYS[i]} <span className="faint">{d.getDate()}.</span>
+                <th key={i} className={`num ${keys[i] === todayKey ? "today" : ""} ${weekend(i) ? "weekend" : ""}`}>
+                  {weekdayShort(d)} <span className="faint">{d.getDate()}.</span>
                 </th>
               ))}
               <th className="num">Summe</th>
@@ -368,11 +369,11 @@ function WeekGrid({ rows, week, todayKey, target, workdays }: { rows: TimeEntryR
                 <td className="mono">{l.label}</td>
                 <td>{l.la && <Badge>{l.la}</Badge>}</td>
                 {l.perDay.map((m, i) => (
-                  <td key={i} className={`num ${keys[i] === todayKey ? "today" : ""} ${i >= 5 ? "weekend" : ""}`}>
+                  <td key={i} className={`num ${keys[i] === todayKey ? "today" : ""} ${weekend(i) ? "weekend" : ""}`}>
                     {cell(m)}
                   </td>
                 ))}
-                <td className="num strong">{h2(l.perDay.reduce((a, b) => a + b, 0) / 60)}</td>
+                <td className="num strong">{fmtMinutes(l.perDay.reduce((a, b) => a + b, 0))}</td>
               </tr>
             ))}
           </tbody>
@@ -380,11 +381,11 @@ function WeekGrid({ rows, week, todayKey, target, workdays }: { rows: TimeEntryR
             <tr>
               <td colSpan={2}>Summe</td>
               {dayTotals.map((m, i) => (
-                <td key={i} className={`num ${keys[i] === todayKey ? "today" : ""} ${i >= 5 ? "weekend" : ""} ${gapKeys.has(keys[i]) ? "gap" : ""}`}>
+                <td key={i} className={`num ${keys[i] === todayKey ? "today" : ""} ${weekend(i) ? "weekend" : ""} ${gapKeys.has(keys[i]) ? "gap" : ""}`}>
                   {cell(m)}
                 </td>
               ))}
-              <td className="num strong">{h2(dayTotals.reduce((a, b) => a + b, 0) / 60)}</td>
+              <td className="num strong">{fmtMinutes(dayTotals.reduce((a, b) => a + b, 0))}</td>
             </tr>
           </tfoot>
         </table>
@@ -442,7 +443,7 @@ function EntryList({ rows, selected, setSelected, onEdit, week }: { rows: TimeEn
               />
               <span className="entry-day-title">{new Date(day + "T12:00:00").toLocaleDateString("de-DE", { weekday: "long", day: "numeric", month: "long" })}</span>
               <span className="grow" />
-              <span className="num strong">{h2(sum / 60)} h</span>
+              <span className="num strong">{fmtMinutes(sum)} h</span>
             </div>
             {list.map((r) => (
               <div key={r.id} className={`entry ${selected.has(r.id) ? "sel" : ""}`} onDoubleClick={() => r.status_flag !== "running" && r.status_flag !== "exported" && onEdit(r)}>
@@ -457,7 +458,7 @@ function EntryList({ rows, selected, setSelected, onEdit, week }: { rows: TimeEn
                 <span className="entry-la">{r.leistungsart && <Badge>{r.leistungsart}</Badge>}</span>
                 <span className="entry-desc">{r.description || <span className="faint">Ohne Beschreibung</span>}</span>
                 <Badge tone={STATUS[r.status_flag].tone}>{STATUS[r.status_flag].label}</Badge>
-                <span className="entry-dur num">{r.duration_minutes != null ? `${hoursFromMinutes(r.duration_minutes)} h` : "läuft"}</span>
+                <span className="entry-dur num">{r.duration_minutes != null ? `${fmtMinutes(r.duration_minutes)} h` : "läuft"}</span>
                 <IconButton
                   icon={MoreHorizontal}
                   label="Aktionen"
@@ -475,7 +476,7 @@ function EntryList({ rows, selected, setSelected, onEdit, week }: { rows: TimeEn
                         icon: Trash2,
                         danger: true,
                         onSelect: async () => {
-                          if (!(await s().confirm({ title: "Eintrag löschen?", message: `${r.description || r.netzplan_nr} (${hoursFromMinutes(r.duration_minutes)} h) wird gelöscht.`, confirmLabel: "Löschen", danger: true }))) return;
+                          if (!(await s().confirm({ title: "Eintrag löschen?", message: `${r.description || r.netzplan_nr} (${fmtMinutes(r.duration_minutes)} h) wird gelöscht.`, confirmLabel: "Löschen", danger: true }))) return;
                           try {
                             await api.deleteEntry(r.id);
                             s().bumpEntries();
@@ -510,7 +511,7 @@ function EntryDialog({ entry, wbs, las, onClose, defaultDay }: { entry: TimeEntr
   const [la, setLa] = useState(entry?.leistungsart ?? "DEV");
   const [day, setDay] = useState(isoDay(start));
   const [from, setFrom] = useState(`${String(start.getHours()).padStart(2, "0")}:${String(start.getMinutes()).padStart(2, "0")}`);
-  const [dur, setDur] = useState(entry?.duration_minutes != null ? hoursFromMinutes(entry.duration_minutes) : "1,00");
+  const [dur, setDur] = useState(entry?.duration_minutes != null ? fmtMinutes(entry.duration_minutes) : "1,00");
   const [desc, setDesc] = useState(entry?.description ?? "");
   const [busy, setBusy] = useState(false);
   const s = useApp.getState;
@@ -528,7 +529,7 @@ function EntryDialog({ entry, wbs, las, onClose, defaultDay }: { entry: TimeEntr
         s().alerts(out.alerts);
       }
       s().bumpEntries();
-      s().toast({ tone: "success", title: entry ? "Eintrag gespeichert" : `${h2(minutes / 60)} h gebucht` });
+      s().toast({ tone: "success", title: entry ? "Eintrag gespeichert" : `${fmtMinutes(minutes)} h gebucht` });
       onClose();
     } catch (e) {
       s().error("Speichern fehlgeschlagen", e);
@@ -567,7 +568,7 @@ function EntryDialog({ entry, wbs, las, onClose, defaultDay }: { entry: TimeEntr
         <Field label="Beginn">
           <Input type="time" value={from} onChange={(e) => setFrom(e.target.value)} />
         </Field>
-        <Field label="Dauer" hint={minutes == null ? "z. B. 1,5 oder 1:30 oder 90m" : `${h2(minutes / 60)} h`}>
+        <Field label="Dauer" hint={minutes == null ? "z. B. 1,5 oder 1:30 oder 90m" : `${fmtMinutes(minutes)} h`}>
           <Input value={dur} onChange={(e) => setDur(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} />
         </Field>
         <Field label="Leistungsart">
@@ -615,7 +616,9 @@ function ExportDialog({ week, onClose }: { week: Date; onClose: () => void }) {
       let path: string | null = null;
       if (target === "file") {
         const f = FORMATS.find((x) => x.value === format)!;
-        path = await saveDialog({ defaultPath: `zeiten-${from}-${to}.${f.ext}`, filters: [{ name: f.label, extensions: [f.ext] }] });
+        const st = useApp.getState().settings?.settings;
+        const name = exportFileName(st?.time?.export_file_pattern ?? "", { from, to, format, week: isoWeek(new Date(`${from}T00:00:00`)), pernr: st?.pernr });
+        path = await saveDialog({ defaultPath: `${name}.${f.ext}`, filters: [{ name: f.label, extensions: [f.ext] }] });
         if (!path) return;
       }
       // Clipboard: copy first, mark only once the copy succeeded.

@@ -1,11 +1,11 @@
 // Month grid and day status for the daily-note calendar.
 
-import { isoDay, isoWeek } from "./format";
+import { formatPrefs, isoDay, isoWeek } from "./format";
 
-/** Six Monday-first weeks covering the month of `year`/`month` (0-based). */
-export function monthGrid(year: number, month: number): Date[][] {
+/** Six weeks (Monday- or Sunday-first per the settings) covering the month of `year`/`month` (0-based). */
+export function monthGrid(year: number, month: number, startsOn: 0 | 1 = formatPrefs().weekStartsOn): Date[][] {
   const first = new Date(year, month, 1);
-  const start = new Date(year, month, 1 - ((first.getDay() + 6) % 7));
+  const start = new Date(year, month, 1 - ((first.getDay() + 7 - startsOn) % 7));
   return Array.from({ length: 6 }, (_, w) =>
     Array.from({ length: 7 }, (_, d) => new Date(start.getFullYear(), start.getMonth(), start.getDate() + w * 7 + d)),
   );

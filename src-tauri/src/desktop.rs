@@ -357,15 +357,18 @@ pub fn periodic(app: &AppHandle) {
             .and_then(|booked| core::end_of_day_reminder(now, &settings, booked, meta_date(&db, "reminder.day")));
         let running = db.running_timer().ok().flatten();
         let since = running.as_ref().map(|e| e.start_time.with_timezone(&Local).naive_local());
-        let late = core::late_timer_reminder(now, since, meta_date(&db, "late_timer.day")).then(|| {
-            let e = running.as_ref().expect("late reminder implies a running timer");
-            let nr = db.netzplan_by_id(e.netzplan_id).map(|n| n.netzplan_nr).unwrap_or_default();
-            let start = e.start_time.with_timezone(&Local).format("%H:%M");
-            format!(
-                "{} läuft seit {start} Uhr – stoppen nicht vergessen.",
-                core::timer_label(&nr, e.vorgang_nr.as_deref())
-            )
-        });
+        let n = &settings.notifications;
+        let late_allowed = n.late_timer && !n.is_quiet(now.time());
+        let late =
+            (late_allowed && core::late_timer_reminder(now, since, meta_date(&db, "late_timer.day"))).then(|| {
+                let e = running.as_ref().expect("late reminder implies a running timer");
+                let nr = db.netzplan_by_id(e.netzplan_id).map(|n| n.netzplan_nr).unwrap_or_default();
+                let start = e.start_time.with_timezone(&Local).format("%H:%M");
+                format!(
+                    "{} läuft seit {start} Uhr – stoppen nicht vergessen.",
+                    core::timer_label(&nr, e.vorgang_nr.as_deref())
+                )
+            });
         if eod.is_some() {
             let _ = db.meta_set("reminder.day", &today);
         }

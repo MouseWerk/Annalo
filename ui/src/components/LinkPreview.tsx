@@ -8,7 +8,8 @@ import { useApp } from "../store/app";
 import { PageIcon } from "./icons";
 import type { PageDoc } from "../lib/types";
 
-const DELAY = 450;
+/** Settings → Editor: hover preview on/off and its delay. */
+const editorPrefs = () => useApp.getState().settings?.settings.editor;
 const PREVIEW_CHARS = 900;
 const cache = new Map<string, { at: number; doc: PageDoc | null }>();
 
@@ -46,7 +47,7 @@ export function LinkPreview() {
     const onOver = (e: MouseEvent) => {
       if (card.current?.contains(e.target as Node)) return void window.clearTimeout(hideTimer.current);
       const a = linkOf(e.target);
-      if (!a) return;
+      if (!a || editorPrefs()?.hover_preview === false) return;
       const target = a.dataset.target;
       if (!target) return;
       window.clearTimeout(hideTimer.current);
@@ -59,7 +60,7 @@ export function LinkPreview() {
         } catch {
           /* no preview */
         }
-      }, DELAY);
+      }, editorPrefs()?.hover_delay_ms ?? 450);
     };
     const onOut = (e: MouseEvent) => {
       const from = linkOf(e.target) ?? (card.current?.contains(e.target as Node) ? card.current : null);

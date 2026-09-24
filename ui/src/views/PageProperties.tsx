@@ -7,7 +7,7 @@ import { api } from "../lib/api";
 import { useApp } from "../store/app";
 import { Badge, Button, IconButton, Progress } from "../components/ui";
 import { DATE_RE, LIST_KEYS, edited, isValidKey, parseFrontmatter, propertyValue, serializeFrontmatter, splitItems, type Property } from "../lib/frontmatter";
-import { dateShort, h2, hoursFromMinutes } from "../lib/format";
+import { dateShort, fmtHours, fmtMinutes } from "../lib/format";
 import { NetzplanSelect, VorgangSelect, useWbs } from "./wbs";
 import { LEVEL } from "./ProjectsView";
 import type { PageWork } from "../lib/types";
@@ -478,10 +478,10 @@ export function WorkCard({ pageId, reference, title }: { pageId: number; referen
       {work.planned_hours > 0 && <Progress value={work.consumed} tone={level.tone} />}
       <div className="work-stats">
         <span className="num">
-          {h2(work.booked_hours)} / {h2(work.planned_hours)} h gebucht
+          {fmtHours(work.booked_hours)} / {fmtHours(work.planned_hours)} h gebucht
         </span>
-        <span className="num">ETC {h2(work.etc_hours)} h</span>
-        {work.page_hours > 0 && <span className="num">{h2(work.page_hours)} h von dieser Seite</span>}
+        <span className="num">ETC {fmtHours(work.etc_hours)} h</span>
+        {work.page_hours > 0 && <span className="num">{fmtHours(work.page_hours)} h von dieser Seite</span>}
       </div>
       {work.entries.length > 0 && (
         <>
@@ -494,7 +494,7 @@ export function WorkCard({ pageId, reference, title }: { pageId: number; referen
               {work.entries.map((e) => (
                 <li key={e.id} className={e.page_id === pageId ? "own" : ""}>
                   <span className="faint">{dateShort(e.start_time)}</span>
-                  <span className="num">{hoursFromMinutes(e.duration_minutes)} h</span>
+                  <span className="num">{fmtMinutes(e.duration_minutes)} h</span>
                   <span className="work-entry-desc">
                     {e.description || "–"}
                     {e.page_id === pageId && <span className="faint"> · diese Seite</span>}

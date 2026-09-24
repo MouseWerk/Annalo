@@ -200,6 +200,151 @@ export interface Settings {
   auto_update_check: boolean;
   /** Push the Markdown mirror to a Git remote; the token lives in the credential store. */
   git_sync: GitSyncSettings;
+  /** Proxy, extra root CA, timeouts; the proxy password lives in the credential store. */
+  network: NetworkSettings;
+  appearance: AppearancePrefs;
+  editor: EditorPrefs;
+  notes: NotesPrefs;
+  time: TimePrefs;
+  ai: AiPrefs;
+  notifications: NotificationPrefs;
+  privacy: PrivacyPrefs;
+  start: StartPrefs;
+  locale: LocalePrefs;
+  /** In-app shortcuts that differ from the defaults: command id → "Ctrl+Shift+D" ("" = off). */
+  keymap: Record<string, string>;
+}
+export type ProxyMode = "none" | "system" | "manual" | "pac";
+export interface NetworkSettings {
+  mode: ProxyMode;
+  http_proxy: string;
+  https_proxy: string;
+  socks_proxy: string;
+  no_proxy: string;
+  pac_url: string;
+  /** FindProxyForURL answers per host ("*" = the LiteLLM host, used for all others). */
+  pac_results: Record<string, string>;
+  proxy_user: string;
+  extra_ca_path: string | null;
+  accept_invalid_certs: boolean;
+  timeout_secs: number;
+  apply_to: { ai: boolean; git: boolean; updates: boolean; tools: boolean };
+}
+export interface AppearancePrefs {
+  accent: string;
+  ui_font: "system" | "inter";
+  editor_font: "sans" | "serif" | "mono";
+  code_font: "jetbrains" | "system";
+  ui_scale: number;
+  density: "compact" | "normal" | "comfortable";
+  line_width: "narrow" | "normal" | "wide" | "full";
+  reduce_motion: boolean;
+  mica: boolean;
+}
+export interface EditorPrefs {
+  spellcheck: "de" | "en" | "de-en" | "off";
+  autosave_ms: number;
+  smart_quotes: boolean;
+  auto_pair: boolean;
+  tab_size: number;
+  code_line_numbers: boolean;
+  hover_preview: boolean;
+  hover_delay_ms: number;
+  scroll_outline: boolean;
+  default_icon: string | null;
+  new_page_location: "top" | "current" | "inbox";
+  inbox_title: string;
+}
+export interface NotesPrefs {
+  daily_title: "iso" | "de" | "long";
+  daily_folder: string;
+  trash_retention_days: number;
+  version_interval_minutes: number;
+  max_versions: number;
+}
+export interface TimePrefs {
+  week_start: "monday" | "sunday";
+  rounding: { step_minutes: number; mode: "up" | "nearest"; min_minutes: number };
+  hours_display: "decimal" | "clock";
+  default_leistungsart: Record<string, string>;
+  cats_delimiter: "semicolon" | "comma" | "tab";
+  cats_columns: "standard" | "without_wbs" | "date_first";
+  export_file_pattern: string;
+}
+export interface AiPresetDef {
+  label: string;
+  instruction: string;
+}
+export interface AiPrefs {
+  temperature: number;
+  max_tokens: number | null;
+  /** null = the built-in presets. */
+  inline_presets: AiPresetDef[] | null;
+  /** null = the built-in instruction. */
+  meeting_template: string | null;
+  monthly_cost_limit_usd: number | null;
+  citations: boolean;
+  streaming: boolean;
+  allowed_tools: string[];
+}
+export interface NotificationPrefs {
+  end_of_day: boolean;
+  late_timer: boolean;
+  budget: boolean;
+  backup_failed: boolean;
+  git_failed: boolean;
+  updates: boolean;
+  quiet_hours: boolean;
+  quiet_from: string;
+  quiet_to: string;
+}
+export interface PrivacyPrefs {
+  read_open_page: boolean;
+  local_only: boolean;
+}
+export interface StartPrefs {
+  open: "tabs" | "dashboard" | "daily";
+  restore_window: boolean;
+  minimized: boolean;
+}
+export interface LocalePrefs {
+  language: "de" | "en";
+  date_format: "de" | "iso";
+}
+export interface SystemProxy {
+  http: string | null;
+  https: string | null;
+  socks: string | null;
+  bypass: string;
+  pac_url: string | null;
+  source: string;
+}
+export interface CaInfo {
+  count: number;
+  subject: string | null;
+  not_after: string | null;
+}
+export interface NetworkStatus {
+  password_set: boolean;
+  system: SystemProxy;
+  ca: CaInfo | null;
+  ca_error: string | null;
+  platform: string;
+}
+export interface NetworkTest {
+  ok: boolean;
+  url: string;
+  /** Proxy used (without credentials); null = direct. */
+  proxy: string | null;
+  status: number | null;
+  latency_ms: number;
+  error: string | null;
+}
+export interface CostStatus {
+  spent_usd: number;
+  limit_usd: number | null;
+  level: "ok" | "warning" | "blocked";
+  fraction?: number;
 }
 export type GitSyncMode = "with_backup" | "hourly";
 export interface GitSyncSettings {
@@ -357,6 +502,8 @@ export interface ChatOutcome {
   route: RouteDecision;
   context: ContextChunk[];
   meter: SessionMeter;
+  /** Share of the monthly cost limit used, once at least 80 %. */
+  cost_warning?: number | null;
 }
 export type StreamEvent =
   | { type: "delta"; text: string; tokens_per_second: number | null }

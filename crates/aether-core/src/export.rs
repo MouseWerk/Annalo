@@ -53,6 +53,12 @@ pub struct ExportOptions {
     /// `None` uses the system time zone per entry, so daylight saving time is honoured.
     #[serde(default)]
     pub utc_offset_minutes: Option<i32>,
+    /// Separator of the CATS file (Settings → Zeiterfassung).
+    #[serde(default)]
+    pub cats_delimiter: crate::prefs::CatsDelimiter,
+    /// Column order of the CATS file.
+    #[serde(default)]
+    pub cats_columns: crate::prefs::CatsColumns,
 }
 
 impl ExportOptions {
@@ -111,24 +117,31 @@ pub(crate) fn field(s: &str, delim: char) -> String {
 
 fn sap_cats(rows: &[&TimeEntryRow], opts: &ExportOptions) -> (String, Vec<i64>) {
     // Field names follow the CATS data structure (CATSDB / BAPICATS1).
-    let mut out = String::from("PERNR;WORKDATE;RPROJ;RNPLNR;VORNR;LSTAR;CATSHOURS;MEINH;LTXA1\r\n");
+    let d = opts.cats_delimiter.char();
+    let cols = opts.cats_columns.columns();
+    let sep = d.to_string();
+    let mut out = cols.join(&sep);
+    out.push_str("\r\n");
     let pernr = opts.pernr.as_deref().unwrap_or("");
     for r in rows {
-        let date = opts.local(r.entry.start_time).format("%Y%m%d");
+        let date = opts.local(r.entry.start_time).format("%Y%m%d").to_string();
         let hrs = format!("{:.2}", hours(r)).replace('.', ",");
-        let _ = write!(
-            out,
-            "{};{};{};{};{};{};{};H;{}\r\n",
-            field(pernr, ';'),
-            date,
-            field(&r.wbs_element, ';'),
-            field(&r.netzplan_nr, ';'),
-            field(r.entry.vorgang_nr.as_deref().unwrap_or(""), ';'),
-            field(r.entry.leistungsart.as_deref().unwrap_or(""), ';'),
-            hrs,
-            // LTXA1 is CHAR 40 in SAP.
-            field(&truncate_chars(&r.entry.description.replace(['\r', '\n'], " "), 40), ';'),
-        );
+        let values: Vec<String> = cols
+            .iter()
+            .map(|c| match *c {
+                "PERNR" => field(pernr, d),
+                "WORKDATE" => date.clone(),
+                "RPROJ" => field(&r.wbs_element, d),
+                "RNPLNR" => field(&r.netzplan_nr, d),
+                "VORNR" => field(r.entry.vorgang_nr.as_deref().unwrap_or(""), d),
+                "LSTAR" => field(r.entry.leistungsart.as_deref().unwrap_or(""), d),
+                "CATSHOURS" => field(&hrs, d),
+                "MEINH" => "H".to_owned(),
+                // LTXA1 is CHAR 40 in SAP.
+                _ => field(&truncate_chars(&r.entry.description.replace(['\r', '\n'], " "), 40), d),
+            })
+            .collect();
+        let _ = write!(out, "{}\r\n", values.join(&sep));
     }
     (out, rows.iter().map(|r| r.entry.id).collect())
 }
@@ -234,6 +247,32 @@ mod tests {
         assert_eq!(line, "00012345;20260923;NP-8801-1020;NP-8801;1020;DEV;2,50;H;\"Systemintegration; Phase 1\"");
         assert_eq!(r.exported_ids, vec![1]);
         assert_eq!(r.skipped.len(), 1);
+    }
+
+    #[test]
+    fn cats_delimiter_and_column_presets() {
+        let rows = [row(1, Some("1020"), Some(90), "Abstimmung")];
+        let opts = ExportOptions {
+            pernr: Some("7".into()),
+            utc_offset_minutes: Some(120),
+            cats_delimiter: crate::prefs::CatsDelimiter::Tab,
+            cats_columns: crate::prefs::CatsColumns::DateFirst,
+            ..Default::default()
+        };
+        let r = export(&rows, ExportFormat::SapCats, &opts).unwrap();
+        let mut lines = r.content.lines();
+        assert_eq!(lines.next().unwrap(), "WORKDATE\tPERNR\tRNPLNR\tVORNR\tLSTAR\tCATSHOURS\tMEINH\tLTXA1\tRPROJ");
+        assert_eq!(lines.next().unwrap(), "20260923\t7\tNP-8801\t1020\tDEV\t1,50\tH\tAbstimmung\tNP-8801-1020");
+        // A comma separator quotes the German decimal.
+        let opts = ExportOptions {
+            cats_delimiter: crate::prefs::CatsDelimiter::Comma,
+            cats_columns: crate::prefs::CatsColumns::WithoutWbs,
+            utc_offset_minutes: Some(120),
+            ..Default::default()
+        };
+        let r = export(&rows, ExportFormat::SapCats, &opts).unwrap();
+        assert!(r.content.starts_with("PERNR,WORKDATE,RNPLNR,VORNR,LSTAR,CATSHOURS,MEINH,LTXA1\r\n"));
+        assert!(r.content.contains(",\"1,50\",H,"), "{}", r.content);
     }
 
     #[test]

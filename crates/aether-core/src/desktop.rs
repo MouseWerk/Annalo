@@ -171,6 +171,10 @@ pub fn end_of_day_reminder(
     last_notified: Option<NaiveDate>,
 ) -> Option<String> {
     let at = parse_hhmm(settings.reminder_time.as_deref()?)?;
+    // Switched off, or in the quiet hours (Settings → Benachrichtigungen; retried afterwards).
+    if !settings.notifications.end_of_day || settings.notifications.is_quiet(now.time()) {
+        return None;
+    }
     let today = now.date();
     let workday = settings.workdays.contains(&today.weekday().number_from_monday());
     let target = settings.daily_target_hours * 60.0;

@@ -20,6 +20,9 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { tabTitle } from "./components/Shell";
 import { flushBeforeExit } from "./lib/exit";
 import { startUpdateChecks } from "./components/Updates";
+import { commandFor, currentKeymap } from "./lib/keymap";
+import { withPacResults } from "./views/settings/NetworkSection";
+import type { SettingsView } from "./lib/types";
 
 export function App() {
   const sidebarOpen = useApp((s) => s.sidebarOpen);
@@ -35,13 +38,17 @@ export function App() {
       const [view] = await Promise.all([api.settings(), s.refreshTree(), s.refreshTimer(), api.meter().then((m) => s.set({ meter: m }))]);
       s.set({ settings: view });
       applyTheme(view.settings.theme);
+      // Settings → Start: the last tabs (restored from the layout), the start page or today's note.
+      const open = view.settings.start?.open ?? (view.settings.open_daily_on_start ? "daily" : "tabs");
       if (await api.onboardingNeeded().catch(() => false)) s.set({ onboarding: true });
-      else if (view.settings.open_daily_on_start) {
+      else if (open === "daily") {
         const p = await api.dailyNote();
         await s.refreshTree();
         s.openPage(p.id);
-      }
+      } else if (open === "dashboard") s.openTab({ kind: "home" });
       document.body.classList.add("ready");
+      // PAC: re-evaluate once per start (the script may have changed) and store changed answers.
+      void refreshPac(view);
     })().catch((e) => s.error("Start fehlgeschlagen", e));
     // SQLite in a sync client's or a network folder can be corrupted: warn until dismissed.
     api
@@ -64,9 +71,18 @@ export function App() {
     media.addEventListener("change", onMedia);
     const unlisten = [
       on("data://entries", () => useApp.getState().bumpEntries()),
-      on<string>("backup://failed", (msg) => useApp.getState().toast({ tone: "warning", title: "Automatische Sicherung fehlgeschlagen", detail: msg })),
+      on<string>("backup://failed", (msg) => notify("backup_failed") && useApp.getState().toast({ tone: "warning", title: "Automatische Sicherung fehlgeschlagen", detail: msg })),
       // Git sync: only failures are shown (successes appear in the settings' status line).
-      on<string>("gitsync://failed", (msg) => useApp.getState().toast({ tone: "warning", title: "Git-Synchronisierung fehlgeschlagen", detail: msg })),
+      on<string>("gitsync://failed", (msg) => notify("git_failed") && useApp.getState().toast({ tone: "warning", title: "Git-Synchronisierung fehlgeschlagen", detail: msg })),
+      // Saved elsewhere (another window, a test, an import): take over the new settings.
+      on("settings://changed", async () => {
+        const next = await api.settings().catch(() => null);
+        const cur = useApp.getState().settings;
+        if (next && JSON.stringify(next) !== JSON.stringify(cur)) {
+          useApp.getState().set({ settings: next });
+          applyTheme(next.settings.theme);
+        }
+      }),
       // A task was toggled outside the editor: open editors of that page take over the new Markdown.
       on<number>("data://tasks", (pageId) => reloadEditors([pageId])),
       on<ActivityTick>("activity://tick", (t) => {
@@ -99,55 +115,15 @@ export function App() {
       // AltGr arrives as Ctrl+Alt on Windows; it types characters like \ | [ ] @ on German keyboards.
       if (e.getModifierState("AltGraph") || (e.ctrlKey && e.altKey)) return;
       const st = useApp.getState();
-      const mod = e.ctrlKey || e.metaKey;
-      const k = e.key.toLowerCase();
-      const run = (fn: () => void) => {
-        e.preventDefault();
-        fn();
-      };
-      if (mod && !e.shiftKey && k === "k") run(() => st.set({ paletteOpen: !st.paletteOpen, paletteMode: "all", paletteQuery: "" }));
-      else if (mod && !e.shiftKey && k === "o") run(() => st.set({ paletteOpen: true, paletteMode: "pages", paletteQuery: "" }));
-      else if (mod && !e.shiftKey && k === "n") run(() => createSubpage(null));
-      else if (mod && e.shiftKey && k === "d") run(() => openToday());
-      else if (mod && e.shiftKey && k === "a") run(() => st.openTab({ kind: "tasks" }));
-      else if (mod && e.shiftKey && k === "c") run(() => (st.calendar ? st.set({ calendar: null }) : openCalendar()));
-      else if (mod && e.shiftKey && k === "f")
-        run(() => {
-          if (!st.sidebarOpen) {
-            st.set({ sidebarOpen: true });
-            savePref("aether.sidebar", true);
-          }
-          setTimeout(() => window.dispatchEvent(new Event("aether:sidebar-search")), 0);
-        });
-      else if (mod && !e.shiftKey && k === "t") run(() => st.openTab({ kind: "home" }, { newTab: true }));
-      else if (e.altKey && !mod && e.key === "ArrowLeft") run(() => st.goBack());
-      else if (e.altKey && !mod && e.key === "ArrowRight") run(() => st.goForward());
-      else if (mod && e.shiftKey && k === "t") run(() => (st.timer ? stopTimer() : st.openTab({ kind: "timesheet" })));
+      if (e.key === "Escape" && st.focusMode && !st.paletteOpen) return st.set({ focusMode: false });
+      // Settings → Tastatur: the keymap decides which command a combination runs.
+      const id = commandFor(e, currentKeymap());
+      const command = id ? COMMAND_RUNNERS[id] : undefined;
+      if (!command) return;
       // The editor takes Ctrl+J on a selection (inline AI) and marks the event handled.
-      else if (mod && !e.shiftKey && k === "j") {
-        if (!e.defaultPrevented) run(() => openAssistant());
-      }
-      else if (mod && k === "w") run(() => st.activeTabId && st.closeTab(st.activeTabId));
-      else if (mod && e.key === "Tab")
-        run(() => {
-          const i = st.tabs.findIndex((t) => t.id === st.activeTabId);
-          const next = st.tabs[(i + (e.shiftKey ? -1 : 1) + st.tabs.length) % st.tabs.length];
-          if (next) st.activateTab(next.id);
-        });
-      else if (mod && e.code === "Backslash" && !e.shiftKey)
-        run(() => {
-          st.set({ sidebarOpen: !st.sidebarOpen });
-          savePref("aether.sidebar", !st.sidebarOpen);
-        });
-      else if (mod && e.shiftKey && e.code === "Backslash")
-        run(() => {
-          st.set({ panelOpen: !st.panelOpen });
-          savePref("aether.panel", !st.panelOpen);
-        });
-      else if (mod && e.key === ";") run(() => requestAddProperty());
-      else if (mod && e.key === ".") run(() => st.set({ focusMode: !st.focusMode }));
-      else if (mod && e.key === ",") run(() => st.openTab({ kind: "settings" }));
-      else if (e.key === "Escape" && st.focusMode && !st.paletteOpen) st.set({ focusMode: false });
+      if (id === "assistant" && e.defaultPrevented) return;
+      e.preventDefault();
+      command();
     };
     // Mouse back/forward buttons.
     const onMouse = (e: MouseEvent) => {
@@ -159,6 +135,21 @@ export function App() {
     return () => {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("mouseup", onMouse);
+    };
+  }, []);
+
+  // Settings → Start: remember the window's size and position (saved shortly after moving/resizing).
+  useEffect(() => {
+    const win = getCurrentWindow();
+    let timer = 0;
+    const later = () => {
+      clearTimeout(timer);
+      timer = window.setTimeout(() => void api.saveWindowState().catch(() => {}), 600);
+    };
+    const offs = [win.onMoved(later).catch(() => null), win.onResized(later).catch(() => null)];
+    return () => {
+      clearTimeout(timer);
+      offs.forEach((p) => p.then((f) => f?.()));
     };
   }, []);
 
@@ -271,3 +262,81 @@ export function App() {
     </div>
   );
 }
+
+/** Whether a notification kind is switched on (Settings → Benachrichtigungen). */
+export function notify(kind: "budget" | "backup_failed" | "git_failed" | "updates"): boolean {
+  return useApp.getState().settings?.settings.notifications?.[kind] !== false;
+}
+
+/** Re-evaluates the PAC script at start and saves changed answers (mode PAC only). */
+async function refreshPac(view: SettingsView) {
+  const s = view.settings;
+  if (s.network?.mode !== "pac" || !s.network.pac_url) return;
+  try {
+    const next = await withPacResults(s);
+    if (JSON.stringify(next.network.pac_results) !== JSON.stringify(s.network.pac_results)) {
+      const saved = await api.saveSettings(next);
+      useApp.getState().set({ settings: saved });
+    }
+  } catch (e) {
+    useApp.getState().toast({ tone: "warning", title: "PAC-Datei nicht ausgewertet", detail: String(e) });
+  }
+}
+
+const toggleSidebar = () => {
+  const st = useApp.getState();
+  st.set({ sidebarOpen: !st.sidebarOpen });
+  savePref("aether.sidebar", !st.sidebarOpen);
+};
+const togglePanel = () => {
+  const st = useApp.getState();
+  st.set({ panelOpen: !st.panelOpen });
+  savePref("aether.panel", !st.panelOpen);
+};
+const cycleTab = (d: number) => {
+  const st = useApp.getState();
+  const i = st.tabs.findIndex((t) => t.id === st.activeTabId);
+  const next = st.tabs[(i + d + st.tabs.length) % st.tabs.length];
+  if (next) st.activateTab(next.id);
+};
+
+/** What each keymap command does (ids as in lib/keymap.ts). */
+const COMMAND_RUNNERS: Record<string, () => void> = {
+  palette: () => {
+    const st = useApp.getState();
+    st.set({ paletteOpen: !st.paletteOpen, paletteMode: "all", paletteQuery: "" });
+  },
+  quick_switcher: () => useApp.getState().set({ paletteOpen: true, paletteMode: "pages", paletteQuery: "" }),
+  new_page: () => void createSubpage(null),
+  daily_note: () => void openToday(),
+  tasks: () => useApp.getState().openTab({ kind: "tasks" }),
+  calendar: () => {
+    const st = useApp.getState();
+    if (st.calendar) st.set({ calendar: null });
+    else openCalendar();
+  },
+  search: () => {
+    const st = useApp.getState();
+    if (!st.sidebarOpen) {
+      st.set({ sidebarOpen: true });
+      savePref("aether.sidebar", true);
+    }
+    setTimeout(() => window.dispatchEvent(new Event("aether:sidebar-search")), 0);
+  },
+  new_tab: () => useApp.getState().openTab({ kind: "home" }, { newTab: true }),
+  close_tab: () => {
+    const st = useApp.getState();
+    if (st.activeTabId) st.closeTab(st.activeTabId);
+  },
+  next_tab: () => cycleTab(1),
+  prev_tab: () => cycleTab(-1),
+  back: () => useApp.getState().goBack(),
+  forward: () => useApp.getState().goForward(),
+  timer: () => (useApp.getState().timer ? void stopTimer() : useApp.getState().openTab({ kind: "timesheet" })),
+  assistant: () => openAssistant(),
+  toggle_sidebar: toggleSidebar,
+  toggle_panel: togglePanel,
+  add_property: () => requestAddProperty(),
+  focus_mode: () => useApp.getState().set({ focusMode: !useApp.getState().focusMode }),
+  settings: () => useApp.getState().openTab({ kind: "settings" }),
+};

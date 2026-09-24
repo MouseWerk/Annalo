@@ -417,6 +417,8 @@ pub struct Git {
     /// Send the token only to HTTP(S) remotes.
     send_token: bool,
     timeout: Duration,
+    /// Proxy and CA settings (Settings → Netzwerk).
+    network: crate::network::GitNetwork,
 }
 
 impl std::fmt::Debug for Git {
@@ -434,7 +436,14 @@ impl Git {
             token: token.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty()),
             send_token: is_http(remote_url),
             timeout: DEFAULT_TIMEOUT,
+            network: crate::network::GitNetwork::default(),
         }
+    }
+
+    /// Proxy environment and TLS configuration for the remote ([`crate::network::git_network`]).
+    pub fn with_network(mut self, network: crate::network::GitNetwork) -> Self {
+        self.network = network;
+        self
     }
 
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
@@ -473,6 +482,15 @@ impl Git {
         let mut config: Vec<(&str, String)> = vec![("protocol.ext.allow", "never".into())];
         if let (true, Some(t)) = (self.send_token, self.token()) {
             config.push(("http.extraHeader", auth_header(t)));
+        }
+        for (k, v) in &self.network.config {
+            config.push((k.as_str(), v.clone()));
+        }
+        for (k, v) in &self.network.env {
+            match v {
+                Some(v) => cmd.env(k, v),
+                None => cmd.env_remove(k),
+            };
         }
         cmd.env("GIT_CONFIG_COUNT", config.len().to_string());
         for (i, (k, v)) in config.iter().enumerate() {
@@ -534,7 +552,11 @@ impl Git {
         };
         let stdout = String::from_utf8_lossy(&out_t.join().unwrap_or_default()).into_owned();
         let stderr = String::from_utf8_lossy(&err_t.join().unwrap_or_default()).into_owned();
-        Ok(GitOutput { ok: status.success(), stdout, stderr: redact(&stderr, self.token()) })
+        let mut stderr = redact(&stderr, self.token());
+        if let Some(p) = &self.network.secret {
+            stderr = stderr.replace(p.as_str(), "***");
+        }
+        Ok(GitOutput { ok: status.success(), stdout, stderr })
     }
 
     /// Runs git and turns a non-zero exit into a German, redacted error.

@@ -535,7 +535,9 @@ impl Database {
             return Err(Error::State("stop time is before start time".into()));
         }
         let minutes = ((at - running.start_time).num_seconds() as f64 / 60.0).round() as i64;
-        let booked = (minutes - idle_minutes.max(0)).max(0);
+        // Rounding (Settings → Zeiterfassung) applies to what is booked; nothing booked stays nothing.
+        let rounding = self.load_settings().map(|s| s.time.rounding).unwrap_or_default();
+        let booked = rounding.apply((minutes - idle_minutes.max(0)).max(0));
         self.conn.execute(
             "UPDATE time_entries SET end_time = ?2, duration_minutes = ?3, status_flag = 'draft' WHERE id = ?1",
             params![running.id, ts(at), booked],
@@ -751,6 +753,15 @@ impl Database {
             ],
         )?;
         Ok(())
+    }
+
+    /// Cost in USD of all AI requests since `from` (the monthly cost limit).
+    pub fn ai_cost_since(&self, from: DateTime<Utc>) -> Result<f64> {
+        Ok(self.conn.query_row(
+            "SELECT COALESCE(SUM(cost_usd), 0) FROM ai_usage WHERE created_at >= ?1",
+            [from.format("%Y-%m-%dT%H:%M:%SZ").to_string()],
+            |r| r.get(0),
+        )?)
     }
 
     /// (prompt tokens, completion tokens, cost in USD) for one AI session.

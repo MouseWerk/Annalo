@@ -55,7 +55,10 @@ pub fn log_slash_command_in<Tz: TimeZone>(
     ctx: SlashContext,
 ) -> Result<LogOutcome> {
     let local_now = now.with_timezone(offset);
-    let cmd = zeit::parse_with_default(line, local_now.date_naive(), ctx.default_ref)?;
+    let mut cmd = zeit::parse_with_default(line, local_now.date_naive(), ctx.default_ref)?;
+    // Settings → Zeiterfassung: rounding, minimum booking and default Leistungsart.
+    let time = db.load_settings().map(|s| s.time).unwrap_or_default();
+    cmd.duration_minutes = time.rounding.apply(cmd.duration_minutes);
 
     let np = db.netzplan_by_ref(&cmd.netzplan_ref)?;
     let mut vorgang_nr = cmd.vorgang_nr.clone();
@@ -69,6 +72,12 @@ pub fn log_slash_command_in<Tz: TimeZone>(
             };
             vorgang_nr = Some(found.vorgang_nr.clone());
         }
+    }
+    if cmd.leistungsart.is_none()
+        && let Some(la) = time.default_la_for(&np.netzplan_nr)
+        && db.leistungsart_exists(la)?
+    {
+        cmd.leistungsart = Some(la.to_owned());
     }
     if let Some(la) = &cmd.leistungsart
         && !db.leistungsart_exists(la)?
@@ -299,6 +308,32 @@ mod tests {
         assert_eq!(out.entry.end_time, Some(now()));
         assert_eq!(out.entry.source, EntrySource::Slash);
         assert!(out.alerts.is_empty(), "2.5h of 6h is fine: {:?}", out.alerts);
+    }
+
+    #[test]
+    fn rounding_minimum_and_default_leistungsart_apply_to_bookings_and_timer() {
+        let (db, np) = setup();
+        let mut s = db.load_settings().unwrap();
+        s.time.rounding =
+            crate::prefs::Rounding { step_minutes: 15, mode: crate::prefs::RoundMode::Up, min_minutes: 30 };
+        s.time.default_leistungsart.insert("np-8801".into(), "DEV".into());
+        db.save_settings(&s).unwrap();
+        let t = Thresholds::default();
+        // 10 min → minimum 30; 40 min → 45 (up to the quarter hour).
+        let a = log_slash_command(&db, "/zeit NP-8801/1020 10m kurz", now(), &cet(), &t).unwrap();
+        assert_eq!(a.entry.duration_minutes, Some(30));
+        assert_eq!(a.entry.start_time, now() - chrono::Duration::minutes(30), "still ends now");
+        assert_eq!(a.entry.leistungsart.as_deref(), Some("DEV"), "default Leistungsart of the Netzplan");
+        let b = log_slash_command(&db, "/zeit NP-8801/1020 40m #TEST x", now(), &cet(), &t).unwrap();
+        assert_eq!(b.entry.duration_minutes, Some(45));
+        assert_eq!(b.entry.leistungsart.as_deref(), Some("TEST"), "an explicit Leistungsart wins");
+        // Timer: 52 min → 60; nothing recorded stays nothing.
+        db.start_timer(np, Some("1020"), None, "Timer", now()).unwrap();
+        let e = db.stop_timer(now() + chrono::Duration::minutes(52), 0).unwrap();
+        assert_eq!(e.duration_minutes, Some(60));
+        db.start_timer(np, Some("1020"), None, "Timer", now()).unwrap();
+        let e = db.stop_timer(now() + chrono::Duration::seconds(20), 0).unwrap();
+        assert_eq!(e.duration_minutes, Some(0));
     }
 
     #[test]

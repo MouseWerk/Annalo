@@ -13,7 +13,7 @@
     "withGlobalTauri": true,
     "windows": [],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: aether-asset: http://aether-asset.localhost; font-src 'self' data:; connect-src ipc: http://ipc.localhost"
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: aether-asset: http://aether-asset.localhost; font-src 'self' data:; frame-src aether-pac: http://aether-pac.localhost; connect-src ipc: http://ipc.localhost"
     }
   },
   "bundle": {

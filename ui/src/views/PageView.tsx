@@ -217,6 +217,7 @@ function PageHeader({
 
   const titleInput = useRef<HTMLTextAreaElement>(null);
   const scrollBox = useRef<HTMLDivElement>(null);
+  const showOutline = useApp((st) => st.settings?.settings.editor?.scroll_outline !== false);
   // The title wraps like a heading instead of scrolling sideways.
   const fitTitle = () => {
     const el = titleInput.current;
@@ -352,7 +353,7 @@ function PageHeader({
           {children}
         </div>
       </div>
-      <ScrollOutline scrollRef={scrollBox} />
+      {showOutline && <ScrollOutline scrollRef={scrollBox} />}
       </div>
     </>
   );
@@ -409,10 +410,29 @@ export function printActivePane() {
     .finally(() => setTimeout(() => window.print(), 50));
 }
 
+/** Parent of a new top-level „Neue Seite“ per Settings → Editor (top level, current folder, inbox). */
+async function newPageParent(): Promise<number | null> {
+  const s = useApp.getState();
+  const e = s.settings?.settings.editor;
+  if (e?.new_page_location === "current") {
+    const tab = s.tabs.find((t) => t.id === s.activeTabId);
+    return tab?.kind === "page" && tab.pageId != null ? (s.pages.get(tab.pageId)?.parent_id ?? null) : null;
+  }
+  if (e?.new_page_location === "inbox") {
+    const title = e.inbox_title?.trim() || "Inbox";
+    const top = s.tree.find((n) => n.parent_id == null && n.title.toLowerCase() === title.toLowerCase());
+    if (top) return top.id;
+    return (await api.createPage(title, null, "list-todo")).id;
+  }
+  return null;
+}
+
 export async function createSubpage(parentId: number | null, title = "Unbenannt") {
   const s = useApp.getState();
   try {
-    const p = await api.createPage(title, parentId);
+    const parent = parentId ?? (await newPageParent());
+    const icon = s.settings?.settings.editor?.default_icon ?? "file-text";
+    const p = await api.createPage(title, parent, icon);
     await s.refreshTree();
     s.openPage(p.id);
     setTimeout(() => document.querySelector<HTMLTextAreaElement>(".pane.active .page-title")?.select(), 120);
@@ -424,9 +444,10 @@ export async function createSubpage(parentId: number | null, title = "Unbenannt"
 export async function deletePage(page: { id: number; title: string }) {
   const s = useApp.getState();
   const kids = s.pages.get(page.id)?.children.length ?? 0;
+  const days = s.settings?.settings.notes?.trash_retention_days ?? 30;
   const message = kids
-    ? `„${page.title}“ und ${kids} ${kids === 1 ? "Unterseite" : "Unterseiten"} werden in den Papierkorb verschoben. Nach 30 Tagen werden sie endgültig gelöscht.`
-    : `„${page.title}“ wird in den Papierkorb verschoben. Nach 30 Tagen wird die Seite endgültig gelöscht.`;
+    ? `„${page.title}“ und ${kids} ${kids === 1 ? "Unterseite" : "Unterseiten"} werden in den Papierkorb verschoben. Nach ${days} Tagen werden sie endgültig gelöscht.`
+    : `„${page.title}“ wird in den Papierkorb verschoben. Nach ${days} Tagen wird die Seite endgültig gelöscht.`;
   // A single page just moves to the trash (undo in the toast); only subtrees ask first.
   if (kids && !(await s.confirm({ title: "Seite löschen?", message, confirmLabel: "Löschen", danger: true }))) return;
   try {

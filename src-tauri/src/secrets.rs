@@ -30,6 +30,15 @@ impl SecretStore {
         SecretStore { account: "git-token", field: "git_token", file: data_dir.join("secrets.json") }
     }
 
+    /// The password of the proxy (Settings → Netzwerk).
+    pub fn proxy(data_dir: &Path) -> Self {
+        SecretStore {
+            account: aether_core::network::PASSWORD_ACCOUNT,
+            field: "proxy_password",
+            file: data_dir.join("secrets.json"),
+        }
+    }
+
     /// Human-readable name of the backend, shown in the settings.
     pub fn backend(&self) -> &'static str {
         if cfg!(windows) {

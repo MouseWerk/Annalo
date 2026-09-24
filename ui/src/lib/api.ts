@@ -122,6 +122,22 @@ export const api = {
   /** Downloads and installs the found update, then restarts (`update://progress` events). */
   updateInstall: () => call<void>("update_install"),
 
+  // network
+  networkStatus: () => call<T.NetworkStatus>("network_status"),
+  /** Requests LiteLLM's model list with unsaved network settings; reports the proxy used. */
+  networkTest: (network: T.NetworkSettings | null, baseUrl: string | null, password: string | null) =>
+    call<T.NetworkTest>("network_test", { network, baseUrl, password }),
+  fetchPac: (url: string, network: T.NetworkSettings | null = null) => call<string>("network_fetch_pac", { url, network }),
+  caInfo: (path: string) => call<T.CaInfo>("network_ca_info", { path }),
+  setProxyPassword: (password: string | null) => call<T.NetworkStatus>("proxy_password_set", { password }),
+
+  // settings files and defaults
+  exportSettings: (path: string) => call<void>("settings_export", { path }),
+  readSettingsFile: (path: string) => call<string>("settings_file_read", { path }),
+  /** Current settings with one section (or, with null, everything but the connections) at its defaults. */
+  settingsDefaults: (section: string | null) => call<T.Settings>("settings_defaults", { section }),
+  saveWindowState: () => call<void>("window_state_save"),
+
   // desktop
   desktopInfo: () => call<T.DesktopInfo>("desktop_info"),
   setAutostart: (enabled: boolean) => call<T.DesktopInfo>("autostart_set", { enabled }),
@@ -134,11 +150,12 @@ export const api = {
   // AI
   routePreview: (prompt: string, useTools: boolean, tier: T.Tier | null) => call<T.RouteDecision>("ai_route_preview", { prompt, useTools, tier }),
   meter: () => call<T.SessionMeter>("ai_meter"),
-  chat: (a: { requestId: string; messages: T.ChatMessage[]; useTools: boolean; tier: T.Tier | null; pageId: number | null }) =>
-    call<T.ChatOutcome>("ai_chat", a),
+  chat: (a: { requestId: string; messages: T.ChatMessage[]; useTools: boolean; tier: T.Tier | null; pageId: number | null; overrideLimit?: boolean }) =>
+    call<T.ChatOutcome>("ai_chat", { overrideLimit: false, ...a }),
   /** Rewrites `text` by `instruction` (inline AI, meeting summary); streams like `chat`. */
-  transform: (a: { requestId: string; instruction: string; text: string; pageId: number | null; tier?: T.Tier | null }) =>
-    call<T.ChatOutcome>("ai_transform", { tier: null, ...a }),
+  transform: (a: { requestId: string; instruction: string; text: string; pageId: number | null; tier?: T.Tier | null; overrideLimit?: boolean }) =>
+    call<T.ChatOutcome>("ai_transform", { tier: null, overrideLimit: false, ...a }),
+  costStatus: () => call<T.CostStatus>("ai_cost_status"),
   cancelChat: (requestId: string) => call<void>("ai_cancel", { requestId }),
   planTool: (name: string, args: string) => call<T.ToolPlan>("ai_plan_tool", { name, arguments: args }),
   runWorkspaceTool: (name: string, args: string) => call<string>("ai_run_workspace_tool", { name, arguments: args }),

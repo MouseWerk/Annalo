@@ -100,7 +100,7 @@ export function VersionsDialog({ page, open, onClose }: { page: { id: number; ti
       open={open}
       onClose={onClose}
       title="Versionen"
-      description={`Frühere Stände von „${page.title}“. Beim Bearbeiten wird höchstens alle 10 Minuten eine Version gesichert; sie bleiben 30 Tage.`}
+      description={`Frühere Stände von „${page.title}“. Beim Bearbeiten wird höchstens alle ${useApp.getState().settings?.settings.notes?.version_interval_minutes ?? 10} Minuten eine Version gesichert; sie bleiben 30 Tage.`}
       width={860}
       footer={
         <>

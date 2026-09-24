@@ -1,6 +1,7 @@
 // The AI assistant: streaming chat over LiteLLM with workspace context,
 // sources, cost/speed metrics and approval-gated tools.
 
+import { streamingOn, warnCost, withCostLimit } from "../lib/aicost";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -83,7 +84,8 @@ export function AssistantPanel() {
     let target: string | null = null;
     const un = on<{ request_id: string; event: StreamEvent }>("ai://stream", ({ request_id, event }) => {
       if (request_id !== requestId.current) return;
-      if (event.type === "delta") {
+      // Settings → KI „Antworten live anzeigen“ off: the answer appears when complete.
+      if (event.type === "delta" && streamingOn()) {
         buffer += event.text;
         target = request_id;
         if (!frame)
@@ -185,7 +187,10 @@ export function AssistantPanel() {
         const rid = crypto.randomUUID();
         requestId.current = rid;
         setTurns((ts) => [...ts, { id: aid, kind: "assistant", text: "", streaming: true, pageTitle: opts.pageTitle }]);
-        const out = await api.chat({ requestId: rid, messages: history.current, useTools: tools, tier, pageId: includePage && pageContext ? pageContext.id : null });
+        const out = await withCostLimit((overrideLimit) =>
+          api.chat({ requestId: rid, messages: history.current, useTools: tools, tier, pageId: includePage && pageContext ? pageContext.id : null, overrideLimit }),
+        );
+        warnCost(out.cost_warning);
         const c = out.completion;
         requestId.current = null;
         update(aid, {
